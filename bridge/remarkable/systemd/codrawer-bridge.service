@@ -1,0 +1,16 @@
+[Unit]
+Description=CoDrawer Pen Bridge (reMarkable Paper Pro)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Try python3, fallback to python (some Paper Pro images don't provide python3 in PATH).
+ExecStart=/bin/sh -lc 'command -v python3 >/dev/null 2>&1 && exec python3 /home/root/codrawer_bridge.py; exec python /home/root/codrawer_bridge.py'
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+
+
