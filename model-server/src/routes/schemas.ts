@@ -7,13 +7,31 @@
 import { z } from 'zod';
 import { ToolSchema } from '../utils';
 
+// Minimal OpenAI-style multimodal message parts:
+// https://platform.openai.com/docs/guides/vision (compatible shape)
+const MessageContentPart = z.union([
+  z.object({
+    type: z.literal('text'),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('image_url'),
+    image_url: z.object({
+      url: z.string(),
+      detail: z.enum(['low', 'high', 'auto']).optional(),
+    }),
+  }),
+]);
+
+const MessageContent = z.union([z.string(), z.array(MessageContentPart)]);
+
 // Chat completion request schema
 export const ChatCompletionRequest = z.object({
   model: z.string(),
   messages: z.array(
     z.object({
       role: z.enum(['system', 'user', 'assistant', 'tool']),
-      content: z.string().optional(),
+      content: MessageContent.optional(),
       tool_calls: z
         .array(
           z.object({

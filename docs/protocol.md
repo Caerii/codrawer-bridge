@@ -65,6 +65,22 @@ Each point is `[x, y, p, t]`.
 {"t":"cursor","x":0.5,"y":0.2,"ts":1730000000789,"who":"paperpro"}
 ```
 
+### `prompt` (optional, client → server; triggers AI)
+
+Send a free-form instruction for the AI to draw on the **AI layer**. The server does **not** broadcast this
+message by default; it only produces `ai_stroke_*` output.
+
+```json
+{"t":"prompt","text":"write hello in neat handwriting","mode":"handwriting","ts":1730000001200}
+```
+
+Fields:
+
+- `text`: what you want the AI to draw / write
+- `mode`: `"draw"` or `"handwriting"`
+- `x`,`y` (optional): normalized anchor point for placing the output (otherwise the server uses last cursor or center)
+- `ts` (optional): ms timestamp
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.

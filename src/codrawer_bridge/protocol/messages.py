@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional, TypeAlias, Union
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ class StrokeBegin(BaseModel):
     id: str
     layer: Literal["user", "ai"] = "user"
     brush: str = "pen"
-    color: Optional[str] = None
+    color: str | None = None
     ts: Annotated[int, Field(description="ms timestamp")]
 
 
@@ -43,7 +43,21 @@ class Cursor(BaseModel):
     x: float
     y: float
     ts: int
-    who: Optional[str] = None
+    who: str | None = None
+
+
+class Prompt(BaseModel):
+    """
+    Optional: Ask the AI to do something (draw or handwrite) on the AI layer.
+    Clients may send this; the server does not broadcast it by default.
+    """
+
+    t: Literal["prompt"]
+    text: str
+    mode: Literal["draw", "handwriting"] = "draw"
+    x: float | None = None
+    y: float | None = None
+    ts: int | None = None
 
 
 class AIStrokeBegin(BaseModel):
@@ -64,16 +78,40 @@ class AIStrokeEnd(BaseModel):
     id: str
 
 
-InboundMsg: TypeAlias = Union[StrokeBegin, StrokePts, StrokeEnd, Cursor]
-OutboundMsg: TypeAlias = Union[
-    Hello,
-    StrokeBegin,
-    StrokePts,
-    StrokeEnd,
-    Cursor,
-    AIStrokeBegin,
-    AIStrokePts,
-    AIStrokeEnd,
-]
+class AIIntent(BaseModel):
+    """
+    Optional: model "plan" for what it is about to do, for UI/telemetry.
+    """
+
+    t: Literal["ai_intent"]
+    plan: str
+    mode: Literal["auto", "draw", "handwriting"] = "auto"
+    prompt_text: str | None = None
+    anchor_xy: list[float] | None = None
+
+
+class AISay(BaseModel):
+    """
+    Optional: short text from the agent (personality / narration).
+    """
+
+    t: Literal["ai_say"]
+    text: str
+
+
+InboundMsg: TypeAlias = StrokeBegin | StrokePts | StrokeEnd | Cursor
+OutboundMsg: TypeAlias = (
+    Hello
+    | StrokeBegin
+    | StrokePts
+    | StrokeEnd
+    | Cursor
+    | Prompt
+    | AIIntent
+    | AISay
+    | AIStrokeBegin
+    | AIStrokePts
+    | AIStrokeEnd
+)
 
 

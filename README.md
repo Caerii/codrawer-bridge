@@ -54,12 +54,34 @@ pnpm install
 pnpm dev
 ```
 
+- Configure Cerebras (in `model-server/.env`, not committed):
+
+```bash
+CEREBRAS_API_KEY=...
+```
+
 - Point the desktop server at it (in `.env`):
 
 ```bash
 CODRAWER_MODEL_SERVER_URL=http://127.0.0.1:3100
 CODRAWER_MODEL_SERVER_MODEL=blazing_fast
 ```
+
+### Optional: add a local context image patch (multimodal)
+
+If your model supports vision, you can attach a small rendered PNG patch (local area around the stroke)
+to improve “what’s on the page” awareness:
+
+```bash
+CODRAWER_MODEL_SERVER_USE_CONTEXT_IMAGE=1
+CODRAWER_MODEL_SERVER_CONTEXT_IMAGE_PX=256
+CODRAWER_MODEL_SERVER_CONTEXT_IMAGE_WINDOW=0.22
+```
+
+Notes:
+
+- This adds a bit of CPU + payload size (still small at 256×256).
+- If the model doesn’t support images, leave it off.
 
 Endpoints:
 

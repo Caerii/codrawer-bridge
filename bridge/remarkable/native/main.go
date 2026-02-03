@@ -22,22 +22,22 @@ import (
 
 func main() {
 	cfg := BridgeConfig{
-		WsURL:               getenvDefault("DESKTOP_WS", "ws://127.0.0.1:8000/ws/session1"),
-		Brush:               getenvDefault("BRUSH", "pen"),
-		Color:               os.Getenv("COLOR"),
-		InputDevice:         os.Getenv("INPUT_DEVICE"),
-		BatchHz:             getenvIntDefault("BATCH_HZ", 60),
-		MaxBatchPoints:      getenvIntDefault("MAX_BATCH_POINTS", 64),
-		NoGrab:              getenvBoolDefault("NO_GRAB", true),
-		TouchMode:           getenvDefault("TOUCH_MODE", "auto"),
-		PressureThreshold:   getenvFloatDefault("PRESSURE_THRESHOLD", 0.02),
-		DistanceThreshold:   getenvIntDefault("DISTANCE_THRESHOLD", 0),
-		Debug:               getenvBoolDefault("DEBUG", false),
-		DumpEvents:          getenvBoolDefault("DUMP_EVENTS", false),
-		ListDevices:         false,
-		ProbeSeconds:        getenvFloatDefault("PROBE_SECONDS", 1.5),
-		PingSeconds:         getenvFloatDefault("PING_SECONDS", 2),
-		PongTimeoutSeconds:  getenvFloatDefault("PONG_TIMEOUT_SECONDS", 8),
+		WsURL:              getenvDefault("DESKTOP_WS", "ws://127.0.0.1:8000/ws/session1"),
+		Brush:              getenvDefault("BRUSH", "pen"),
+		Color:              os.Getenv("COLOR"),
+		InputDevice:        os.Getenv("INPUT_DEVICE"),
+		BatchHz:            getenvIntDefault("BATCH_HZ", 60),
+		MaxBatchPoints:     getenvIntDefault("MAX_BATCH_POINTS", 64),
+		NoGrab:             getenvBoolDefault("NO_GRAB", true),
+		TouchMode:          getenvDefault("TOUCH_MODE", "auto"),
+		PressureThreshold:  getenvFloatDefault("PRESSURE_THRESHOLD", 0.02),
+		DistanceThreshold:  getenvIntDefault("DISTANCE_THRESHOLD", 0),
+		Debug:              getenvBoolDefault("DEBUG", false),
+		DumpEvents:         getenvBoolDefault("DUMP_EVENTS", false),
+		ListDevices:        false,
+		ProbeSeconds:       getenvFloatDefault("PROBE_SECONDS", 1.5),
+		PingSeconds:        getenvFloatDefault("PING_SECONDS", 2),
+		PongTimeoutSeconds: getenvFloatDefault("PONG_TIMEOUT_SECONDS", 8),
 	}
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
@@ -63,5 +63,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-

@@ -1,23 +1,31 @@
 from __future__ import annotations
 
-# ruff: noqa: E501
 import asyncio
+
+# ruff: noqa: E501
+import base64
+import io
 import json
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from PIL import Image, ImageDraw
 
 from codrawer_bridge.protocol.constants import (
     T_CURSOR,
     T_HELLO,
+    T_PROMPT,
     T_STROKE_BEGIN,
     T_STROKE_END,
     T_STROKE_PTS,
 )
 
-from .ai_worker import ai_loop
+from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
+from .rendering import render_context_patch_png_b64
 from .sessions import broadcast, get_session
+from .viewer_page import render_viewer_html
 
 app = FastAPI()
 
@@ -28,9 +36,10 @@ def healthz():
 
 @app.get("/viewer/{session_id}", response_class=HTMLResponse)
 def viewer(session_id: str):
+    return HTMLResponse(render_viewer_html(session_id))
     # Minimal debug viewer: renders user + AI strokes with separate styling.
     # NOTE: This is a developer tool; real clients will be separate apps.
-    html = f"""
+    html = """
 <!doctype html>
 <html>
   <head>
@@ -56,24 +65,35 @@ def viewer(session_id: str):
       <div style="font-size:12px; opacity:0.7; margin-top:6px;">
         Aspect: set `?w=1620&h=2160` (or your device dims) to avoid stretching.
       </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <input id="prompt" placeholder="Ask AI to draw or handwrite… (e.g. 'handwriting: hello')" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color:#e6edf3; outline:none;" />
+        <select id="mode" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color:#e6edf3;">
+          <option value="draw">draw</option>
+          <option value="handwriting">handwriting</option>
+        </select>
+        <button id="send" style="padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.10); color:#e6edf3; cursor:pointer;">Send</button>
+      </div>
     </div>
     <div id="wrap">
       <canvas id="user"></canvas>
       <canvas id="ai"></canvas>
+      <canvas id="hud"></canvas>
     </div>
     <script>
       const sessionId = {json.dumps(session_id)};
       const statusEl = document.getElementById("status");
       const userCanvas = document.getElementById("user");
       const aiCanvas = document.getElementById("ai");
+      const hudCanvas = document.getElementById("hud");
       const userCtx = userCanvas.getContext("2d");
       const aiCtx = aiCanvas.getContext("2d");
+      const hudCtx = hudCanvas.getContext("2d");
 
       function resize() {{
         const dpr = window.devicePixelRatio || 1;
         const w = window.innerWidth;
         const h = window.innerHeight;
-        for (const c of [userCanvas, aiCanvas]) {{
+        for (const c of [userCanvas, aiCanvas, hudCanvas]) {{
           c.width = Math.floor(w * dpr);
           c.height = Math.floor(h * dpr);
           c.style.width = w + "px";
@@ -81,9 +101,11 @@ def viewer(session_id: str):
         }}
         userCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         aiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         // clear backgrounds on resize
         userCtx.clearRect(0, 0, w, h);
         aiCtx.clearRect(0, 0, w, h);
+        hudCtx.clearRect(0, 0, w, h);
       }}
       window.addEventListener("resize", resize);
       resize();
@@ -141,6 +163,80 @@ def viewer(session_id: str):
       const strokeState = new Map(); // id -> {{ p0, p1, p2, lastMid, lastW }}
       const strokeBrush = new Map(); // id -> brush string
       const strokeColor = new Map(); // id -> color hint
+
+      // HUD: show where the AI pen currently is (smoothly interpolated).
+      let aiTip = null; // [x,y] pixels
+      let aiPrevTip = null;
+      const aiTipQueue = []; // list of [x,y] pixels to move through
+      let lastHudTs = null;
+      function drawHud() {{
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        hudCtx.clearRect(0, 0, w, h);
+        if (!aiTip) return;
+        const x = aiTip[0], y = aiTip[1];
+        const dx = aiPrevTip ? (x - aiPrevTip[0]) : 0;
+        const dy = aiPrevTip ? (y - aiPrevTip[1]) : 0;
+        const mag = Math.hypot(dx, dy) || 1;
+        const ux = dx / mag, uy = dy / mag;
+
+        // soft glow
+        hudCtx.save();
+        hudCtx.globalAlpha = 0.75;
+        hudCtx.fillStyle = "rgba(255, 123, 114, 0.85)";
+        hudCtx.beginPath();
+        hudCtx.arc(x, y, 5, 0, Math.PI * 2);
+        hudCtx.fill();
+
+        hudCtx.globalAlpha = 0.35;
+        hudCtx.fillStyle = "rgba(255, 123, 114, 0.35)";
+        hudCtx.beginPath();
+        hudCtx.arc(x, y, 14, 0, Math.PI * 2);
+        hudCtx.fill();
+
+        // heading line
+        hudCtx.globalAlpha = 0.7;
+        hudCtx.strokeStyle = "rgba(255, 123, 114, 0.8)";
+        hudCtx.lineWidth = 2;
+        hudCtx.lineCap = "round";
+        hudCtx.beginPath();
+        hudCtx.moveTo(x, y);
+        hudCtx.lineTo(x + ux * 26, y + uy * 26);
+        hudCtx.stroke();
+        hudCtx.restore();
+      }}
+
+      function hudLoop(ts) {{
+        if (lastHudTs == null) lastHudTs = ts;
+        const dt = Math.max(0.001, (ts - lastHudTs) / 1000);
+        lastHudTs = ts;
+
+        // Move the AI tip towards queued target points at a constant speed.
+        const speed = 900; // px/sec (tweak for "dragged" feel)
+        if (aiTipQueue.length > 0) {{
+          const target = aiTipQueue[0];
+          if (!aiTip) {{
+            aiTip = [target[0], target[1]];
+            aiPrevTip = [target[0], target[1]];
+          }} else {{
+            const dx = target[0] - aiTip[0];
+            const dy = target[1] - aiTip[1];
+            const dist = Math.hypot(dx, dy);
+            const step = speed * dt;
+            aiPrevTip = [aiTip[0], aiTip[1]];
+            if (dist <= step) {{
+              aiTip = [target[0], target[1]];
+              aiTipQueue.shift();
+            }} else {{
+              aiTip = [aiTip[0] + (dx / dist) * step, aiTip[1] + (dy / dist) * step];
+            }}
+          }}
+        }}
+
+        drawHud();
+        requestAnimationFrame(hudLoop);
+      }}
+      requestAnimationFrame(hudLoop);
       const ctxByLayer = {{
         user: {{ ctx: userCtx, color: "#7ee787" }},
         ai:   {{ ctx: aiCtx,   color: "#ff7b72" }},
@@ -232,6 +328,11 @@ def viewer(session_id: str):
           drawQuadraticSegment(ctx, m1, st.p1, m2, isEraser ? "rgba(0,0,0,1)" : colorHint, w2, compositeOp);
           st.lastW = w2;
           st.lastMid = m2;
+
+          // HUD tracking: follow the AI tip.
+          if (layer === "ai") {{
+            aiTipQueue.push(m2);
+          }}
         }}
       }}
 
@@ -259,6 +360,8 @@ def viewer(session_id: str):
         strokeState.delete(id);
         strokeBrush.delete(id);
         strokeColor.delete(id);
+
+        // If the finished stroke was AI, leave the tip visible (no change).
       }}
 
       function wsUrl() {{
@@ -300,15 +403,97 @@ def viewer(session_id: str):
             handlePts(msg.id, msg.pts || [], "ai");
           }} else if (t === "ai_stroke_end") {{
             handleEnd(msg.id);
+          }} else if (t === "ai_intent") {{
+            // Display what the AI "intends" to do.
+            if (msg.plan) {{
+              statusEl.textContent = `AI: ${msg.plan}`;
+            }}
           }}
         }};
       }}
+
+      const promptEl = document.getElementById("prompt");
+      const modeEl = document.getElementById("mode");
+      const sendEl = document.getElementById("send");
+
+      function sendPrompt() {{
+        if (!ws || ws.readyState !== 1) return;
+        const text = (promptEl.value || "").trim();
+        if (!text) return;
+        const mode = modeEl.value || "draw";
+        ws.send(JSON.stringify({{ t: "prompt", text, mode, ts: Date.now() }}));
+        promptEl.value = "";
+      }}
+
+      sendEl.addEventListener("click", sendPrompt);
+      promptEl.addEventListener("keydown", (e) => {{
+        if (e.key === "Enter") sendPrompt();
+      }});
+
       connect();
     </script>
   </body>
 </html>
 """
     return HTMLResponse(html)
+
+
+def _render_context_patch_png_b64(
+    *,
+    strokes: list[dict[str, object]],
+    center_xy: tuple[float, float],
+    window: float,
+    px: int,
+) -> str:
+    """
+    Render a simple context patch as a PNG (base64, no data-url prefix).
+
+    - **strokes**: [{"pts": [[x,y,p],...], ...}, ...] in normalized [0,1]
+    - **center_xy**: patch center in normalized coords
+    - **window**: normalized width/height of the region to render (square)
+    - **px**: output image size (px x px)
+    """
+    cx, cy = center_xy
+    half = max(1e-6, window * 0.5)
+    x0, x1 = cx - half, cx + half
+    y0, y1 = cy - half, cy + half
+
+    img = Image.new("L", (px, px), 0)  # black bg
+    draw = ImageDraw.Draw(img)
+
+    def to_px(x: float, y: float) -> tuple[float, float]:
+        u = (x - x0) / (x1 - x0)
+        v = (y - y0) / (y1 - y0)
+        return (u * (px - 1), v * (px - 1))
+
+    # Older strokes dimmer; newest brighter.
+    take = strokes[-8:]
+    n = max(1, len(take))
+    for i, s in enumerate(take):
+        pts = s.get("pts")
+        if not isinstance(pts, list) or len(pts) < 2:
+            continue
+        alpha = 0.35 + 0.65 * ((i + 1) / n)
+        col = int(255 * alpha)
+        prev = None
+        for p in pts:
+            if not isinstance(p, list) or len(p) < 2:
+                continue
+            x = float(p[0])
+            y = float(p[1])
+            pr = float(p[2]) if len(p) >= 3 else 0.6
+            if x < x0 or x > x1 or y < y0 or y > y1:
+                prev = None
+                continue
+            cur = to_px(x, y)
+            w = max(1, int(1 + 5 * pr))
+            if prev is not None:
+                draw.line([prev, cur], fill=col, width=w)
+            prev = cur
+
+    bio = io.BytesIO()
+    img.save(bio, format="PNG", optimize=True)
+    return base64.b64encode(bio.getvalue()).decode("ascii")
 
 
 @app.websocket("/ws/{session_id}")
@@ -321,6 +506,7 @@ async def ws(session_id: str, ws: WebSocket):
     if not getattr(session, "_ai_started", False):
         session._ai_started = True
         asyncio.create_task(ai_loop(session_id, session))
+        asyncio.create_task(agentic_loop(session_id, session))
 
     await ws.send_text(json.dumps({"t": T_HELLO, "session": session_id}, separators=(",", ":")))
 
@@ -331,6 +517,17 @@ async def ws(session_id: str, ws: WebSocket):
             t = msg.get("t")
             if get_settings().debug_log_msgs:
                 print(f"[ws:{session_id}] in t={t} from={getattr(ws.client,'host',None)}")
+
+            # Track "activity" for auto AI behaviors (wait for user pause).
+            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT):
+                session.activity_seq += 1
+                session.last_activity_ts = time.perf_counter()
+
+            if t == T_CURSOR:
+                x = msg.get("x")
+                y = msg.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    session.last_cursor_xy = [float(x), float(y)]
 
             def _sample_points4(pts: list, max_points: int = 256) -> list[list[float]]:
                 """Downsample a list of [x,y,p,t] points to a bounded size (keep endpoints)."""
@@ -349,6 +546,26 @@ async def ws(session_id: str, ws: WebSocket):
                         break
                 last = pts[-1]
                 if isinstance(last, list) and len(last) >= 4:
+                    keep.append(last)
+                return keep
+
+            def _sample_points3(pts: list, max_points: int = 96) -> list[list[float]]:
+                """Downsample a list of [x,y,p] points to a bounded size (keep endpoints)."""
+                if not pts:
+                    return []
+                if len(pts) <= max_points:
+                    return [p for p in pts if isinstance(p, list) and len(p) >= 3]
+                keep: list[list[float]] = []
+                n = len(pts)
+                step = max(1, n // (max_points - 1))
+                for i in range(0, n, step):
+                    p = pts[i]
+                    if isinstance(p, list) and len(p) >= 3:
+                        keep.append(p)
+                    if len(keep) >= (max_points - 1):
+                        break
+                last = pts[-1]
+                if isinstance(last, list) and len(last) >= 3:
                     keep.append(last)
                 return keep
 
@@ -392,9 +609,95 @@ async def ws(session_id: str, ws: WebSocket):
                     pts4 = session.stroke_points4.get(sid) or []
                     msg["_stroke_points4"] = _sample_points4(pts4, max_points=256)
                     msg["_stroke_meta"] = session.stroke_meta.get(sid) or {}
+
+                    # Update session rolling history with a compact [x,y,p] version.
+                    pts3 = [
+                        [p[0], p[1], p[2]]
+                        for p in msg["_stroke_points4"]
+                        if isinstance(p, list) and len(p) >= 3
+                    ]
+                    pts3 = _sample_points3(pts3, max_points=96)
+                    session.recent_user_strokes.append(
+                        {
+                            "id": sid,
+                            "brush": (msg["_stroke_meta"] or {}).get("brush"),
+                            "color": (msg["_stroke_meta"] or {}).get("color"),
+                            "pts": pts3,
+                        }
+                    )
+                    # Keep bounded.
+                    session.recent_user_strokes = session.recent_user_strokes[-12:]
+                    msg["_recent_user_strokes"] = session.recent_user_strokes
+                    msg["_activity_seq"] = session.activity_seq
+
+                    # Optional: attach a local rendered patch image for multimodal models.
+                    settings = get_settings()
+                    if settings.model_server_use_context_image:
+                        try:
+                            b64 = render_context_patch_png_b64(
+                                strokes=session.recent_user_strokes,
+                                center_xy=(float(lp[0]), float(lp[1])),
+                                window=float(settings.model_server_context_image_window),
+                                px=int(settings.model_server_context_image_px),
+                            )
+                            msg["_context_image_png_b64"] = b64
+                        except Exception as e:
+                            if settings.debug_log_msgs:
+                                print(f"[ws:{session_id}] context patch render failed: {e}")
+
                     session.stroke_points4.pop(sid, None)
                     session.stroke_meta.pop(sid, None)
                 await session.ai_queue.put(msg)
+
+            if t == T_PROMPT:
+                # Client-driven AI request (e.g., handwriting).
+                # This is NOT broadcast; it only triggers AI output on the AI layer.
+                text = msg.get("text")
+                mode = msg.get("mode", "draw")
+                x = msg.get("x")
+                y = msg.get("y")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if mode not in ("draw", "handwriting"):
+                    mode = "draw"
+
+                cx = float(x) if isinstance(x, (int, float)) else None
+                cy = float(y) if isinstance(y, (int, float)) else None
+                if cx is None or cy is None:
+                    if session.last_cursor_xy:
+                        cx, cy = session.last_cursor_xy[0], session.last_cursor_xy[1]
+                    else:
+                        cx, cy = 0.5, 0.5
+
+                # Update small agent memory (token friendly).
+                session.recent_prompts.append(text.strip())
+                session.recent_prompts = session.recent_prompts[-8:]
+
+                job = {
+                    "t": T_PROMPT,
+                    "text": text.strip(),
+                    "mode": mode,
+                    "_anchor_xy": [cx, cy],
+                    "_recent_user_strokes": session.recent_user_strokes,
+                    "_recent_prompts": session.recent_prompts,
+                    "_recent_ai_plans": session.recent_ai_plans,
+                    "_activity_seq": session.activity_seq,
+                }
+
+                settings = get_settings()
+                if settings.model_server_use_context_image:
+                    try:
+                        job["_context_image_png_b64"] = render_context_patch_png_b64(
+                            strokes=session.recent_user_strokes,
+                            center_xy=(cx, cy),
+                            window=float(settings.model_server_context_image_window),
+                            px=int(settings.model_server_context_image_px),
+                        )
+                    except Exception as e:
+                        if settings.debug_log_msgs:
+                            print(f"[ws:{session_id}] context patch render failed (prompt): {e}")
+
+                await session.ai_queue.put(job)
 
     except WebSocketDisconnect:
         session.clients.discard(ws)
