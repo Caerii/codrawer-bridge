@@ -42,6 +42,7 @@ Not tracked on purpose: compiled device binaries (build from source), `*.jsonl` 
 - `docs/latency_budget.md`
 - `docs/remarkable_setup.md` (connect + install on Paper Pro)
 - `docs/sig-integration.md` (how SIG agents, identity, and the Even G2 attach to a session)
+- `docs/even-g2-testing.md` (simulator, developer mode, QR sideload, manifest and CORS rules)
 
 ## Desktop setup (uv)
 
