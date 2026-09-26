@@ -92,10 +92,40 @@ export class StrokeStore {
   get size() {
     return this.order.length
   }
+
+  counts(): { user: number; ai: number } {
+    let user = 0
+    let ai = 0
+    for (const s of this.all()) {
+      if (s.layer === 'ai') ai++
+      else user++
+    }
+    return { user, ai }
+  }
+}
+
+/** Bounding box of all ink in normalized page coords, or null when empty. */
+function inkBounds(strokes: Stroke[]): [number, number, number, number] | null {
+  let x0 = 1
+  let y0 = 1
+  let x1 = 0
+  let y1 = 0
+  let any = false
+  for (const s of strokes) {
+    for (const p of s.pts) {
+      any = true
+      if (p[0] < x0) x0 = p[0]
+      if (p[1] < y0) y0 = p[1]
+      if (p[0] > x1) x1 = p[0]
+      if (p[1] > y1) y1 = p[1]
+    }
+  }
+  return any ? [x0, y0, x1, y1] : null
 }
 
 /** Map normalized page coords into pixel coords for the chosen view. */
-function makeMapper(o: RasterOptions, last: [number, number] | null) {
+function makeMapper(o: RasterOptions, store: StrokeStore) {
+  const last = store.lastPoint
   if (o.mode === 'follow' && last) {
     const winW = o.window
     const winH = (o.window * o.height) / o.width / o.pageAspect
@@ -103,20 +133,23 @@ function makeMapper(o: RasterOptions, last: [number, number] | null) {
     const y0 = last[1] - winH / 2
     return (x: number, y: number): [number, number] => [((x - x0) / winW) * o.width, ((y - y0) / winH) * o.height]
   }
-  // full page, letterboxed inside the container, preserving the page aspect
-  const contAspect = o.width / o.height
-  let dw: number
-  let dh: number
-  if (contAspect > o.pageAspect) {
-    dh = o.height
-    dw = dh * o.pageAspect
-  } else {
-    dw = o.width
-    dh = dw / o.pageAspect
-  }
+  // full: fit the ink's bounding box (whole page when empty) into the container,
+  // preserving the page's physical aspect so shapes are not stretched.
+  const b = inkBounds(store.all()) ?? [0, 0, 1, 1]
+  const margin = 0.03
+  const bx0 = Math.max(0, b[0] - margin)
+  const by0 = Math.max(0, b[1] - margin)
+  const bw = Math.max(0.02, Math.min(1, b[2] + margin) - bx0)
+  const bh = Math.max(0.02, Math.min(1, b[3] + margin) - by0)
+  // physical size of the box: page width units are pageAspect × page height units
+  const physW = bw * o.pageAspect
+  const physH = bh
+  const scale = Math.min(o.width / physW, o.height / physH)
+  const dw = physW * scale
+  const dh = physH * scale
   const ox = (o.width - dw) / 2
   const oy = (o.height - dh) / 2
-  return (x: number, y: number): [number, number] => [ox + x * dw, oy + y * dh]
+  return (x: number, y: number): [number, number] => [ox + ((x - bx0) / bw) * dw, oy + ((y - by0) / bh) * dh]
 }
 
 /**
@@ -126,13 +159,16 @@ function makeMapper(o: RasterOptions, last: [number, number] | null) {
 export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: RasterOptions) {
   ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, o.width, o.height)
-  const map = makeMapper(o, store.lastPoint)
+  const map = makeMapper(o, store)
   const follow = o.mode === 'follow'
   for (const s of store.all()) {
     if (s.pts.length < 2) continue
+    // Emphasis must survive a 1-bit render (the simulator thresholds grey to
+    // full green), so the de-emphasised layer is dashed as well as dimmer.
     const emphasised = o.highlight === 'all' || o.highlight === s.layer
     const lum = emphasised ? 255 : 110
     ctx.strokeStyle = `rgb(${lum},${lum},${lum})`
+    ctx.setLineDash(emphasised ? [] : [2, 3])
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (s.brush === 'eraser' && s.layer === 'user') {
@@ -153,6 +189,7 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     }
     ctx.stroke()
   }
+  ctx.setLineDash([])
   if (follow && store.lastPoint) {
     // pen cursor
     const [cx, cy] = map(store.lastPoint[0], store.lastPoint[1])

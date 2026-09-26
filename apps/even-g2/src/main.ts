@@ -79,7 +79,8 @@ let textDirty = true
 
 function statusLine(): string {
   const conn = connected ? 'live' : 'reconnecting'
-  const head = intent ? `AI: ${intent}` : `${store.size} strokes · ${opts.mode} · ${opts.highlight}`
+  const c = store.counts()
+  const head = intent ? `AI: ${intent}` : `${c.user} user · ${c.ai} ai · ${opts.mode} · ${opts.highlight}`
   return `${head}\n${conn} · f${frames}${lastImageResult && lastImageResult !== 'success' ? ' · img:' + lastImageResult : ''}`
 }
 
@@ -255,7 +256,16 @@ async function main() {
     waitForEvenAppBridge(),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
   ])
-  if (b && (await initGlasses(b))) {
+  let ready = false
+  if (b) {
+    try {
+      ready = await initGlasses(b)
+    } catch (e) {
+      // e.g. a host callback lost across a hot reload; keep the preview alive
+      console.warn('[codrawer] glasses init threw', e)
+    }
+  }
+  if (b && ready) {
     bridge = b
     console.log('[codrawer] glasses page ready')
   } else {
