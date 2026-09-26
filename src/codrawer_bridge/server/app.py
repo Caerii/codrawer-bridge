@@ -9,6 +9,7 @@ import json
 import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from PIL import Image, ImageDraw
 
@@ -28,6 +29,17 @@ from .sessions import broadcast, get_session
 from .viewer_page import render_viewer_html
 
 app = FastAPI()
+
+# Even Hub apps run inside the Even phone app WebView and must be granted CORS by the
+# server (the app.json network whitelist does not replace it). The router carries no
+# secrets, so allow any origin; identity arrives with SIG mode (docs/sig-integration.md).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    max_age=86400,
+)
 
 
 @app.get("/healthz")

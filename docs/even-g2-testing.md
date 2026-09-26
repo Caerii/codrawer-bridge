@@ -25,6 +25,50 @@ npm i -g @evenrealities/evenhub-simulator @evenrealities/evenhub-cli
 
 SDK: `@evenrealities/even_hub_sdk` (npm). Packaging: `evenhub pack app.json dist -o app.ehpk`.
 
+## Hardware enablement (one-time)
+
+### Even G2 — Developer Mode (verified against hub.evenrealities.com/docs 2026-09-26)
+
+There is no toggle. Developer Mode is unlocked per account:
+
+1. In the Even Realities phone app: sign in, pair the glasses (**Devices → Add device → Even G2**),
+   install any firmware update. Optionally pair the ring: **Devices → Add device → Even R1**.
+2. Sign in to the web hub at `https://hub.evenrealities.com/login` with the **same account**
+   (accounts are created in the phone app; the web hub has no sign-up).
+3. Force-quit the phone app and reopen it. A **developer section** appears in the **top-right of
+   the Even Hub tab**; the **Scan QR** button lives there.
+4. Phone on the same Wi-Fi as this desktop (LAN IP `192.168.50.2`, no AP isolation), then
+   `evenhub qr --url http://192.168.50.2:5188` and scan it from the developer section.
+
+### reMarkable Paper Pro — Developer mode (verified against developer.remarkable.com 2026-09-26)
+
+1. Sync everything to the cloud first: enabling Developer mode **factory-resets the device**,
+   breaks the secure-boot chain, disables disk encryption, and shows a permanent boot warning.
+   reMarkable disclaims support and warranty for modified software.
+2. **Settings → General → Paper Tablet → Software → Advanced → Developer Mode**.
+3. The root SSH password is shown afterwards under
+   **Settings → General → Help → About → Copyrights and Licenses** (General Information).
+4. SSH is over USB by default: `ssh root@10.11.99.1`. For the stroke bridge you want Wi-Fi:
+   run `rm-ssh-over-wlan on` on the device once, then `ssh root@<tablet-wifi-ip>`. Install a key
+   (`docs/remarkable_setup.md` §1.5) rather than saving the password anywhere.
+5. Build and deploy the native bridge (binary is gitignored; `go build` takes seconds):
+
+```bash
+cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .
+scp codrawer_bridge_native root@<PAPER_PRO_IP>:/home/root/codrawer_bridge_native.new
+ssh root@<PAPER_PRO_IP> "chmod +x /home/root/codrawer_bridge_native.new && mv -f /home/root/codrawer_bridge_native.new /home/root/codrawer_bridge_native"
+ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://192.168.50.2:8577/ws/session1 -touch-mode auto"
+```
+
+### Desktop firewall (Windows, run once as Administrator)
+
+```powershell
+netsh advfirewall firewall add rule name="codrawer router 8577" dir=in action=allow protocol=TCP localport=8577
+netsh advfirewall firewall add rule name="codrawer g2 app 5188" dir=in action=allow protocol=TCP localport=5188
+```
+
+The router now sends `Access-Control-Allow-Origin: *` (FastAPI `CORSMiddleware`), which the
+Even Hub WebView requires in addition to the `app.json` whitelist.
 ## Loop 1 — no hardware (works today)
 
 Exact commands and the SDK behaviours learned along the way are in `apps/even-g2/README.md`.
