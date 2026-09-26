@@ -93,6 +93,17 @@ AI strokes are streamed in a separate layer and **never** replace user strokes.
 
 AI points are `[x, y, p]` (no timestamps; clients animate as desired).
 
+### `ai_intent` (server → clients)
+
+Emitted before a group of `ai_stroke_*` messages when the model states what it is about to draw.
+Clients may show `plan` as a status line; it never carries ink.
+
+```json
+{"t":"ai_intent","plan":"add a small roof line over the box"}
+```
+
+SIG mode adds `participant_id` and `run_id` (see `docs/sig-integration.md`).
+
 ## Compatibility notes
 
 - The server is a **router**; it does not render and should not send full canvas state.
