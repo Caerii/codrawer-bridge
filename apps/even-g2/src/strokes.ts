@@ -201,13 +201,31 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
   }
 }
 
-/** RGBA canvas pixels → one byte per pixel (Gray8, 0..255). */
-export function toGray8(ctx: CanvasRenderingContext2D, width: number, height: number): Uint8Array {
+/**
+ * RGBA canvas pixels → one byte per pixel (Gray8, 0..255).
+ *
+ * `threshold` > 0 binarizes: anything at or above it becomes 255, the rest 0.
+ * Antialiased edges produce dozens of grey levels that the host's LZ4 cannot
+ * compress; a binary frame of mostly-black runs is several times smaller on
+ * the BLE link, which is the bottleneck on real glasses.
+ */
+export function toGray8(ctx: CanvasRenderingContext2D, width: number, height: number, threshold = 0): Uint8Array {
   const img = ctx.getImageData(0, 0, width, height).data
   const out = new Uint8Array(width * height)
   for (let i = 0, j = 0; i < img.length; i += 4, j++) {
-    // luminance; the source is already grey so any channel works, average anyway
-    out[j] = (img[i] + img[i + 1] + img[i + 2]) / 3
+    const v = (img[i] + img[i + 1] + img[i + 2]) / 3
+    out[j] = threshold > 0 ? (v >= threshold ? 255 : 0) : v
+  }
+  return out
+}
+
+/** Gray8 → packed Gray4 (two pixels per byte, high nibble first), half the bytes. */
+export function packGray4(gray8: Uint8Array): Uint8Array {
+  const out = new Uint8Array(Math.ceil(gray8.length / 2))
+  for (let i = 0; i < gray8.length; i += 2) {
+    const a = gray8[i] >> 4
+    const b = i + 1 < gray8.length ? gray8[i + 1] >> 4 : 0
+    out[i >> 1] = (a << 4) | b
   }
   return out
 }
