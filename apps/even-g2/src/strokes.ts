@@ -29,6 +29,8 @@ export interface RasterOptions {
   window: number
   /** page aspect (w/h) used in full mode; Paper Pro is 1620x2160 */
   pageAspect: number
+  /** draw the AI layer at all (false = user ink only, saves bytes on the HUD) */
+  showAi?: boolean
 }
 
 const RETENTION_MS = 5 * 60 * 1000
@@ -163,6 +165,7 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
   const follow = o.mode === 'follow'
   for (const s of store.all()) {
     if (s.pts.length < 2) continue
+    if (s.layer === 'ai' && o.showAi === false) continue
     // Emphasis must survive a 1-bit render (the simulator thresholds grey to
     // full green), so the de-emphasised layer is dashed as well as dimmer.
     const emphasised = o.highlight === 'all' || o.highlight === s.layer

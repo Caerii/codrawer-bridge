@@ -13,7 +13,10 @@
   </head>
   <body>
     <div id="wrap">
-      <canvas id="preview" width="288" height="144" style="width:576px;height:288px"></canvas>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <canvas id="preview" width="288" height="144"></canvas>
+        <canvas id="loupe" width="128" height="64"></canvas>
+      </div>
       <div id="status">starting…</div>
     </div>
     <script type="module" src="/src/main.ts"></script>

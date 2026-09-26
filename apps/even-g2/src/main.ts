@@ -1,17 +1,22 @@
 /**
  * codrawer on the Even Realities G2.
  *
- * Even Hub web app: connects to a codrawer-bridge session over WebSocket,
- * rasterizes the live ink into a 288x144 image container on the glasses, and
- * shows the agent's stated intent (`ai_intent.plan`) in a text container.
+ * Even Hub web app: connects to a codrawer-bridge session over WebSocket and
+ * mirrors the ink on the glasses with two image containers:
+ *
+ *   canvas  the page (follow-crop or fit-to-ink), refreshed once per stroke
+ *   loupe   a small window around the pen, refreshed as fast as BLE allows
+ *
+ * Bytes per update are the whole latency budget on real glasses (a 288x144
+ * Gray8 frame is 41 KB and rode BLE in 200-400 ms), so live ink goes through
+ * the loupe (a few KB) and the big canvas only moves at stroke_end.
  *
  * Input (glasses touchpad / R1 ring):
- *   click        toggle follow / full page
- *   double click cycle highlight: all → user → ai
- *   up / down    zoom the follow window in / out
+ *   click        toggle canvas follow / fit-to-ink
+ *   double click cycle emphasis: all → user → ai
+ *   up / down    zoom the follow windows in / out
  *
- * Outside the Even app (plain browser) the page still renders a preview canvas
- * so the same build is testable without the simulator.
+ * Outside the Even app (plain browser) the page still renders both previews.
  */
 import {
   CreateStartUpPageContainer,
@@ -32,7 +37,7 @@ import { packGray4, rasterize, StrokeStore, toGray8, type Highlight, type Raster
 const params = new URLSearchParams(location.search)
 function cfg(key: string, fallback: string): string {
   const fromQuery = params.get(key)
-  if (fromQuery) {
+  if (fromQuery !== null) {
     try {
       localStorage.setItem(`codrawer:${key}`, fromQuery)
     } catch {
@@ -41,29 +46,39 @@ function cfg(key: string, fallback: string): string {
     return fromQuery
   }
   try {
-    return localStorage.getItem(`codrawer:${key}`) || fallback
+    return localStorage.getItem(`codrawer:${key}`) ?? fallback
   } catch {
     return fallback
   }
 }
+function size(key: string, fallback: string, maxW: number, maxH: number): [number, number] {
+  const v = cfg(key, fallback)
+  if (v === '0') return [0, 0]
+  const m = /^(\d+)x(\d+)$/.exec(v)
+  const w = m ? Math.min(maxW, Math.max(20, Number(m[1]))) : Math.min(maxW, Number(fallback.split('x')[0]))
+  const h = m ? Math.min(maxH, Math.max(20, Number(m[2]))) : Math.min(maxH, Number(fallback.split('x')[1]))
+  return [w, h]
+}
 const defaultWs = `ws://${location.hostname || 'localhost'}:8577/ws/session1`
 const WS_URL = cfg('ws', defaultWs)
 
-// ── display geometry (G2: 576x288; image container max 288x144) ─────────────
-// Tunables for the BLE budget: `?img=192x96` shrinks the frame 2.25x,
-// `?fmt=gray4` halves the bytes again, `?frame_ms=400` caps the push rate.
-const [IMG_W, IMG_H] = (() => {
-  const m = /^(\d+)x(\d+)$/.exec(cfg('img', '288x144'))
-  const w = m ? Math.min(288, Math.max(20, Number(m[1]))) : 288
-  const h = m ? Math.min(144, Math.max(20, Number(m[2]))) : 144
-  return [w, h]
-})()
+// ── display geometry (G2: 576x288; image containers max 288x144) ────────────
+// Tunables: ?img=240x120 (canvas) ?loupe=128x64 (or 0 to disable) ?fmt=gray4
+// ?frame_ms=60 (loupe floor) ?canvas_ms=1200 (canvas floor) ?ai=0 (hide AI ink)
+const [IMG_W, IMG_H] = size('img', '288x144', 288, 144)
+const [LOUPE_W, LOUPE_H] = size('loupe', '128x64', 288, 144)
+const HAS_LOUPE = LOUPE_W > 0
+const SCREEN_W = 576
+const SCREEN_H = 288
 const IMG_ID = 1
 const TEXT_ID = 2
-const RENDER_INTERVAL_MS = 100
-const MIN_FRAME_MS = Number(cfg('frame_ms', '250')) || 250
+const LOUPE_ID = 3
+const RENDER_INTERVAL_MS = 50
+const LOUPE_MIN_MS = Number(cfg('frame_ms', '60')) || 60
+const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 const FMT: 'gray8' | 'gray4' = cfg('fmt', 'gray8') === 'gray4' ? 'gray4' : 'gray8'
 const BINARIZE = cfg('binarize', '1') !== '0'
+const SHOW_AI = cfg('ai', '1') !== '0'
 
 const opts: RasterOptions = {
   width: IMG_W,
@@ -72,32 +87,48 @@ const opts: RasterOptions = {
   highlight: (cfg('highlight', 'all') as Highlight) || 'all',
   window: Number(cfg('window', '0.22')) || 0.22,
   pageAspect: 1620 / 2160,
+  showAi: SHOW_AI,
+}
+function loupeOpts(): RasterOptions {
+  return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: opts.window * 0.45 }
 }
 
 // ── state ───────────────────────────────────────────────────────────────────
 const store = new StrokeStore()
 const preview = document.getElementById('preview') as HTMLCanvasElement
+const loupePreview = document.getElementById('loupe') as HTMLCanvasElement
 const statusEl = document.getElementById('status') as HTMLDivElement
-preview.width = IMG_W
-preview.height = IMG_H
-preview.style.width = `${IMG_W * 2}px`
-preview.style.height = `${IMG_H * 2}px`
+function fit(c: HTMLCanvasElement, w: number, h: number) {
+  c.width = Math.max(1, w)
+  c.height = Math.max(1, h)
+  c.style.width = `${w * 2}px`
+  c.style.height = `${h * 2}px`
+  c.style.display = w > 0 ? 'block' : 'none'
+}
+fit(preview, IMG_W, IMG_H)
+fit(loupePreview, LOUPE_W, LOUPE_H)
 const ctx = preview.getContext('2d', { willReadFrequently: true })!
+const lctx = loupePreview.getContext('2d', { willReadFrequently: true })!
+
 let intent = ''
 let connected = false
-let frames = 0
-let lastImageResult = ''
-let lastRoundTripMs = 0
 let bridge: EvenAppBridge | null = null
 let textDirty = true
+let canvasDirty = true
+let loupeDirty = true
+let strokeEnded = false
+let lastImageResult = ''
+const rt = { loupe: 0, canvas: 0 }
+const sent = { loupe: 0, canvas: 0 }
 
 function statusLine(): string {
   const conn = connected ? 'live' : 'reconnecting'
   const c = store.counts()
   const head = intent ? `AI: ${intent}` : `${c.user} user · ${c.ai} ai · ${opts.mode} · ${opts.highlight}`
-  const rt = lastRoundTripMs ? ` · ${Math.round(lastRoundTripMs)}ms` : ''
+  const l = HAS_LOUPE ? ` · L${Math.round(rt.loupe)}ms/${sent.loupe}` : ''
+  const k = ` · C${Math.round(rt.canvas)}ms/${sent.canvas}`
   const bad = lastImageResult && lastImageResult !== 'success' ? ' · img:' + lastImageResult : ''
-  return `${head}\n${conn} · f${frames}${rt}${bad}`
+  return `${head}\n${conn}${l}${k}${bad}`
 }
 
 // ── websocket (codrawer protocol) ───────────────────────────────────────────
@@ -123,21 +154,32 @@ function connect() {
     switch (m.t) {
       case 'stroke_begin':
         store.begin(m.id, 'user', m.brush || 'pen')
+        loupeDirty = true
         break
       case 'stroke_pts':
         store.points(m.id, m.pts || [], 'user')
+        loupeDirty = true
+        canvasDirty = true
         break
       case 'stroke_end':
         store.end(m.id)
+        loupeDirty = true
+        canvasDirty = true
+        strokeEnded = true
         break
       case 'ai_stroke_begin':
         store.begin(m.id, 'ai', m.brush || 'ghost')
         break
       case 'ai_stroke_pts':
         store.points(m.id, m.pts || [], 'ai')
+        if (SHOW_AI) {
+          loupeDirty = true
+          canvasDirty = true
+        }
         break
       case 'ai_stroke_end':
         store.end(m.id)
+        if (SHOW_AI) strokeEnded = true
         break
       case 'ai_intent':
         intent = String(m.plan || '').slice(0, 120)
@@ -151,10 +193,11 @@ function connect() {
 
 // ── glasses page ────────────────────────────────────────────────────────────
 async function initGlasses(b: EvenAppBridge): Promise<boolean> {
+  const top = 4
   const imageObject = [
     new ImageContainerProperty({
-      xPosition: (576 - IMG_W) / 2,
-      yPosition: 4,
+      xPosition: 8,
+      yPosition: top,
       width: IMG_W,
       height: IMG_H,
       containerID: IMG_ID,
@@ -162,12 +205,26 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       zOrderIndex: 1,
     }),
   ]
+  if (HAS_LOUPE) {
+    imageObject.push(
+      new ImageContainerProperty({
+        xPosition: SCREEN_W - 8 - LOUPE_W,
+        yPosition: top,
+        width: LOUPE_W,
+        height: LOUPE_H,
+        containerID: LOUPE_ID,
+        containerName: 'loupe',
+        zOrderIndex: 3,
+      }),
+    )
+  }
+  const textTop = top + Math.max(IMG_H, HAS_LOUPE ? LOUPE_H : 0) + 8
   const textObject = [
     new TextContainerProperty({
       xPosition: 8,
-      yPosition: IMG_H + 12,
-      width: 560,
-      height: 288 - IMG_H - 16,
+      yPosition: textTop,
+      width: SCREEN_W - 16,
+      height: Math.max(24, SCREEN_H - textTop - 4),
       containerID: TEXT_ID,
       containerName: 'status',
       content: 'codrawer: connecting…',
@@ -176,10 +233,11 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       zOrderIndex: 2,
     }),
   ]
-  const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer({ containerTotalNum: 2, imageObject, textObject }))
+  const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject }
+  const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
     // A page may already exist (e.g. the webview reloaded under HMR); rebuild it in place.
-    const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: 2, imageObject, textObject }))
+    const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
     console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
     if (!rebuilt) return false
   }
@@ -213,76 +271,86 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
     else if (action === 'cycle-highlight') opts.highlight = opts.highlight === 'all' ? 'user' : opts.highlight === 'user' ? 'ai' : 'all'
     else if (action === 'zoom-in') opts.window = Math.max(0.06, opts.window * 0.8)
     else if (action === 'zoom-out') opts.window = Math.min(1, opts.window * 1.25)
-    store.dirty = true
+    canvasDirty = true
+    loupeDirty = true
+    strokeEnded = true // force a canvas refresh for the new view
     textDirty = true
     console.log('[codrawer] input', action, '→', opts.mode, opts.highlight, opts.window.toFixed(2))
   })
   return true
 }
 
-// Image updates must never overlap, and on real glasses each one rides BLE for
-// tens to hundreds of ms. Queueing every frame lets lag compound, so this is
-// latest-wins: while an update is in flight the newest frame waits, and any
-// frame produced in between is dropped. The measured round trip throttles the
-// next push (never faster than MIN_FRAME_MS).
+// ── frame scheduling ────────────────────────────────────────────────────────
+// The SDK forbids overlapping image updates and every one rides BLE, so a
+// single drain loop serves two latest-wins slots: the loupe first (small,
+// frequent), then the canvas (big, rare). Each slot is throttled by its own
+// measured round trip so a slow link degrades to a lower rate, never to lag.
+type Slot = 'loupe' | 'canvas'
+const pending: Record<Slot, Uint8Array | null> = { loupe: null, canvas: null }
+const lastPushAt: Record<Slot, number> = { loupe: 0, canvas: 0 }
+const minMs: Record<Slot, number> = { loupe: LOUPE_MIN_MS, canvas: CANVAS_MIN_MS }
+const containerOf: Record<Slot, { id: number; name: string }> = {
+  loupe: { id: LOUPE_ID, name: 'loupe' },
+  canvas: { id: IMG_ID, name: 'canvas' },
+}
 let draining = false
-let pendingFrame: Uint8Array | null = null
-let lastPushAt = 0
 
-function encodeFrame(): Uint8Array {
-  const g8 = toGray8(ctx, IMG_W, IMG_H, BINARIZE ? 96 : 0)
+function encode(c: CanvasRenderingContext2D, w: number, h: number): Uint8Array {
+  const g8 = toGray8(c, w, h, BINARIZE ? 96 : 0)
   return FMT === 'gray4' ? packGray4(g8) : g8
 }
 
+function readySlot(): Slot | null {
+  const now = performance.now()
+  for (const s of ['loupe', 'canvas'] as Slot[]) {
+    if (pending[s] && now - lastPushAt[s] >= Math.max(minMs[s], rt[s])) return s
+  }
+  return null
+}
+
 async function drain(b: EvenAppBridge) {
-  if (draining) return // one drain loop at a time, including its throttle waits
+  if (draining) return
   draining = true
   try {
-    while (pendingFrame) {
-      const wait = Math.max(MIN_FRAME_MS, lastRoundTripMs) - (performance.now() - lastPushAt)
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
-      const frame = pendingFrame
-      pendingFrame = null
-      if (!frame) break
-      await sendFrame(b, frame)
+    while (pending.loupe || pending.canvas) {
+      let slot = readySlot()
+      if (!slot) {
+        await new Promise((r) => setTimeout(r, 15))
+        continue
+      }
+      const frame = pending[slot]!
+      pending[slot] = null
+      const t0 = performance.now()
+      try {
+        const r = await b.updateImageRawData(
+          new ImageRawDataUpdate({ containerID: containerOf[slot].id, containerName: containerOf[slot].name, imageData: frame }),
+        )
+        lastImageResult = String(r)
+        if (r !== ImageRawDataUpdateResult.success) console.warn('[codrawer] image update', slot, r)
+      } catch (e) {
+        lastImageResult = 'error'
+        console.error('[codrawer] image update threw', slot, e)
+      } finally {
+        rt[slot] = performance.now() - t0
+        lastPushAt[slot] = performance.now()
+        sent[slot]++
+        textDirty = true
+      }
+      slot = null
     }
   } finally {
     draining = false
   }
 }
 
-async function sendFrame(b: EvenAppBridge, frame: Uint8Array) {
-  {
-    const t0 = performance.now()
-    try {
-      const r = await b.updateImageRawData(new ImageRawDataUpdate({ containerID: IMG_ID, containerName: 'canvas', imageData: frame }))
-      lastImageResult = String(r)
-      if (r !== ImageRawDataUpdateResult.success) console.warn('[codrawer] image update', r)
-    } catch (e) {
-      lastImageResult = 'error'
-      console.error('[codrawer] image update threw', e)
-    } finally {
-      lastRoundTripMs = performance.now() - t0
-      lastPushAt = performance.now()
-      frames++
-      textDirty = true
-    }
-  }
-}
-
-function pushFrame(b: EvenAppBridge, frame: Uint8Array) {
-  pendingFrame = frame
-  void drain(b)
-}
-
 // Text rides the same link; only send it when the content actually changed,
-// and never more than a few times a second.
+// and never more than a couple of times a second.
 let textChain: Promise<void> = Promise.resolve()
 let lastTextSent = ''
 let lastTextAt = 0
 function pushText(b: EvenAppBridge, content: string) {
   if (content === lastTextSent) return
-  if (performance.now() - lastTextAt < 400) return
+  if (performance.now() - lastTextAt < 500) return
   lastTextSent = content
   lastTextAt = performance.now()
   textChain = textChain.then(async () => {
@@ -297,12 +365,26 @@ function pushText(b: EvenAppBridge, content: string) {
 // ── render loop ─────────────────────────────────────────────────────────────
 function tick() {
   store.prune()
-  if (store.dirty) {
-    store.dirty = false
+  const now = performance.now()
+  if (HAS_LOUPE && loupeDirty) {
+    loupeDirty = false
+    rasterize(lctx, store, loupeOpts())
+    if (bridge) {
+      pending.loupe = encode(lctx, LOUPE_W, LOUPE_H)
+      void drain(bridge)
+    }
+  }
+  // The canvas is expensive: refresh at stroke_end, or at most every CANVAS_MIN_MS
+  // during a long stroke. With no loupe it is the only view, so refresh eagerly.
+  const canvasDue = strokeEnded || !HAS_LOUPE || now - lastPushAt.canvas >= CANVAS_MIN_MS
+  if (canvasDirty && canvasDue) {
+    canvasDirty = false
+    strokeEnded = false
     rasterize(ctx, store, opts)
-    if (bridge) pushFrame(bridge, encodeFrame())
-    else frames++
-    textDirty = true
+    if (bridge) {
+      pending.canvas = encode(ctx, IMG_W, IMG_H)
+      void drain(bridge)
+    }
   }
   if (textDirty) {
     textDirty = false
@@ -315,6 +397,7 @@ function tick() {
 async function main() {
   connect()
   rasterize(ctx, store, opts)
+  if (HAS_LOUPE) rasterize(lctx, store, loupeOpts())
   statusEl.textContent = `waiting for Even bridge… (${WS_URL})`
   const b = await Promise.race<EvenAppBridge | null>([
     waitForEvenAppBridge(),
@@ -331,7 +414,10 @@ async function main() {
   }
   if (b && ready) {
     bridge = b
-    console.log('[codrawer] glasses page ready')
+    canvasDirty = true
+    loupeDirty = true
+    strokeEnded = true
+    console.log('[codrawer] glasses page ready', { canvas: `${IMG_W}x${IMG_H}`, loupe: HAS_LOUPE ? `${LOUPE_W}x${LOUPE_H}` : 'off', fmt: FMT })
   } else {
     console.log('[codrawer] no Even bridge; browser preview only')
   }
