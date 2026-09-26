@@ -10,7 +10,7 @@ Verified against hub.evenrealities.com/docs on 2026-09-26. Re-check versions bef
 | reMarkable native bridge | Paper Pro (ssh root) | Build from source: `cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .` (binary is gitignored). Setup: `docs/remarkable_setup.md`. |
 | Desktop router | laptop, `:8000` | `uv sync && uv run uvicorn codrawer_bridge.server.app:app --host 0.0.0.0 --port 8000`. Web viewer at `/viewer/session1`. |
 | model-server | laptop, `:3100` | Optional; needed for ghost ink. `cd model-server && pnpm dev`. |
-| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | Must be a **web app** (Vite). The Node viewer in `experimental/even-g2-codrawer-viewer/` is a mock harness only; its `strokeRasterizer.ts` logic ports to a browser canvas. |
+| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | **`apps/even-g2/`** (Vite + `@evenrealities/even_hub_sdk`), verified in the simulator 2026-09-26. The Node viewer in `experimental/even-g2-codrawer-viewer/` is the older mock harness. |
 | Even Hub simulator | laptop | `npm i -g @evenrealities/evenhub-simulator`, then `evenhub-simulator http://localhost:5173`. Emulates containers, text, input events (up/down/click/double-click/long-press), 16 kHz PCM audio. Not frame pacing, BLE timing or LZ4 image validation. |
 
 ## Tooling to install once
@@ -25,7 +25,11 @@ npm i -g @evenrealities/evenhub-simulator @evenrealities/evenhub-cli
 
 SDK: `@evenrealities/even_hub_sdk` (npm). Packaging: `evenhub pack app.json dist -o app.ehpk`.
 
-## Loop 1 — no hardware (today)
+## Loop 1 — no hardware (works today)
+
+Exact commands and the SDK behaviours learned along the way are in `apps/even-g2/README.md`.
+Two traps: port 8000 and port 5173 are usually taken on the dev machine (the app uses 8577 /
+5188), and recordings contain long idle gaps, so replay with `--max-gap-ms 400`.
 
 1. Router up, then replay a recording so the canvas is live:
    `uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://127.0.0.1:8000/ws/session1 --in <rec>.jsonl`
