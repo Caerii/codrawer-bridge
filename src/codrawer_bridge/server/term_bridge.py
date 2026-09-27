@@ -69,6 +69,7 @@ class TermSettings:
     provider: str = "claude"
     session_id: str = ""  # optional pin; otherwise the most recent session, or a new one
     coalesce_s: float = 0.15
+    cwd: str = ""  # terminal working directory; attachments go under <cwd>/.codrawer/turns/
 
 
 @dataclass
@@ -122,6 +123,8 @@ class TermLink:
     async def _post(self, path: str, body: dict[str, Any]) -> tuple[int, Any]:
         s = self.settings
         payload = {**body, "provider": s.provider}
+        if s.cwd:
+            payload["cwd"] = s.cwd
         if self.session_id:
             payload["sessionId"] = self.session_id
         async with httpx.AsyncClient(timeout=20) as c:
@@ -132,13 +135,42 @@ class TermLink:
                 data = r.text
             return r.status_code, data
 
-    async def prompt(self, text: str) -> None:
+    def write_attachment(self, png: bytes, geometry: dict[str, Any], n_strokes: int) -> str | None:
+        """Write the turn's drawing where the agent can Read it; return the prompt trailer."""
+        base = self.settings.cwd or os.getcwd()
+        folder = os.path.join(base, ".codrawer", "turns")
+        try:
+            os.makedirs(folder, exist_ok=True)
+            n = len([f for f in os.listdir(folder) if f.endswith(".png")]) + 1
+            png_path = os.path.join(folder, f"turn-{n}.png")
+            json_path = os.path.join(folder, f"turn-{n}.json")
+            with open(png_path, "wb") as f:
+                f.write(png)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(geometry, f)
+        except OSError:
+            return None
+        rel_png = os.path.relpath(png_path, base).replace(os.sep, "/")
+        rel_json = os.path.relpath(json_path, base).replace(os.sep, "/")
+        return (
+            f"\n\n[A drawing from the tablet is attached ({n_strokes} strokes). "
+            f"Read `{rel_png}` to see it before answering; its geometry (normalized page coordinates, "
+            f"this turn's stroke ids listed under turn_ids) is in `{rel_json}`.]"
+        )
+
+    async def prompt(self, text: str, attachment: dict[str, Any] | None = None) -> None:
         if not self.enabled:
             await self._status("terminal: not configured (CODRAWER_TERM_URL / CODRAWER_TERM_TOKEN)")
             return
         text = text.strip()
         if not text:
             return
+        shown = text
+        if attachment:
+            trailer = self.write_attachment(attachment["png"], attachment["geometry"], int(attachment["n_strokes"]))
+            if trailer:
+                text = text + trailer
+                await self._status(f"\u270e attached {attachment['n_strokes']} strokes")
         await self.ensure_session()
         code, data = await self._post("/api/prompt", {"text": text})
         if code >= 300:
@@ -152,7 +184,7 @@ class TermLink:
                 self._remember()
                 if self.reader is None or self.reader.done():
                     self.reader = asyncio.create_task(self._follow_events())
-        await self.broadcast({"t": "term", "kind": "note", "text": f"> {text}"})
+        await self.broadcast({"t": "term", "kind": "note", "text": f"> {shown}"})
 
     async def answer(self, text: str) -> None:
         """Route a line to the pending permission/question, else treat it as a prompt."""

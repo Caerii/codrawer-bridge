@@ -65,3 +65,6 @@ Thumbs.db
 
 # router runtime state
 .codrawer-term-sessions.json
+
+# terminal turn attachments (written by the router)
+.codrawer/

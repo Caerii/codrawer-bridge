@@ -115,6 +115,11 @@ session (Claude Code / Codex) to a codrawer session. Configure `CODRAWER_TERM_UR
 {"t":"term","kind":"permission","text":"⚠ Bash — run pytest  y / a / n ?"}
 ```
 
+`term_prompt` may carry `attach`: `"turn"` (default: the ink drawn since the last submitted line),
+`"page"` (everything on the page) or `"none"`. The router renders the drawing to
+`<term cwd>/.codrawer/turns/turn-N.png` plus a geometry JSON and appends a trailer asking the
+agent to read it (ADR 002); a `term` status `✎ attached N strokes` confirms.
+
 `term_answer` resolves a pending permission (`y` allow, `a` always, anything else deny) or
 question; with nothing pending it is a prompt. Streamed assistant text is coalesced (~150 ms)
 into `kind:"text"` chunks; tool starts/ends, progress, results and errors are `kind:"note"`;

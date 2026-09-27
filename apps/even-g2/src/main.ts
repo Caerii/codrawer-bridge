@@ -92,9 +92,10 @@ const ENC: 'b64' | 'array' = cfg('enc', 'array') === 'b64' ? 'b64' : 'array'
 const BENCH = cfg('bench', '0') === '1'
 
 // glasses contextual-menu item ids (non-zero, unique) → actions
-const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8 } as const
+const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9 } as const
 const MENU_ACTION: Record<number, string> = {
   [MENU.newDrawing]: 'new-drawing',
+  [MENU.sendDrawing]: 'send-drawing',
   [MENU.textView]: 'text-view',
   [MENU.clearAi]: 'clear-ai',
   [MENU.toggleAi]: 'toggle-ai',
@@ -268,6 +269,11 @@ function commitLine(raw: string) {
       if (arg) sendTerm('term_prompt', arg)
       notice = arg ? '' : 'usage: /term <instruction>'
       break
+    case '/snap':
+      // whole page attached, whatever was drawn this turn
+      if (socket && socket.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ t: 'term_prompt', text: arg || 'Look at the attached drawing and describe what you see.', attach: 'page', ts: Date.now() }))
+      break
     case '/mode':
       lineMode = arg.toLowerCase() === 'term' ? 'term' : 'ink'
       notice = `mode: ${lineMode}`
@@ -346,7 +352,8 @@ function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; al
 
 // ── slash-command completion ────────────────────────────────────────────────
 const COMMANDS: { name: string; help: string }[] = [
-  { name: '/term', help: 'send an instruction to the terminal' },
+  { name: '/term', help: 'send an instruction to the terminal (+ this turn\'s ink)' },
+  { name: '/snap', help: 'send the whole page to the terminal' },
   { name: '/mode', help: 'ink | term: where plain lines go' },
   { name: '/hw', help: 'AI handwrites text on the canvas' },
   { name: '/draw', help: 'AI draws text' },
@@ -532,6 +539,7 @@ function buildPage(mode: PageMode) {
   const menuObject = new MenuContainerProperty({
     menuItems: [
       new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
+      new MenuItemProperty({ itemName: 'Send drawing to agent', itemID: MENU.sendDrawing }),
       new MenuItemProperty({ itemName: mode === 'text' ? 'Canvas view' : 'Text view', itemID: MENU.textView }),
       new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
       new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
@@ -623,6 +631,12 @@ async function setPageMode(b: EvenAppBridge, mode: PageMode) {
 }
 
 function applyAction(action: string) {
+  if (action === 'send-drawing') {
+    commitLine('/snap')
+    typingAt = performance.now()
+    textDirty = true
+    return
+  }
   if (action === 'new-drawing') {
     // wipe locally and tell the session so every client starts fresh
     store.clear()

@@ -28,7 +28,7 @@ from codrawer_bridge.protocol.constants import (
 
 from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
-from .rendering import render_context_patch_png_b64
+from .rendering import render_context_patch_png_b64, render_page_png, simplify_polylines
 from .sessions import broadcast, get_session
 from .term_bridge import TermSettings, get_link
 from .viewer_page import render_viewer_html
@@ -625,13 +625,44 @@ async def ws(session_id: str, ws: WebSocket):
                 st = get_settings()
                 link = get_link(
                     session_id,
-                    TermSettings(url=st.term_url, token=st.term_token, provider=st.term_provider, session_id=st.term_session),
+                    TermSettings(
+                        url=st.term_url,
+                        token=st.term_token,
+                        provider=st.term_provider,
+                        session_id=st.term_session,
+                        cwd=st.term_cwd,
+                    ),
                     lambda m, _s=session: broadcast(_s, m),
                 )
                 text = msg.get("text")
                 if isinstance(text, str):
                     if t == T_TERM_PROMPT:
-                        asyncio.create_task(link.prompt(text))
+                        # Attach the turn's ink by default ("turn"), the whole page on
+                        # request ("page"), or nothing ("none"). See ADR 002.
+                        attach = str(msg.get("attach") or "turn")
+                        attachment = None
+                        if attach == "page" and session.page_strokes:
+                            chosen = session.page_strokes
+                        elif attach == "turn" and session.turn_strokes:
+                            chosen = session.turn_strokes
+                        else:
+                            chosen = []
+                        if chosen:
+                            turn_ids = {str(s.get("id")) for s in session.turn_strokes}
+                            try:
+                                png = render_page_png(page_strokes=session.page_strokes, turn_ids=turn_ids)
+                                geometry = {
+                                    "page": {"aspect": 1620 / 2160, "coordinates": "normalized [x,y,pressure], origin top-left"},
+                                    "turn_ids": sorted(turn_ids),
+                                    "strokes": simplify_polylines(chosen),
+                                }
+                                attachment = {"png": png, "geometry": geometry, "n_strokes": len(chosen)}
+                            except Exception as e:  # rendering must never block the prompt
+                                if get_settings().debug_log_msgs:
+                                    print(f"[ws:{session_id}] attachment render failed: {e}")
+                        session.turn_seq += 1
+                        session.turn_strokes = []  # a submitted line closes the ink turn (ADR 001)
+                        asyncio.create_task(link.prompt(text, attachment))
                     else:
                         asyncio.create_task(link.answer(text))
                 continue
@@ -644,6 +675,8 @@ async def ws(session_id: str, ws: WebSocket):
                 session.recent_prompts = []
                 session.recent_ai_plans = []
                 session.last_cursor_xy = None
+                session.page_strokes = []
+                session.turn_strokes = []
                 await broadcast(session, {"t": T_CLEAR, "ts": msg.get("ts")}, exclude=ws)
                 continue
 
@@ -676,6 +709,18 @@ async def ws(session_id: str, ws: WebSocket):
                     # Keep bounded.
                     session.recent_user_strokes = session.recent_user_strokes[-12:]
                     msg["_recent_user_strokes"] = session.recent_user_strokes
+
+                    # Page + turn ink for attachments (ADR 001/002).
+                    full = {
+                        "id": sid,
+                        "brush": (msg["_stroke_meta"] or {}).get("brush"),
+                        "color": (msg["_stroke_meta"] or {}).get("color"),
+                        "pts": [[p[0], p[1], p[2]] for p in msg["_stroke_points4"] if isinstance(p, list) and len(p) >= 3],
+                    }
+                    session.page_strokes.append(full)
+                    session.page_strokes = session.page_strokes[-2000:]
+                    session.turn_strokes.append(full)
+                    session.turn_strokes = session.turn_strokes[-400:]
                     msg["_activity_seq"] = session.activity_seq
 
                     # Optional: attach a local rendered patch image for multimodal models.

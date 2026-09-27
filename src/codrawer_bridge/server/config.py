@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     term_token: str = ""
     term_provider: str = "claude"
     term_session: str = ""
+    # Working directory of the terminal session; drawings are written under
+    # <term_cwd>/.codrawer/turns/ so the agent can Read them (ADR 002).
+    term_cwd: str = ""
 
 
     # Reserved for future model integration
