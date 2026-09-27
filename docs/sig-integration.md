@@ -6,6 +6,22 @@ Even Realities G2 glasses show a glanceable crop of the same canvas. The full pl
 the SIG repo as **`docs/plans/GLASS-04-stroke-native-codrawer.md`**; this page is the
 bridge-side view of it.
 
+## How the pieces compose (see `adr/007-surface-composition.md`)
+
+The router's session is the composition point; every surface is an optional peer of it.
+The tablet is complete on its own: the Go bridge streams strokes and keys out and injects
+typed replies and AI ink back, and `smart_remarkable` (Rust, on-device) owns the native
+experience: framebuffer screenshots, real pen render-back, the XOVI selection buttons and
+Select Mode. The Even G2 app is a glance surface; the web viewer and iPad are render
+surfaces; SIG supplies identity, budgets, receipts and the pods that run agents and language
+servers. One agent path (through the session's terminal/pod), one render-back path on the
+tablet (smart_remarkable's pen), one typing service, one protocol (`protocol.md`).
+
+Decisions are in `adr/`: 001 turn as the unit of record · 002 image attachment path (verified:
+the agent Reads `.codrawer/turns/turn-N.png` + geometry JSON and answers about the drawing) ·
+003 agent ink as a governed action · 004 terminal keying and arbitration · 005 reply sinks and
+the virtual keyboard · 006 latency budget per surface · 007 surface composition.
+
 ## What SIG needs from this bridge
 
 | Need | Today | Change |
