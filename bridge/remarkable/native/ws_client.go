@@ -26,6 +26,10 @@ type WSConn struct {
 
 	done chan struct{}
 	errC chan error
+
+	// OnMessage, when set, receives every text frame from the server. The
+	// bridge uses it for `term` replies it types into the tablet.
+	OnMessage func(data []byte)
 }
 
 func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait time.Duration) (*WSConn, error) {
@@ -92,10 +96,13 @@ func (w *WSConn) readLoop() {
 			return
 		default:
 		}
-		_, _, err := w.Conn.ReadMessage()
+		mt, data, err := w.Conn.ReadMessage()
 		if err != nil {
 			w.sendErr(err)
 			return
+		}
+		if mt == websocket.TextMessage && w.OnMessage != nil {
+			w.OnMessage(data)
 		}
 	}
 }

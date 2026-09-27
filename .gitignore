@@ -62,3 +62,6 @@ Thumbs.db
 .env.*
 !.env.example
 !env.example
+
+# router runtime state
+.codrawer-term-sessions.json

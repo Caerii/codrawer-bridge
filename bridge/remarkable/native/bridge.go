@@ -18,6 +18,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -51,6 +52,18 @@ type BridgeConfig struct {
 	// Keyboard: "auto" (find a kbd device), "off", or an explicit /dev/input/eventN.
 	Keyboard     string
 	KeyboardGrab bool
+
+	// TypeReplies: type terminal (`term`) replies into the tablet's focused text
+	// field through a virtual keyboard (uinput). TypeCharMs paces the keystrokes.
+	TypeReplies bool
+	TypeCharMs  int
+}
+
+// termMsg is the subset of a `term` broadcast the typer cares about.
+type termMsg struct {
+	T    string `json:"t"`
+	Kind string `json:"kind"`
+	Text string `json:"text"`
 }
 
 type outStrokeBegin struct {
@@ -119,6 +132,42 @@ func RunBridgeForever(cfg BridgeConfig) error {
 		go runKeyboardForever(cfg.Keyboard, cfg.KeyboardGrab, cfg.Debug, keyC)
 	}
 
+	// Terminal replies typed into the tablet (see uinput.go). Text arrives as
+	// coalesced chunks; notes get their own line; the prompt echo is skipped
+	// because the user typed it already.
+	var typeC chan string
+	if cfg.TypeReplies {
+		typeC = make(chan string, 1024)
+		go typerForever(typeC, time.Duration(max(1, cfg.TypeCharMs))*time.Millisecond, cfg.Debug)
+	}
+	onMessage := func(data []byte) {
+		if typeC == nil {
+			return
+		}
+		var m termMsg
+		if err := json.Unmarshal(data, &m); err != nil || m.T != "term" {
+			return
+		}
+		var out string
+		switch m.Kind {
+		case "text":
+			out = m.Text
+		case "note":
+			if strings.HasPrefix(m.Text, "> ") {
+				return
+			}
+			out = "\n" + m.Text + "\n"
+		case "permission", "question":
+			out = "\n" + m.Text + "\n"
+		default:
+			return
+		}
+		select {
+		case typeC <- out:
+		default:
+		}
+	}
+
 	for {
 		ctx := context.Background()
 		ws, err := DialWS(ctx, cfg.WsURL, pingEvery, pongWait)
@@ -132,6 +181,7 @@ func RunBridgeForever(cfg BridgeConfig) error {
 
 		fmt.Printf("[bridge] connected ws=%s\n", cfg.WsURL)
 		reconnectDelay = 500 * time.Millisecond
+		ws.OnMessage = onMessage
 
 		stopPump := make(chan struct{})
 		if keyC != nil {
@@ -182,6 +232,30 @@ func penReaderForever(path string, cfg BridgeConfig, evC chan<- rawEvent, ready 
 			})
 		}
 		f.Close()
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// typerForever owns the virtual keyboard and types whatever arrives on in.
+func typerForever(in <-chan string, perChar time.Duration, debug bool) {
+	for {
+		kb, err := OpenVirtualKeyboard("codrawer virtual keyboard")
+		if err != nil {
+			fmt.Printf("[typer] virtual keyboard unavailable (%v); retrying in 10s\n", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		fmt.Printf("[typer] virtual keyboard ready\n")
+		for s := range in {
+			if debug {
+				fmt.Printf("[typer] %q\n", s)
+			}
+			if err := kb.TypeText(s, perChar); err != nil {
+				fmt.Printf("[typer] write failed (%v); reopening\n", err)
+				break
+			}
+		}
+		kb.Close()
 		time.Sleep(2 * time.Second)
 	}
 }

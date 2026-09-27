@@ -32,12 +32,34 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import httpx
 
 Broadcast = Callable[[dict[str, Any]], Awaitable[None]]
+
+# codrawer session key -> even-terminal sessionId, so a router restart resumes the
+# same terminal conversation instead of starting a fresh one.
+_STATE_PATH = os.environ.get("CODRAWER_TERM_STATE", ".codrawer-term-sessions.json")
+
+
+def _load_state() -> dict[str, str]:
+    try:
+        with open(_STATE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(state: dict[str, str]) -> None:
+    try:
+        with open(_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except OSError:
+        pass
 
 
 @dataclass
@@ -53,6 +75,7 @@ class TermSettings:
 class TermLink:
     settings: TermSettings
     broadcast: Broadcast
+    key: str = ""
     session_id: str | None = None
     pending: str | None = None  # 'permission' | 'question' | None
     reader: asyncio.Task | None = None
@@ -70,26 +93,31 @@ class TermLink:
         await self.broadcast({"t": "term", "kind": "status", "text": text})
 
     async def ensure_session(self) -> str | None:
+        """Resolve this codrawer session's own terminal session.
+
+        Policy: a pinned id (settings) wins; else the id remembered on disk for
+        this codrawer session; else None, and the first bare prompt creates a new
+        even-terminal session which we adopt. We deliberately do not pick the
+        most recent listed session: two codrawer sessions must not share one.
+        """
         if self.session_id:
             return self.session_id
         s = self.settings
-        async with httpx.AsyncClient(timeout=10) as c:
-            if s.session_id:
-                self.session_id = s.session_id
-            else:
-                r = await c.get(f"{s.url}/api/sessions", params={"provider": s.provider}, headers=self._headers())
-                if r.status_code != 200:
-                    await self._status(f"terminal: /api/sessions {r.status_code}")
-                    return None
-                sessions = r.json()
-                if isinstance(sessions, dict):
-                    sessions = sessions.get("sessions") or sessions.get("items") or []
-                if isinstance(sessions, list) and sessions:
-                    first = sessions[0]
-                    self.session_id = first.get("id") if isinstance(first, dict) else str(first)
+        if s.session_id:
+            self.session_id = s.session_id
+        else:
+            remembered = _load_state().get(self.key)
+            if remembered:
+                self.session_id = remembered
         if self.session_id and (self.reader is None or self.reader.done()):
             self.reader = asyncio.create_task(self._follow_events())
         return self.session_id
+
+    def _remember(self) -> None:
+        if self.key and self.session_id:
+            state = _load_state()
+            state[self.key] = self.session_id
+            _save_state(state)
 
     async def _post(self, path: str, body: dict[str, Any]) -> tuple[int, Any]:
         s = self.settings
@@ -121,6 +149,7 @@ class TermLink:
             sid = data.get("sessionId") or data.get("id")
             if sid:
                 self.session_id = str(sid)
+                self._remember()
                 if self.reader is None or self.reader.done():
                     self.reader = asyncio.create_task(self._follow_events())
         await self.broadcast({"t": "term", "kind": "note", "text": f"> {text}"})
@@ -256,7 +285,7 @@ _links: dict[str, TermLink] = {}
 def get_link(session_key: str, settings: TermSettings, broadcast: Broadcast) -> TermLink:
     link = _links.get(session_key)
     if link is None:
-        link = TermLink(settings=settings, broadcast=broadcast)
+        link = TermLink(settings=settings, broadcast=broadcast, key=session_key)
         _links[session_key] = link
     return link
 
