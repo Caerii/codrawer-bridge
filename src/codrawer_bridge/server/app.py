@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 from PIL import Image, ImageDraw
 
 from codrawer_bridge.protocol.constants import (
+    T_CLEAR,
     T_CURSOR,
     T_HELLO,
     T_PROMPT,
@@ -610,6 +611,20 @@ async def ws(session_id: str, ws: WebSocket):
             # Broadcast all stroke_* and cursor events to other clients
             if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR):
                 await broadcast(session, msg, exclude=ws)
+
+            # New drawing: forget the session's rolling context and tell every
+            # other client to wipe its canvas. Clients own rendering, so this is
+            # a notification, not a canvas state transfer.
+            if t == T_CLEAR:
+                session.stroke_points4.clear()
+                session.stroke_meta.clear()
+                session.stroke_last_point4.clear()
+                session.recent_user_strokes = []
+                session.recent_prompts = []
+                session.recent_ai_plans = []
+                session.last_cursor_xy = None
+                await broadcast(session, {"t": T_CLEAR, "ts": msg.get("ts")}, exclude=ws)
+                continue
 
             # Trigger AI only on stroke_end (debounced + rate-limited in worker)
             if t == T_STROKE_END:

@@ -92,8 +92,10 @@ const ENC: 'b64' | 'array' = cfg('enc', 'array') === 'b64' ? 'b64' : 'array'
 const BENCH = cfg('bench', '0') === '1'
 
 // glasses contextual-menu item ids (non-zero, unique) → actions
-const MENU = { toggleAi: 1, toggleMode: 2, cycleHighlight: 3, zoomIn: 4, zoomOut: 5 } as const
+const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7 } as const
 const MENU_ACTION: Record<number, string> = {
+  [MENU.newDrawing]: 'new-drawing',
+  [MENU.clearAi]: 'clear-ai',
   [MENU.toggleAi]: 'toggle-ai',
   [MENU.toggleMode]: 'toggle-mode',
   [MENU.cycleHighlight]: 'cycle-highlight',
@@ -155,8 +157,10 @@ function statusLine(): string {
 }
 
 // ── websocket (codrawer protocol) ───────────────────────────────────────────
+let socket: WebSocket | null = null
 function connect() {
   const ws = new WebSocket(WS_URL)
+  socket = ws
   ws.onopen = () => {
     connected = true
     textDirty = true
@@ -211,6 +215,15 @@ function connect() {
         intent = String(m.plan || '').slice(0, 120)
         textDirty = true
         break
+      case 'clear':
+        // another client started a new drawing
+        store.clear()
+        intent = ''
+        loupeDirty = true
+        canvasDirty = true
+        strokeEnded = true
+        textDirty = true
+        break
       default:
         break
     }
@@ -263,11 +276,13 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
   // static until a rebuild, so they are verbs; current state shows in the status line.
   const menuObject = new MenuContainerProperty({
     menuItems: [
+      new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
       new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
       new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
       new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
       new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
       new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
+      new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
     ],
   })
   const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
@@ -320,7 +335,15 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       else if (text.eventType === 2) action = 'zoom-out'
     }
     if (!action) return
-    if (action === 'toggle-ai') {
+    if (action === 'new-drawing') {
+      // wipe locally and tell the session so every client starts fresh
+      store.clear()
+      intent = ''
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: 'clear', ts: Date.now() }))
+    } else if (action === 'clear-ai') {
+      store.clear('ai')
+      intent = ''
+    } else if (action === 'toggle-ai') {
       opts.showAi = !opts.showAi
       try {
         localStorage.setItem('codrawer:ai', opts.showAi ? '1' : '0')

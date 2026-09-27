@@ -8,6 +8,7 @@ T_STROKE_PTS = "stroke_pts"
 T_STROKE_END = "stroke_end"
 T_CURSOR = "cursor"
 T_PROMPT = "prompt"
+T_CLEAR = "clear"  # any client -> server -> broadcast: start a new drawing
 
 # server -> clients (AI layer)
 T_AI_INTENT = "ai_intent"

@@ -81,6 +81,16 @@ Fields:
 - `x`,`y` (optional): normalized anchor point for placing the output (otherwise the server uses last cursor or center)
 - `ts` (optional): ms timestamp
 
+### `clear` (any client → server → broadcast)
+
+Start a new drawing. The server forgets its rolling context for the session (recent strokes,
+prompts, AI plans) and forwards the message to every other client, which wipes its canvas.
+Nothing is persisted or replayed; clients own rendering.
+
+```json
+{"t":"clear","ts":1730000003000}
+```
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.

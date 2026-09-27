@@ -76,6 +76,23 @@ export class StrokeStore {
     this.dirty = true
   }
 
+  /** Drop every stroke, or only one layer's. */
+  clear(layer?: Layer) {
+    if (!layer) {
+      this.strokes.clear()
+      this.order = []
+      this.lastPoint = null
+    } else {
+      for (const id of [...this.order]) {
+        if (this.strokes.get(id)?.layer === layer) {
+          this.strokes.delete(id)
+          this.order = this.order.filter((x) => x !== id)
+        }
+      }
+    }
+    this.dirty = true
+  }
+
   prune(now = Date.now()) {
     for (const id of [...this.order]) {
       const s = this.strokes.get(id)
