@@ -40,14 +40,6 @@ const CONFIGS: Config[] = [
   { label: '128x64 g4 arr', w: 128, h: 64, fmt: 'gray4', enc: 'array' },
   { label: '288x144 g8 arr', w: 288, h: 144, fmt: 'gray8', enc: 'array' },
   { label: '128x64 g8 b64', w: 128, h: 64, fmt: 'gray8', enc: 'b64' },
-] = [
-  { label: 'text-only', w: 20, h: 20, fmt: 'gray8', enc: 'b64', text: true },
-  { label: '20x20 g8 b64', w: 20, h: 20, fmt: 'gray8', enc: 'b64' },
-  { label: '64x32 g8 b64', w: 64, h: 32, fmt: 'gray8', enc: 'b64' },
-  { label: '128x64 g8 b64', w: 128, h: 64, fmt: 'gray8', enc: 'b64' },
-  { label: '128x64 g8 arr', w: 128, h: 64, fmt: 'gray8', enc: 'array' },
-  { label: '128x64 g4 b64', w: 128, h: 64, fmt: 'gray4', enc: 'b64' },
-  { label: '288x144 g8 b64', w: 288, h: 144, fmt: 'gray8', enc: 'b64' },
 ]
 const FRAMES = 6
 const IMG_ID = 1
