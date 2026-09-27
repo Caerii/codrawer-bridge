@@ -168,6 +168,7 @@ function connect() {
   }
   ws.onclose = () => {
     connected = false
+    strokeActive = false // a stroke cut off by the disconnect must not hold text updates
     textDirty = true
     setTimeout(connect, 800)
   }
@@ -286,29 +287,20 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
     ],
   })
   const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
-  let result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
+  const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
-    // A page may already exist (the WebView reloaded and its unload shutdown never
-    // reached the host). Tear it down and create again; rebuild is the last resort.
-    try {
-      await b.shutDownPageContainer(0)
-    } catch {
-      /* ignore */
-    }
-    await new Promise((r) => setTimeout(r, 350))
-    result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
-    if (result !== StartUpPageCreateResult.success) {
-      const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
-      console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
-      if (!rebuilt) {
-        statusEl.textContent = `glasses page failed: create=${String(result)} rebuild=${String(rebuilt)}`
-        return false
-      }
+    // A page already exists: the app was reopened from the Even Hub tab while its
+    // previous page was still registered, or the WebView hot-reloaded. Rebuild it in
+    // place with the same container set. Never call shutDownPageContainer here: on
+    // the device that exits the whole app (seen 2026-09-27 as "tapping the app
+    // closes it").
+    const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
+    console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
+    if (!rebuilt) {
+      statusEl.textContent = `glasses page failed: create=${String(result)} rebuild=${String(rebuilt)}`
+      return false
     }
   }
-  window.addEventListener('beforeunload', () => {
-    void b.shutDownPageContainer(0)
-  })
   let rawLogged = 0
   b.onEvenHubEvent((event) => {
     if (rawLogged < 6) {
@@ -452,8 +444,11 @@ function pushText(b: EvenAppBridge, content: string) {
   if (content === lastTextSent) return
   // A text update is a ~83 ms host call that competes with ink frames, so hold
   // it while a stroke is in progress and never send more than one every 2 s.
-  if (strokeActive) return
-  if (performance.now() - lastTextAt < 2000) return
+  // The very first line (replacing "connecting…") always goes out.
+  if (lastTextSent !== '') {
+    if (strokeActive) return
+    if (performance.now() - lastTextAt < 2000) return
+  }
   lastTextSent = content
   lastTextAt = performance.now()
   textChain = textChain.then(async () => {
