@@ -17,6 +17,7 @@ from codrawer_bridge.protocol.constants import (
     T_CLEAR,
     T_CURSOR,
     T_HELLO,
+    T_KEY,
     T_PROMPT,
     T_STROKE_BEGIN,
     T_STROKE_END,
@@ -532,7 +533,7 @@ async def ws(session_id: str, ws: WebSocket):
                 print(f"[ws:{session_id}] in t={t} from={getattr(ws.client,'host',None)}")
 
             # Track "activity" for auto AI behaviors (wait for user pause).
-            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT):
+            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT, T_KEY):
                 session.activity_seq += 1
                 session.last_activity_ts = time.perf_counter()
 
@@ -609,7 +610,7 @@ async def ws(session_id: str, ws: WebSocket):
                         session.stroke_last_point4[sid] = last
 
             # Broadcast all stroke_* and cursor events to other clients
-            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR):
+            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_KEY):
                 await broadcast(session, msg, exclude=ws)
 
             # New drawing: forget the session's rolling context and tell every

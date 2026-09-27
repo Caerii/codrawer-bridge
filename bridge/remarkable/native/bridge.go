@@ -39,6 +39,10 @@ type BridgeConfig struct {
 	ProbeSeconds       float64
 	PingSeconds        float64
 	PongTimeoutSeconds float64
+
+	// Keyboard: "auto" (find a kbd device), "off", or an explicit /dev/input/eventN.
+	Keyboard     string
+	KeyboardGrab bool
 }
 
 type outStrokeBegin struct {
@@ -86,6 +90,14 @@ func RunBridgeForever(cfg BridgeConfig) error {
 
 	var strokesSent atomic.Int64
 
+	// Keyboard events flow through this channel regardless of socket state; the
+	// per-connection pump below drains it while a socket is up.
+	var keyC chan outKey
+	if strings.ToLower(strings.TrimSpace(cfg.Keyboard)) != "off" {
+		keyC = make(chan outKey, 256)
+		go runKeyboardForever(cfg.Keyboard, cfg.KeyboardGrab, cfg.Debug, keyC)
+	}
+
 	for {
 		ctx := context.Background()
 		ws, err := DialWS(ctx, cfg.WsURL, pingEvery, pongWait)
@@ -100,10 +112,30 @@ func RunBridgeForever(cfg BridgeConfig) error {
 		fmt.Printf("[bridge] connected ws=%s\n", cfg.WsURL)
 		reconnectDelay = 500 * time.Millisecond
 
+		stopPump := make(chan struct{})
+		if keyC != nil {
+			go pumpKeys(ws, keyC, stopPump)
+		}
 		err = runOnce(path, cfg, ws, flushEvery, &strokesSent)
+		close(stopPump)
 		ws.Close()
 		fmt.Printf("[bridge] disconnected; strokes_sent=%d; reconnecting in %s (err=%v)\n", strokesSent.Load(), reconnectDelay, err)
 		time.Sleep(reconnectDelay)
+	}
+}
+
+// pumpKeys forwards keyboard messages over the current socket until stop closes.
+// WSConn.WriteJSON is mutex-protected, so this is safe next to the stroke writer.
+func pumpKeys(ws *WSConn, keyC <-chan outKey, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case k := <-keyC:
+			if err := ws.WriteJSON(k); err != nil {
+				return
+			}
+		}
 	}
 }
 

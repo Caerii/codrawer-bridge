@@ -91,6 +91,16 @@ Nothing is persisted or replayed; clients own rendering.
 {"t":"clear","ts":1730000003000}
 ```
 
+### `key` (keyboard bridge → server → broadcast)
+
+One key-down (or auto-repeat) from a keyboard paired to the tablet. `char` is present only for
+text-producing keys with no Ctrl/Alt/Meta held; `key` uses browser-style names for the rest
+(`Enter`, `Backspace`, `ArrowUp`, `F3`, …). Clients own line editing and any command syntax.
+
+```json
+{"t":"key","key":"A","char":"A","code":30,"repeat":false,"mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000004000}
+```
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.

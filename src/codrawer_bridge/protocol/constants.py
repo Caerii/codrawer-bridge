@@ -9,6 +9,7 @@ T_STROKE_END = "stroke_end"
 T_CURSOR = "cursor"
 T_PROMPT = "prompt"
 T_CLEAR = "clear"  # any client -> server -> broadcast: start a new drawing
+T_KEY = "key"  # keyboard bridge -> server -> broadcast: one key-down (char + mods)
 
 # server -> clients (AI layer)
 T_AI_INTENT = "ai_intent"
