@@ -164,8 +164,81 @@ let typingAt = 0 // performance.now() of the last keystroke
 let scrollBack = 0 // lines of transcript hidden below the view (0 = newest)
 let notice = '' // one-line feedback for commands
 
+// ── terminal (even-terminal via the router's term bridge) ───────────────────
+//   /term <text>   send one instruction to the terminal session
+//   /mode term     plain lines go to the terminal until /mode ink
+//   y | a | n      answer a pending permission; any line answers a pending question
+type LineMode = 'ink' | 'term'
+let lineMode: LineMode = 'ink'
+let termPending: 'permission' | 'question' | null = null
+let termStream = '' // assistant text still being streamed (not yet a transcript line)
+let termAt = 0
+
+function pushTranscript(line: string) {
+  for (const l of line.split('\n')) {
+    if (!l.trim()) continue
+    transcript.push(l.slice(0, 200))
+  }
+  while (transcript.length > TRANSCRIPT_MAX) transcript.shift()
+  scrollBack = 0
+}
+
+function handleTerm(m: { kind?: string; text?: string }) {
+  const text = typeof m.text === 'string' ? m.text : ''
+  termAt = performance.now()
+  typingAt = termAt // keep the transcript view open while the terminal talks
+  switch (m.kind) {
+    case 'text': {
+      termStream += text
+      // break streamed text into transcript lines at newlines; keep the tail live
+      const parts = termStream.split('\n')
+      termStream = parts.pop() ?? ''
+      for (const p of parts) pushTranscript(p)
+      if (termStream.length > 90) {
+        const cut = termStream.lastIndexOf(' ', 80)
+        const head = cut > 30 ? termStream.slice(0, cut) : termStream.slice(0, 80)
+        pushTranscript(head)
+        termStream = termStream.slice(head.length).trimStart()
+      }
+      break
+    }
+    case 'permission':
+      flushTermStream()
+      termPending = 'permission'
+      pushTranscript(text)
+      break
+    case 'question':
+      flushTermStream()
+      termPending = 'question'
+      pushTranscript(text)
+      break
+    case 'note':
+      flushTermStream()
+      if (text.startsWith('→ ') || text.startsWith('— done')) termPending = null
+      pushTranscript(text)
+      break
+    case 'status':
+      flushTermStream()
+      notice = text
+      break
+    default:
+      return
+  }
+  textDirty = true
+}
+
+function flushTermStream() {
+  if (termStream.trim()) pushTranscript(termStream)
+  termStream = ''
+}
+
+function sendTerm(kind: 'term_prompt' | 'term_answer', text: string) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: kind, text, ts: Date.now() }))
+  else notice = 'not connected'
+}
+
 function isTyping(): boolean {
-  return inputLine.length > 0 || performance.now() - typingAt < 15000
+  return inputLine.length > 0 || performance.now() - typingAt < 15000 || termStream.length > 0
 }
 
 function commitLine(raw: string) {
@@ -179,7 +252,26 @@ function commitLine(raw: string) {
   const send = (o: Record<string, unknown>) => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ ...o, ts: Date.now() }))
   }
+  // A pending terminal permission/question takes the whole line, whatever the mode.
+  if (termPending) {
+    sendTerm('term_answer', line)
+    termPending = null
+    return
+  }
+  if (!line.startsWith('/') && lineMode === 'term') {
+    sendTerm('term_prompt', line)
+    return
+  }
   switch (cmd.toLowerCase()) {
+    case '/term':
+    case '/t':
+      if (arg) sendTerm('term_prompt', arg)
+      notice = arg ? '' : 'usage: /term <instruction>'
+      break
+    case '/mode':
+      lineMode = arg.toLowerCase() === 'term' ? 'term' : 'ink'
+      notice = `mode: ${lineMode}`
+      break
     case '/hw':
     case '/write':
       if (arg) send({ t: 'prompt', text: arg, mode: 'handwriting' })
@@ -215,18 +307,33 @@ function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; al
   const ch = typeof m.char === 'string' ? m.char : ''
   const mods = m.mods || {}
   typingAt = performance.now()
+  const sugg = suggestions()
   if (mods.ctrl && key.toLowerCase() === 'l') {
     transcript.length = 0
+  } else if (sugg.length && (key === 'Tab' || key === 'ArrowRight')) {
+    // complete the highlighted command; a trailing space invites the argument
+    const pick = sugg[Math.min(suggestIndex, sugg.length - 1)]
+    inputLine = pick.name + ' '
+    suggestIndex = 0
+  } else if (sugg.length && (key === 'ArrowUp' || key === 'ArrowDown')) {
+    suggestIndex = (suggestIndex + (key === 'ArrowDown' ? 1 : sugg.length - 1)) % sugg.length
+  } else if (sugg.length && key === 'Enter' && sugg.length === 1 && inputLine !== sugg[0].name) {
+    inputLine = sugg[0].name + ' '
+    suggestIndex = 0
   } else if (ch) {
     inputLine += ch
+    suggestIndex = 0
   } else if (key === 'Backspace') {
     inputLine = inputLine.slice(0, -1)
+    suggestIndex = 0
   } else if (key === 'Enter') {
     commitLine(inputLine)
     inputLine = ''
+    suggestIndex = 0
   } else if (key === 'Escape') {
     inputLine = ''
     notice = ''
+    suggestIndex = 0
   } else if (key === 'ArrowUp' || key === 'PageUp') {
     scrollBack = Math.min(Math.max(0, transcript.length - 1), scrollBack + (key === 'PageUp' ? 5 : 1))
   } else if (key === 'ArrowDown' || key === 'PageDown') {
@@ -235,6 +342,44 @@ function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; al
     return
   }
   textDirty = true
+}
+
+// ── slash-command completion ────────────────────────────────────────────────
+const COMMANDS: { name: string; help: string }[] = [
+  { name: '/term', help: 'send an instruction to the terminal' },
+  { name: '/mode', help: 'ink | term: where plain lines go' },
+  { name: '/hw', help: 'AI handwrites text on the canvas' },
+  { name: '/draw', help: 'AI draws text' },
+  { name: '/new', help: 'new drawing for every client' },
+  { name: '/ai', help: 'toggle the AI ghost layer' },
+  { name: '/text', help: 'toggle full-screen text view' },
+  { name: '/clear', help: 'clear the transcript' },
+]
+let suggestIndex = 0
+
+/** Commands matching the input while it is still a bare `/word` (no space yet). */
+function suggestions(): { name: string; help: string }[] {
+  if (!inputLine.startsWith('/') || inputLine.includes(' ')) return []
+  const prefix = inputLine.toLowerCase()
+  return COMMANDS.filter((c) => c.name.startsWith(prefix))
+}
+
+// ── layout for a proportional font with no measurement API ─────────────────
+// The glasses wrap at container width (~560 px usable). Wrapping happens on the
+// device, so every wrapped row eats a row of the budget; we wrap conservatively
+// ourselves and fill rows from the bottom so the input line is always visible.
+const COLS = 44
+function wrapLine(s: string, cols = COLS): string[] {
+  const out: string[] = []
+  let rest = s
+  while (rest.length > cols) {
+    let cut = rest.lastIndexOf(' ', cols)
+    if (cut < cols * 0.5) cut = cols
+    out.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).trimStart()
+  }
+  out.push(rest)
+  return out
 }
 
 function metricsLine(): string {
@@ -249,24 +394,55 @@ function metricsLine(): string {
 
 /** The text container's content for the current layout and activity. */
 function renderText(): string {
-  const bodyLines = pageMode === 'text' ? 8 : 3 // lines available above the input line
+  // Row budget: 288 px tall page at ~27 px per row minus padding → 9 rows; the
+  // canvas layout's strip below the images holds 4.
+  const rows = pageMode === 'text' ? 9 : 4
   if (pageMode === 'canvas' && !isTyping()) {
     const head = intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine()
     const foot = intent && opts.showAi !== false ? metricsLine() : notice
     return foot ? `${head}\n${foot}` : head
   }
-  const end = Math.max(0, transcript.length - scrollBack)
-  const shown = transcript.slice(Math.max(0, end - bodyLines), end)
-  const lines = [...shown]
-  if (pageMode === 'text') {
-    while (lines.length < bodyLines) lines.unshift('')
-    lines[0] = notice || (intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine())
-  } else if (notice || intent) {
-    lines.unshift(notice || `AI: ${intent}`)
-    while (lines.length > bodyLines) lines.shift()
+
+  // Bottom-up fill: input line (always), then completion popup, then the live
+  // terminal tail, then transcript lines newest-first, until the budget is spent.
+  const bottom: string[] = []
+  const prompt = termPending === 'permission' ? 'y/a/n' : termPending === 'question' ? '?' : lineMode === 'term' ? '$' : '>'
+  const inputRows = wrapLine(`${prompt} ${inputLine}▌${scrollBack ? `  ↑${scrollBack}` : ''}`)
+  bottom.push(...inputRows.slice(-2)) // never more than two rows of input
+
+  const sugg = suggestions()
+  if (sugg.length) {
+    const max = pageMode === 'text' ? 5 : 2
+    const start = Math.max(0, Math.min(suggestIndex, sugg.length - max))
+    const shown = sugg.slice(start, start + max)
+    const popup = shown.map((c, i) => `${start + i === suggestIndex ? '▸' : ' '} ${c.name}  ${c.help}`.slice(0, COLS))
+    bottom.unshift(...popup)
   }
-  lines.push(`> ${inputLine}▌${scrollBack ? `  ↑${scrollBack}` : ''}`)
-  return lines.join('\n').slice(0, 1900)
+
+  let budget = rows - bottom.length
+  const above: string[] = []
+  if (termStream && budget > 0) {
+    const tail = wrapLine(termStream)
+    const take = tail.slice(-Math.min(2, budget))
+    above.unshift(...take)
+    budget -= take.length
+  }
+  const end = Math.max(0, transcript.length - scrollBack)
+  for (let i = end - 1; i >= 0 && budget > 0; i--) {
+    const w = wrapLine(transcript[i])
+    const take = w.slice(-budget)
+    above.unshift(...take)
+    budget -= take.length
+  }
+  if (pageMode === 'text' && budget > 0) {
+    // spare rows: pin a header with the notice or the metrics
+    above.unshift(notice || (intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine()))
+    budget--
+  } else if (pageMode === 'canvas' && notice && budget > 0) {
+    above.unshift(notice)
+    budget--
+  }
+  return [...above, ...bottom].join('\n').slice(0, 1900)
 }
 
 // ── websocket (codrawer protocol) ───────────────────────────────────────────
@@ -340,6 +516,9 @@ function connect() {
         break
       case 'key':
         handleKey(m)
+        break
+      case 'term':
+        handleTerm(m)
         break
       default:
         break

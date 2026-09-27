@@ -69,6 +69,13 @@ A leading slash makes a command:
 | `/ai` | toggle the AI ghost layer |
 | `/text` | toggle the full-screen text view (8 transcript lines; one rebuild) |
 | `/clear` | clear the transcript (also Ctrl+L) |
+| `/term <text>` | one instruction to the even-terminal session (router bridge) |
+| `/mode term` / `/mode ink` | plain lines go to the terminal / stay local |
+
+Typing `/` shows a completion popup; ArrowUp/Down highlight, Tab or ArrowRight completes,
+Enter on a single match completes too. A pending terminal permission (`y / a / n`) or question
+takes the next whole line. Rows are filled from the bottom with our own conservative wrapping
+so the input line is always the last visible row.
 
 Text updates follow keystrokes at a 150 ms floor while typing, then fall back to the quiet
 2 s cadence so they never compete with ink. `?view=text` starts in the text view.

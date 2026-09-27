@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # Debugging
     debug_log_msgs: bool = False
 
+    # even-terminal bridge (docs: server/term_bridge.py). Empty url = disabled.
+    term_url: str = ""
+    term_token: str = ""
+    term_provider: str = "claude"
+    term_session: str = ""
+
+
     # Reserved for future model integration
     glm_api_key: str | None = None
     glm_base_url: str | None = None

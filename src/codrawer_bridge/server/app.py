@@ -22,12 +22,15 @@ from codrawer_bridge.protocol.constants import (
     T_STROKE_BEGIN,
     T_STROKE_END,
     T_STROKE_PTS,
+    T_TERM_ANSWER,
+    T_TERM_PROMPT,
 )
 
 from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
 from .rendering import render_context_patch_png_b64
 from .sessions import broadcast, get_session
+from .term_bridge import TermSettings, get_link
 from .viewer_page import render_viewer_html
 
 app = FastAPI()
@@ -616,6 +619,23 @@ async def ws(session_id: str, ws: WebSocket):
             # New drawing: forget the session's rolling context and tell every
             # other client to wipe its canvas. Clients own rendering, so this is
             # a notification, not a canvas state transfer.
+            if t in (T_TERM_PROMPT, T_TERM_ANSWER):
+                # Route typed lines to the even-terminal session attached to this
+                # codrawer session; replies come back as `term` broadcasts.
+                st = get_settings()
+                link = get_link(
+                    session_id,
+                    TermSettings(url=st.term_url, token=st.term_token, provider=st.term_provider, session_id=st.term_session),
+                    lambda m, _s=session: broadcast(_s, m),
+                )
+                text = msg.get("text")
+                if isinstance(text, str):
+                    if t == T_TERM_PROMPT:
+                        asyncio.create_task(link.prompt(text))
+                    else:
+                        asyncio.create_task(link.answer(text))
+                continue
+
             if t == T_CLEAR:
                 session.stroke_points4.clear()
                 session.stroke_meta.clear()

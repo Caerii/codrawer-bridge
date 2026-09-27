@@ -101,6 +101,25 @@ text-producing keys with no Ctrl/Alt/Meta held; `key` uses browser-style names f
 {"t":"key","key":"A","char":"A","code":30,"repeat":false,"mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000004000}
 ```
 
+### `term_prompt` / `term_answer` (client → server) and `term` (server → clients)
+
+The router can attach an [even-terminal](https://www.npmjs.com/package/@evenrealities/even-terminal)
+session (Claude Code / Codex) to a codrawer session. Configure `CODRAWER_TERM_URL` and
+`CODRAWER_TERM_TOKEN` on the router; clients never hold the token or a second connection.
+
+```json
+{"t":"term_prompt","text":"list the failing tests"}
+{"t":"term_answer","text":"y"}
+{"t":"term","kind":"text","text":"bridge online"}
+{"t":"term","kind":"note","text":"— done (1 turns, $0.0100) —"}
+{"t":"term","kind":"permission","text":"⚠ Bash — run pytest  y / a / n ?"}
+```
+
+`term_answer` resolves a pending permission (`y` allow, `a` always, anything else deny) or
+question; with nothing pending it is a prompt. Streamed assistant text is coalesced (~150 ms)
+into `kind:"text"` chunks; tool starts/ends, progress, results and errors are `kind:"note"`;
+`kind:"status"` reports the bridge itself (attached, dropped, misconfigured).
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.
