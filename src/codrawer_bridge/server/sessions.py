@@ -30,6 +30,16 @@ class Session:
     recent_prompts: list[str] = field(default_factory=list)
     recent_ai_plans: list[str] = field(default_factory=list)
 
+    # Page + turn ink (ADR 001/002): every finished user stroke on the page
+    # (bounded) and the subset drawn since the last submitted line. Each item:
+    # {"id", "brush", "color", "pts": [[x,y,p],...]} with pts sampled to <=256.
+    page_strokes: list[dict[str, object]] = field(default_factory=list)
+    turn_strokes: list[dict[str, object]] = field(default_factory=list)
+    turn_seq: int = 0
+
+    # Shared document (ADR 001): latest text shared by any participant.
+    doc_text: str = ""
+
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None
 

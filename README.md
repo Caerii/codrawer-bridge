@@ -7,7 +7,35 @@ Core infrastructure for a low-latency “co-drawer” system:
 - **AI** emits **ghost-layer vector strokes** (`layer="ai"`)
 - **Clients render** and animate (server/bridge never render)
 
-This repo is **infra-first** (not a product demo yet).
+This repo is **infra-first** (not a product demo yet). It is also the stroke-native surface of
+Superintelligent Group's fluid-interface direction: SIG agents (local and cloud) join a session as
+participants, and the Even Realities G2 glasses show a glanceable crop of the same canvas. See
+`docs/sig-integration.md` for the SIG plan and protocol extensions.
+
+## One command to bring the desktop half up
+
+```bash
+scripts/dev/up.sh            # even-terminal + router (:8577) + glasses app (:5188) + simulator (own session)
+scripts/dev/up.sh --tablet   # also restart the bridge + keyboard keeper on the Paper Pro
+```
+
+Parameters, ports and the traps are in `CLAUDE.md`; device steps in `docs/even-g2-testing.md`.
+
+## Repo layout
+
+| Path | Role |
+| --- | --- |
+| `src/codrawer_bridge/` | Desktop server: FastAPI WebSocket router, AI worker, dev viewer, record/replay tools |
+| `bridge/remarkable/native/` | Paper Pro device bridge (Go, single static binary, no Python on the device) |
+| `bridge/remarkable/codrawer_bridge.py` | Older Python device bridge (evdev); kept for reference |
+| `model-server/` | Local OpenAI-compatible model gateway (Vercel AI SDK): Cerebras fast path, Bedrock, Together |
+| `codrawer-ipad/` | iPad client (SwiftUI + PencilKit) with a Rocq prover pane |
+| `experimental/even-g2-codrawer-viewer/` | Even Realities G2 viewer: rasterizes the live canvas to 640×350 HUD frames (mock-tested; Even Hub bridge is a stub) |
+| `docs/` | Protocol (canonical), architecture, latency budget, device setup, SIG integration |
+
+Not tracked on purpose: compiled device binaries (build from source), `*.jsonl` stroke recordings,
+`mock_output*/` frames, `node_modules/`, and every `.env`. Copy `env.example` and
+`model-server/.env.example` instead.
 
 ## Key rules (non-negotiable)
 
@@ -22,6 +50,10 @@ This repo is **infra-first** (not a product demo yet).
 - `docs/architecture.md`
 - `docs/latency_budget.md`
 - `docs/remarkable_setup.md` (connect + install on Paper Pro)
+- `docs/sig-integration.md` (how SIG agents, identity, and the Even G2 attach to a session)
+- `docs/adr/` (decisions: turn as unit of record, image attachment path, agent ink governance, multiplayer terminal, reply sinks, latency budgets)
+- `docs/even-g2-testing.md` (simulator, developer mode, QR sideload, manifest and CORS rules)
+- `docs/remarkable_bluetooth.md` (bring up the Paper Pro's dormant Bluetooth; keyboard pairing; glasses-direct notes)
 
 ## Desktop setup (uv)
 
@@ -91,9 +123,16 @@ Endpoints:
 
 ## Paper Pro bridge
 
-See `bridge/remarkable/README.md`.
+Use the native Go bridge (`bridge/remarkable/native/README.md`; build with `GOOS=linux GOARCH=arm64`). The Python bridge in `bridge/remarkable/README.md` is the older path.
+
+## iPad and Even G2 clients
+
+- iPad: `codrawer-ipad/README.md` (`run_ipad.sh` has one developer's simulator ids hardcoded; edit before use).
+- Even G2: `experimental/even-g2-codrawer-viewer/README.md` (`pnpm install && pnpm test` renders mock frames without hardware).
 
 ## Record/replay harness (no hardware)
+
+Recordings are `*.jsonl` and gitignored; keep them out of commits.
 
 Record:
 

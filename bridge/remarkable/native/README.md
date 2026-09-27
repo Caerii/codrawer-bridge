@@ -49,6 +49,16 @@ All flags have equivalent env vars (env is the default, flags override).
   - `-max-batch` / `MAX_BATCH_POINTS` (default: `64`)
   - `-brush` / `BRUSH` (default: `pen`) — eraser tool is emitted as `brush="eraser"`
 
+- **Keyboard** (a Bluetooth/USB keyboard bonded to the tablet; see `docs/remarkable_bluetooth.md`)
+  - `-keyboard` / `KEYBOARD_DEVICE`: `auto` (default; a device with a `kbd` handler that is not the power key), `off`, or `/dev/input/eventN`
+  - `-keyboard-grab` / `KEYBOARD_GRAB` (default `false`): make the bridge the only consumer; by default the tablet UI keeps receiving keys
+  - emits `key` messages (browser-style names, US-layout `char`, modifiers); reopens the node when the keyboard sleeps
+
+- **Typing replies into the tablet** (virtual keyboard via `/dev/uinput`)
+  - `-type-replies` / `TYPE_REPLIES` (default `true`): `term` replies from the router are typed into whatever text field the tablet has focused
+  - `-type-char-ms` / `TYPE_CHAR_MS` (default `12`): pacing between keystrokes
+  - registers as `codrawer virtual keyboard`; the prompt echo is skipped, notes/permissions get their own line
+
 - **Debugging**
   - `-debug` / `DEBUG`
   - `-dump-events` / `DUMP_EVENTS` (very noisy)

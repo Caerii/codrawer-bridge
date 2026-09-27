@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>codrawer on G2</title>
+    <style>
+      html, body { margin: 0; background: #000; color: #7ee787; font: 12px ui-monospace, monospace; }
+      #wrap { padding: 8px; }
+      canvas { image-rendering: pixelated; border: 1px solid #234; display: block; }
+      #status { margin-top: 6px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <canvas id="preview" width="288" height="144"></canvas>
+        <canvas id="loupe" width="128" height="64"></canvas>
+      </div>
+      <div id="status">starting…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

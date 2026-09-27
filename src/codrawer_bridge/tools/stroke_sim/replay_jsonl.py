@@ -15,6 +15,7 @@ async def replay(
     speed: float = 1.0,
     default_dt_ms: int = 0,
     only_t_prefix: str | None = None,
+    max_gap_ms: int | None = None,
 ) -> None:
     """
     Replay previously-recorded JSONL into a websocket.
@@ -45,6 +46,8 @@ async def replay(
 
             if ts is not None and prev_ts is not None:
                 dt_ms = max(0, ts - prev_ts)
+                if max_gap_ms is not None:
+                    dt_ms = min(dt_ms, max_gap_ms)
             else:
                 dt_ms = default_dt_ms
 
@@ -66,6 +69,7 @@ def main() -> None:
         default=None,
         help="If set, only replay messages whose 't' starts with this prefix (e.g. 'stroke_').",
     )
+    ap.add_argument("--max-gap-ms", type=int, default=None, help="Cap the sleep between messages (skips idle gaps in recordings)")
     args = ap.parse_args()
 
     asyncio.run(
@@ -75,6 +79,7 @@ def main() -> None:
             speed=args.speed,
             default_dt_ms=args.default_dt_ms,
             only_t_prefix=args.only_t_prefix,
+            max_gap_ms=args.max_gap_ms,
         )
     )
 

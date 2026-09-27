@@ -38,6 +38,10 @@ func main() {
 		ProbeSeconds:       getenvFloatDefault("PROBE_SECONDS", 1.5),
 		PingSeconds:        getenvFloatDefault("PING_SECONDS", 2),
 		PongTimeoutSeconds: getenvFloatDefault("PONG_TIMEOUT_SECONDS", 8),
+		Keyboard:           getenvDefault("KEYBOARD_DEVICE", "auto"),
+		KeyboardGrab:       getenvBoolDefault("KEYBOARD_GRAB", false),
+		TypeReplies:        getenvBoolDefault("TYPE_REPLIES", true),
+		TypeCharMs:         getenvIntDefault("TYPE_CHAR_MS", 12),
 	}
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
@@ -56,6 +60,10 @@ func main() {
 	flag.Float64Var(&cfg.ProbeSeconds, "probe-seconds", cfg.ProbeSeconds, "Seconds to probe each /dev/input/event* for activity when auto-detecting (draw during this!)")
 	flag.Float64Var(&cfg.PingSeconds, "ping-seconds", cfg.PingSeconds, "WebSocket ping interval (seconds). Aggressive keepalive.")
 	flag.Float64Var(&cfg.PongTimeoutSeconds, "pong-timeout-seconds", cfg.PongTimeoutSeconds, "Reconnect if no pong is received in this window.")
+	flag.StringVar(&cfg.Keyboard, "keyboard", cfg.Keyboard, "Keyboard device: auto (find a kbd device), off, or /dev/input/eventN. Emits key messages.")
+	flag.BoolVar(&cfg.KeyboardGrab, "keyboard-grab", cfg.KeyboardGrab, "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)")
+	flag.BoolVar(&cfg.TypeReplies, "type-replies", cfg.TypeReplies, "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)")
+	flag.IntVar(&cfg.TypeCharMs, "type-char-ms", cfg.TypeCharMs, "Milliseconds between typed characters")
 	flag.Parse()
 
 	if err := RunBridgeForever(cfg); err != nil {
