@@ -47,6 +47,25 @@ bluetoothctl
 The keyboard then appears as `/dev/input/event*` (the same evdev path the stroke bridge reads),
 so a keyboard bridge can forward keystrokes into a codrawer session the same way pen strokes go.
 
+### What actually happened pairing a Logitech Pebble K380s (2026-09-27)
+
+Paired, bonded, trusted, connected; appears as `Pebble K380s Keyboard` on `/dev/input/event4`.
+The bond persists under `/var/lib/bluetooth/<controller>/`. Things that cost an hour:
+
+- **The PC steals the keyboard.** A Windows machine with Bluetooth on will Swift-Pair a keyboard in
+  pairing mode within seconds. Turn the PC radio off and dismiss its popup before pairing to the tablet.
+- **The keyboard's address changes per channel** (`…:E8` on the channel bonded to the PC, `…:E9` on
+  the next). Re-scan and pair the address you see now, not the one from the last scan.
+- **The tablet displays the passkey; the keyboard types it.** `bluetoothctl` auto-registers a
+  KeyboardDisplay agent and prints `[agent] Passkey: NNNNNN`; the code lives ~30 s. Read it from the log
+  with `grep -a 'Passkey:' | grep -o -E '[0-9]{6}'`: BusyBox `sed` cannot strip the ANSI colour codes
+  wrapped around the digits, and `head -n`/`tail -n` are the only forms BusyBox accepts.
+- **No `pkill` on Codex.** Use `kill $(ps | grep … | awk '{print $1}')` or `killall`; otherwise every
+  "restart" of a pairing script stacks another copy and the copies cancel each other's handshakes
+  (`org.bluez.Error.AuthenticationCanceled`).
+- A device that is not in pairing mode simply vanishes from `bluetoothctl devices`; scan until it
+  appears, then `pair` in the same session.
+
 ## Glasses directly from the tablet
 
 The Even G2 arms are two BLE peripherals (`Even G2_..._L_...` / `_R_...`) that only advertise
