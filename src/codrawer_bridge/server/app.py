@@ -35,6 +35,18 @@ from .viewer_page import render_viewer_html
 
 app = FastAPI()
 
+# Background tasks must stay referenced or the event loop may garbage-collect
+# them mid-flight (asyncio docs). Terminal prompts are launched from the socket
+# loop and outlive the message that started them.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 # Even Hub apps run inside the Even phone app WebView and must be granted CORS by the
 # server (the app.json network whitelist does not replace it). The router carries no
 # secrets, so allow any origin; identity arrives with SIG mode (docs/sig-integration.md).
@@ -662,9 +674,9 @@ async def ws(session_id: str, ws: WebSocket):
                                     print(f"[ws:{session_id}] attachment render failed: {e}")
                         session.turn_seq += 1
                         session.turn_strokes = []  # a submitted line closes the ink turn (ADR 001)
-                        asyncio.create_task(link.prompt(text, attachment))
+                        _spawn(link.prompt(text, attachment))
                     else:
-                        asyncio.create_task(link.answer(text))
+                        _spawn(link.answer(text))
                 continue
 
             if t == T_CLEAR:
