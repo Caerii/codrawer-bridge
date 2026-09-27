@@ -16,6 +16,9 @@ T_TERM_PROMPT = "term_prompt"  # client -> server: instruction for the even-term
 T_TERM_ANSWER = "term_answer"  # client -> server: reply to a pending permission/question (else prompt)
 T_TERM = "term"  # server -> clients: {kind: text|note|permission|question|status, text}
 
+# document (ADR 001/005): a participant shares its edited text with the session
+T_DOC = "doc"  # client -> server -> broadcast: {text, cursor:{line,col}, reason}
+
 # server -> clients (AI layer)
 T_AI_INTENT = "ai_intent"
 T_AI_SAY = "ai_say"

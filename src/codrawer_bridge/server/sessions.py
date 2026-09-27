@@ -37,6 +37,9 @@ class Session:
     turn_strokes: list[dict[str, object]] = field(default_factory=list)
     turn_seq: int = 0
 
+    # Shared document (ADR 001): latest text shared by any participant.
+    doc_text: str = ""
+
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None
 

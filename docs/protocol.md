@@ -101,6 +101,18 @@ text-producing keys with no Ctrl/Alt/Meta held; `key` uses browser-style names f
 {"t":"key","key":"A","char":"A","code":30,"repeat":false,"mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000004000}
 ```
 
+### `doc` (client → server → broadcast)
+
+A participant shares the document it is editing (plain text / markdown). The router keeps the
+latest, forwards it to every other client, and writes it to `<term cwd>/.codrawer/doc.md` so
+the terminal agent can Read it. A `term_prompt` with `"context":"doc"` gets a trailer pointing
+the agent at that file. Last writer wins; clients adopt an incoming document only when they
+have no unsaved edits (a CRDT is deferred, see the SIG IDE-CRDT ladder).
+
+```json
+{"t":"doc","text":"# Notes\n- first line","cursor":{"line":2,"col":13},"reason":"auto|save|share|prompt"}
+```
+
 ### `term_prompt` / `term_answer` (client → server) and `term` (server → clients)
 
 The router can attach an [even-terminal](https://www.npmjs.com/package/@evenrealities/even-terminal)

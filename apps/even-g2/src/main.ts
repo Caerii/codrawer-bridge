@@ -35,6 +35,7 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
+import { Editor } from './editor'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -92,9 +93,10 @@ const ENC: 'b64' | 'array' = cfg('enc', 'array') === 'b64' ? 'b64' : 'array'
 const BENCH = cfg('bench', '0') === '1'
 
 // glasses contextual-menu item ids (non-zero, unique) → actions
-const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9 } as const
+const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10 } as const
 const MENU_ACTION: Record<number, string> = {
   [MENU.newDrawing]: 'new-drawing',
+  [MENU.editDoc]: 'edit-doc',
   [MENU.sendDrawing]: 'send-drawing',
   [MENU.textView]: 'text-view',
   [MENU.clearAi]: 'clear-ai',
@@ -156,8 +158,96 @@ const sent = { loupe: 0, canvas: 0 }
 //   /ai            toggle the AI ghost layer
 //   /text          toggle the full-screen text view
 //   /clear         clear the transcript
-type PageMode = 'canvas' | 'text'
-let pageMode: PageMode = cfg('view', 'canvas') === 'text' ? 'text' : 'canvas'
+type PageMode = 'canvas' | 'text' | 'edit'
+let pageMode: PageMode = ((v) => (v === 'text' || v === 'edit' ? v : 'canvas'))(cfg('view', 'canvas'))
+
+// ── document editor (edit view) ─────────────────────────────────────────────
+// A real buffer with a cursor. In edit view plain keys edit the document;
+// Ctrl+K opens the command line over it (same commands as everywhere),
+// Ctrl+S saves and shares it with the session, Ctrl+E leaves edit view.
+const editor = new Editor()
+let cmdOverlay = false // command line shown over the editor
+let docSavedText = ''
+let docChangedAt = 0
+let docSyncedAt = 0
+try {
+  const saved = localStorage.getItem('codrawer:doc')
+  if (saved) {
+    editor.setText(saved)
+    docSavedText = saved
+  }
+} catch {
+  /* ignore */
+}
+
+function saveDoc(reason: string) {
+  const text = editor.text()
+  docSavedText = text
+  editor.dirty = false
+  try {
+    localStorage.setItem('codrawer:doc', text)
+  } catch {
+    /* ignore */
+  }
+  // the Even bridge's storage survives EHPK packaging where WebView localStorage may not
+  if (bridge) void bridge.setLocalStorage('doc', text).catch(() => {})
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ t: 'doc', text, cursor: { line: editor.row + 1, col: editor.col + 1 }, reason, ts: Date.now() }))
+    docSyncedAt = performance.now()
+  }
+}
+
+function editorKey(key: string, ch: string, mods: { ctrl?: boolean; alt?: boolean; meta?: boolean }): boolean {
+  if (mods.ctrl) {
+    switch (key.toLowerCase()) {
+      case 'k':
+        cmdOverlay = true
+        inputLine = ''
+        return true
+      case 's':
+        saveDoc('save')
+        notice = 'saved'
+        return true
+      case 'e':
+        void setPageMode(bridge, 'text')
+        return true
+      case 'arrowleft':
+        editor.wordLeft()
+        return true
+      case 'arrowright':
+        editor.wordRight()
+        return true
+      case 'home':
+        editor.row = 0
+        editor.col = 0
+        return true
+      case 'end':
+        editor.row = editor.lines.length - 1
+        editor.end()
+        return true
+      default:
+        return false
+    }
+  }
+  if (ch) editor.insert(ch)
+  else if (key === 'Enter') editor.newline()
+  else if (key === 'Backspace') editor.backspace()
+  else if (key === 'Delete') editor.delete()
+  else if (key === 'ArrowLeft') editor.left()
+  else if (key === 'ArrowRight') editor.right()
+  else if (key === 'ArrowUp') editor.up()
+  else if (key === 'ArrowDown') editor.down()
+  else if (key === 'Home') editor.home()
+  else if (key === 'End') editor.end()
+  else if (key === 'PageUp') editor.pageUp(6)
+  else if (key === 'PageDown') editor.pageDown(6)
+  else if (key === 'Tab') editor.insert('  ')
+  else if (key === 'Escape') {
+    notice = ''
+  } else return false
+  if (editor.dirty) docChangedAt = performance.now()
+  return true
+}
 let inputLine = ''
 const transcript: string[] = []
 const TRANSCRIPT_MAX = 80
@@ -234,8 +324,12 @@ function flushTermStream() {
 }
 
 function sendTerm(kind: 'term_prompt' | 'term_answer', text: string) {
-  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: kind, text, ts: Date.now() }))
-  else notice = 'not connected'
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    // from the editor, the document rides along as context for the agent
+    const context = pageMode === 'edit' ? 'doc' : undefined
+    if (context && editor.dirty) saveDoc('prompt')
+    socket.send(JSON.stringify({ t: kind, text, context, ts: Date.now() }))
+  } else notice = 'not connected'
 }
 
 function isTyping(): boolean {
@@ -303,6 +397,24 @@ function commitLine(raw: string) {
       transcript.length = 0
       notice = 'transcript cleared'
       break
+    case '/edit':
+      if (bridge) void setPageMode(bridge, pageMode === 'edit' ? 'text' : 'edit')
+      else {
+        pageMode = pageMode === 'edit' ? 'text' : 'edit'
+        textDirty = true
+      }
+      break
+    case '/doc':
+      if (arg.toLowerCase() === 'new') {
+        editor.setText('')
+        editor.dirty = true
+        docChangedAt = performance.now()
+        notice = 'new document'
+      } else {
+        saveDoc('share')
+        notice = `document shared (${editor.text().length} chars)`
+      }
+      break
     default:
       notice = ''
   }
@@ -313,6 +425,16 @@ function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; al
   const ch = typeof m.char === 'string' ? m.char : ''
   const mods = m.mods || {}
   typingAt = performance.now()
+  if (pageMode === 'edit' && !cmdOverlay) {
+    if (editorKey(key, ch, mods)) textDirty = true
+    return
+  }
+  if (pageMode === 'edit' && cmdOverlay && key === 'Escape') {
+    cmdOverlay = false
+    inputLine = ''
+    textDirty = true
+    return
+  }
   const sugg = suggestions()
   if (mods.ctrl && key.toLowerCase() === 'l') {
     transcript.length = 0
@@ -336,6 +458,7 @@ function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; al
     commitLine(inputLine)
     inputLine = ''
     suggestIndex = 0
+    if (pageMode === 'edit') cmdOverlay = false // one command, then back to the document
   } else if (key === 'Escape') {
     inputLine = ''
     notice = ''
@@ -361,6 +484,8 @@ const COMMANDS: { name: string; help: string }[] = [
   { name: '/ai', help: 'toggle the AI ghost layer' },
   { name: '/text', help: 'toggle full-screen text view' },
   { name: '/clear', help: 'clear the transcript' },
+  { name: '/edit', help: 'edit the document (Ctrl+K commands, Ctrl+S save, Ctrl+E leave)' },
+  { name: '/doc', help: 'share the document with the session (/doc new clears it)' },
 ]
 let suggestIndex = 0
 
@@ -403,6 +528,20 @@ function metricsLine(): string {
 function renderText(): string {
   // Row budget: 288 px tall page at ~27 px per row minus padding → 9 rows; the
   // canvas layout's strip below the images holds 4.
+  if (pageMode === 'edit') {
+    const total = 9
+    const overlayRows = cmdOverlay ? 1 : 0
+    const v = editor.view(total - 1 - overlayRows, COLS)
+    const state = editor.dirty ? 'unsaved' : docSyncedAt ? 'shared' : 'saved'
+    const head = notice || `doc · Ln ${v.line}, Col ${v.col} · ${v.totalLines} lines · ${state}`
+    const out = [head.slice(0, COLS), ...v.rows]
+    while (out.length < total - overlayRows) out.push('')
+    if (cmdOverlay) {
+      const prompt = termPending ? (termPending === 'permission' ? 'y/a/n' : '?') : lineMode === 'term' ? '$' : '>'
+      out.push(wrapLine(`${prompt} ${inputLine}▌`).slice(-1)[0])
+    }
+    return out.join('\n').slice(0, 1900)
+  }
   const rows = pageMode === 'text' ? 9 : 4
   if (pageMode === 'canvas' && !isTyping()) {
     const head = intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine()
@@ -524,6 +663,15 @@ function connect() {
       case 'key':
         handleKey(m)
         break
+      case 'doc':
+        // another participant shared the document; adopt it unless we have unsaved edits
+        if (typeof m.text === 'string' && !editor.dirty) {
+          editor.setText(m.text)
+          docSavedText = m.text
+          notice = 'document updated'
+          textDirty = true
+        }
+        break
       case 'term':
         handleTerm(m)
         break
@@ -541,6 +689,7 @@ function buildPage(mode: PageMode) {
       new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
       new MenuItemProperty({ itemName: 'Send drawing to agent', itemID: MENU.sendDrawing }),
       new MenuItemProperty({ itemName: mode === 'text' ? 'Canvas view' : 'Text view', itemID: MENU.textView }),
+      new MenuItemProperty({ itemName: mode === 'edit' ? 'Leave editor' : 'Edit document', itemID: MENU.editDoc }),
       new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
       new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
       new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
@@ -549,7 +698,7 @@ function buildPage(mode: PageMode) {
       new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
     ],
   })
-  if (mode === 'text') {
+  if (mode === 'text' || mode === 'edit') {
     const textObject = [
       new TextContainerProperty({
         xPosition: 8,
@@ -609,8 +758,13 @@ function buildPage(mode: PageMode) {
 }
 
 /** Switch layouts with one rebuild (~165 ms); image pushes pause while in text view. */
-async function setPageMode(b: EvenAppBridge, mode: PageMode) {
+async function setPageMode(b: EvenAppBridge | null, mode: PageMode) {
   if (mode === pageMode) return
+  if (mode === 'edit' && pageMode !== 'edit') saveDoc('enter')
+  if (pageMode === 'edit' && mode !== 'edit') {
+    if (editor.dirty) saveDoc('leave')
+    cmdOverlay = false
+  }
   pageMode = mode
   try {
     localStorage.setItem('codrawer:view', mode)
@@ -619,6 +773,10 @@ async function setPageMode(b: EvenAppBridge, mode: PageMode) {
   }
   pending.loupe = null
   pending.canvas = null
+  if (!b) {
+    textDirty = true
+    return
+  }
   const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode)))
   console.log('[codrawer] page mode', mode, ok ? 'ok' : 'rebuild failed')
   lastTextSent = '' // the rebuild carried fresh content; resend on next change
@@ -635,6 +793,10 @@ function applyAction(action: string) {
     commitLine('/snap')
     typingAt = performance.now()
     textDirty = true
+    return
+  }
+  if (action === 'edit-doc') {
+    if (bridge) void setPageMode(bridge, pageMode === 'edit' ? 'text' : 'edit')
     return
   }
   if (action === 'new-drawing') {
@@ -707,9 +869,16 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       else if (text.eventType === 2) action = 'zoom-out'
     }
     if (!action) return
-    // In text view the ring scrolls the transcript instead of zooming.
-    if (pageMode === 'text' && (action === 'zoom-in' || action === 'zoom-out')) {
+    // In text view the ring scrolls the transcript; in edit view it moves the cursor by line.
+    if ((pageMode === 'text' || pageMode === 'edit') && (action === 'zoom-in' || action === 'zoom-out')) {
       handleKey({ key: action === 'zoom-in' ? 'ArrowUp' : 'ArrowDown' })
+      return
+    }
+    if (pageMode === 'edit' && action === 'toggle-mode') {
+      // click in edit view = save + share, the common action
+      saveDoc('ring')
+      notice = 'saved'
+      textDirty = true
       return
     }
     applyAction(action)
@@ -862,6 +1031,12 @@ function tick() {
     if (bridge) pushText(bridge, line)
   } else if (isTyping() && inputLine === '' && performance.now() - typingAt > 15000) {
     textDirty = true // typing view expires back to the status view
+  }
+  // autosave the document 2 s after the last edit
+  if (editor.dirty && docChangedAt && performance.now() - docChangedAt > 2000) {
+    docChangedAt = 0
+    saveDoc('auto')
+    textDirty = true
   }
 }
 

@@ -27,6 +27,18 @@ evenhub-simulator --automation-port 9898 http://localhost:5188
 Config via query string once, then remembered in localStorage: `?ws=ws://<host>:8577/ws/session1`,
 `?mode=follow|full`, `?highlight=all|user|ai`, `?window=0.22`.
 
+## Editor
+
+`/edit` (or the menu's *Edit document*) opens a full-screen editor: a real buffer with a cursor
+that the view follows, wrapped at the same width as the transcript. Plain keys edit; Enter
+continues markdown list prefixes; arrows, Home/End, PageUp/Down, Delete, Tab; Ctrl+Left/Right by
+word; Ctrl+Home/End to the ends. `Ctrl+K` opens the command line over the document (any command,
+then back), `Ctrl+S` saves and shares it with the session (`doc` message), `Ctrl+E` leaves.
+A ring click in the editor saves; the ring scrolls by line. The document autosaves 2 s after
+the last edit to the WebView's storage and the Even bridge's storage, and is shared with the
+session so the terminal agent can Read it (`.codrawer/doc.md`); a `/term` sent from the editor
+tells the agent to read it first.
+
 ## Latency model and tunables
 
 Bytes per image update are the latency budget on real glasses. Live ink therefore goes

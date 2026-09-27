@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -16,6 +17,7 @@ from PIL import Image, ImageDraw
 from codrawer_bridge.protocol.constants import (
     T_CLEAR,
     T_CURSOR,
+    T_DOC,
     T_HELLO,
     T_KEY,
     T_PROMPT,
@@ -672,11 +674,37 @@ async def ws(session_id: str, ws: WebSocket):
                             except Exception as e:  # rendering must never block the prompt
                                 if get_settings().debug_log_msgs:
                                     print(f"[ws:{session_id}] attachment render failed: {e}")
+                        # A prompt sent from the editor carries the document as context.
+                        if str(msg.get("context") or "") == "doc" and session.doc_text.strip():
+                            text = (
+                                text
+                                + "\n\n[The user's document is in `.codrawer/doc.md` (markdown, "
+                                + f"{len(session.doc_text)} chars). Read it before answering; if you propose edits, "
+                                + "quote the exact lines to change.]"
+                            )
                         session.turn_seq += 1
                         session.turn_strokes = []  # a submitted line closes the ink turn (ADR 001)
                         _spawn(link.prompt(text, attachment))
                     else:
                         _spawn(link.answer(text))
+                continue
+
+            if t == T_DOC:
+                # Keep the latest shared document, forward it to everyone else, and
+                # write it where the terminal agent can Read it (<term cwd>/.codrawer/doc.md).
+                doc_text = msg.get("text")
+                if isinstance(doc_text, str):
+                    session.doc_text = doc_text[:200_000]
+                    st = get_settings()
+                    if st.term_cwd:
+                        try:
+                            folder = os.path.join(st.term_cwd, ".codrawer")
+                            os.makedirs(folder, exist_ok=True)
+                            with open(os.path.join(folder, "doc.md"), "w", encoding="utf-8") as f:
+                                f.write(session.doc_text)
+                        except OSError:
+                            pass
+                    await broadcast(session, msg, exclude=ws)
                 continue
 
             if t == T_CLEAR:
