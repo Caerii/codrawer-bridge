@@ -934,8 +934,8 @@ function readySlot(): Slot | null {
 
 async function drain(b: EvenAppBridge) {
   if (draining) return
-  if (pageMode === 'text') {
-    // no image containers on this page
+  if (pageMode !== 'canvas') {
+    // no image containers on this page (text and edit views)
     pending.loupe = null
     pending.canvas = null
     return
