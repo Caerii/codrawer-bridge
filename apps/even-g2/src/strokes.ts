@@ -222,6 +222,21 @@ export function toGray8(ctx: CanvasRenderingContext2D, width: number, height: nu
   return out
 }
 
+/**
+ * Bytes → base64. The SDK accepts a base64 string for imageData and passes it
+ * through, whereas a Uint8Array is expanded to a JSON number[] ("255,0,0,…")
+ * on its way across the WebView bridge, several times larger and slower to
+ * parse on the Flutter side.
+ */
+export function toBase64(bytes: Uint8Array): string {
+  let s = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)))
+  }
+  return btoa(s)
+}
+
 /** Gray8 → packed Gray4 (two pixels per byte, high nibble first), half the bytes. */
 export function packGray4(gray8: Uint8Array): Uint8Array {
   const out = new Uint8Array(Math.ceil(gray8.length / 2))

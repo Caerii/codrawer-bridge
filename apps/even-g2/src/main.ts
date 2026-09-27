@@ -23,6 +23,8 @@ import {
   ImageContainerProperty,
   ImageRawDataUpdate,
   ImageRawDataUpdateResult,
+  MenuContainerProperty,
+  MenuItemProperty,
   OsEventTypeList,
   RebuildPageContainer,
   StartUpPageCreateResult,
@@ -31,7 +33,8 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, rasterize, StrokeStore, toGray8, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { packGray4, rasterize, StrokeStore, toBase64, toGray8, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { runBench } from './bench'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -79,6 +82,20 @@ const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 const FMT: 'gray8' | 'gray4' = cfg('fmt', 'gray8') === 'gray4' ? 'gray4' : 'gray8'
 const BINARIZE = cfg('binarize', '1') !== '0'
 const SHOW_AI = cfg('ai', '1') !== '0'
+// b64 sends imageData as a base64 string instead of a JSON number[] across the
+// WebView bridge; `?enc=array` restores the SDK's default marshaling.
+const ENC: 'b64' | 'array' = cfg('enc', 'b64') === 'array' ? 'array' : 'b64'
+const BENCH = cfg('bench', '0') === '1'
+
+// glasses contextual-menu item ids (non-zero, unique) → actions
+const MENU = { toggleAi: 1, toggleMode: 2, cycleHighlight: 3, zoomIn: 4, zoomOut: 5 } as const
+const MENU_ACTION: Record<number, string> = {
+  [MENU.toggleAi]: 'toggle-ai',
+  [MENU.toggleMode]: 'toggle-mode',
+  [MENU.cycleHighlight]: 'cycle-highlight',
+  [MENU.zoomIn]: 'zoom-in',
+  [MENU.zoomOut]: 'zoom-out',
+}
 
 const opts: RasterOptions = {
   width: IMG_W,
@@ -124,7 +141,8 @@ const sent = { loupe: 0, canvas: 0 }
 function statusLine(): string {
   const conn = connected ? 'live' : 'reconnecting'
   const c = store.counts()
-  const head = intent ? `AI: ${intent}` : `${c.user} user · ${c.ai} ai · ${opts.mode} · ${opts.highlight}`
+  const ai = opts.showAi === false ? 'ai off' : `${c.ai} ai`
+  const head = intent && opts.showAi !== false ? `AI: ${intent}` : `${c.user} user · ${ai} · ${opts.mode} · ${opts.highlight}`
   const l = HAS_LOUPE ? ` · L${Math.round(rt.loupe)}ms/${sent.loupe}` : ''
   const k = ` · C${Math.round(rt.canvas)}ms/${sent.canvas}`
   const bad = lastImageResult && lastImageResult !== 'success' ? ' · img:' + lastImageResult : ''
@@ -172,14 +190,14 @@ function connect() {
         break
       case 'ai_stroke_pts':
         store.points(m.id, m.pts || [], 'ai')
-        if (SHOW_AI) {
+        if (opts.showAi !== false) {
           loupeDirty = true
           canvasDirty = true
         }
         break
       case 'ai_stroke_end':
         store.end(m.id)
-        if (SHOW_AI) strokeEnded = true
+        if (opts.showAi !== false) strokeEnded = true
         break
       case 'ai_intent':
         intent = String(m.plan || '').slice(0, 120)
@@ -233,7 +251,18 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       zOrderIndex: 2,
     }),
   ]
-  const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject }
+  // Contextual menu (long-press / context gesture on the glasses). Labels are
+  // static until a rebuild, so they are verbs; current state shows in the status line.
+  const menuObject = new MenuContainerProperty({
+    menuItems: [
+      new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
+      new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
+      new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
+      new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
+      new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
+    ],
+  })
+  const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
   const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
     // A page may already exist (e.g. the webview reloaded under HMR); rebuild it in place.
@@ -255,8 +284,11 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
     // scroll up / down as a textEvent on the event-capture container (1 = up, 2 = down).
     const sys = event.sysEvent
     const text = event.textEvent
+    const menu = event.menuItemClickEvent
     let action = ''
-    if (sys && sys.eventSource !== undefined) {
+    if (menu && menu.itemID !== undefined) {
+      action = MENU_ACTION[menu.itemID] ?? ''
+    } else if (sys && sys.eventSource !== undefined) {
       const type = sys.eventType ?? OsEventTypeList.CLICK_EVENT
       if (type === OsEventTypeList.CLICK_EVENT) action = 'toggle-mode'
       else if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) action = 'cycle-highlight'
@@ -267,7 +299,14 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       else if (text.eventType === 2) action = 'zoom-out'
     }
     if (!action) return
-    if (action === 'toggle-mode') opts.mode = opts.mode === 'follow' ? 'full' : 'follow'
+    if (action === 'toggle-ai') {
+      opts.showAi = !opts.showAi
+      try {
+        localStorage.setItem('codrawer:ai', opts.showAi ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+    } else if (action === 'toggle-mode') opts.mode = opts.mode === 'follow' ? 'full' : 'follow'
     else if (action === 'cycle-highlight') opts.highlight = opts.highlight === 'all' ? 'user' : opts.highlight === 'user' ? 'ai' : 'all'
     else if (action === 'zoom-in') opts.window = Math.max(0.06, opts.window * 0.8)
     else if (action === 'zoom-out') opts.window = Math.min(1, opts.window * 1.25)
@@ -286,7 +325,7 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
 // frequent), then the canvas (big, rare). Each slot is throttled by its own
 // measured round trip so a slow link degrades to a lower rate, never to lag.
 type Slot = 'loupe' | 'canvas'
-const pending: Record<Slot, Uint8Array | null> = { loupe: null, canvas: null }
+const pending: Record<Slot, Frame | null> = { loupe: null, canvas: null }
 const lastPushAt: Record<Slot, number> = { loupe: 0, canvas: 0 }
 const minMs: Record<Slot, number> = { loupe: LOUPE_MIN_MS, canvas: CANVAS_MIN_MS }
 const containerOf: Record<Slot, { id: number; name: string }> = {
@@ -295,9 +334,11 @@ const containerOf: Record<Slot, { id: number; name: string }> = {
 }
 let draining = false
 
-function encode(c: CanvasRenderingContext2D, w: number, h: number): Uint8Array {
+type Frame = Uint8Array | string
+function encode(c: CanvasRenderingContext2D, w: number, h: number): Frame {
   const g8 = toGray8(c, w, h, BINARIZE ? 96 : 0)
-  return FMT === 'gray4' ? packGray4(g8) : g8
+  const bytes = FMT === 'gray4' ? packGray4(g8) : g8
+  return ENC === 'b64' ? toBase64(bytes) : bytes
 }
 
 function readySlot(): Slot | null {
@@ -403,6 +444,13 @@ async function main() {
     waitForEvenAppBridge(),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
   ])
+  if (b && BENCH) {
+    await runBench(b, (lines) => {
+      statusEl.textContent = lines.join('\n')
+      void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: TEXT_ID, containerName: 'status', content: lines.slice(0, 9).join('\n') })).catch(() => {})
+    })
+    return
+  }
   let ready = false
   if (b) {
     try {

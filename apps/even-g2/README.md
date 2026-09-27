@@ -27,7 +27,32 @@ evenhub-simulator --automation-port 9898 http://localhost:5188
 Config via query string once, then remembered in localStorage: `?ws=ws://<host>:8577/ws/session1`,
 `?mode=follow|full`, `?highlight=all|user|ai`, `?window=0.22`.
 
+## Latency model and tunables
+
+Bytes per image update are the latency budget on real glasses. Live ink therefore goes
+through a small **loupe** container that follows the pen; the big **canvas** container is
+refreshed only at `stroke_end` (or every `canvas_ms` during a long stroke). Frames are
+latest-wins per container, throttled by the measured round trip, and image data crosses the
+WebView bridge as base64 (2x faster than the SDK's default number array even in the simulator).
+
+| Query param | Default | Effect |
+| --- | --- | --- |
+| `img=WxH` | `288x144` | canvas container size (max 288x144) |
+| `loupe=WxH` / `loupe=0` | `128x64` | loupe size, or disable it |
+| `fmt=gray4` | `gray8` | packed 4-bit pixels, half the bytes |
+| `enc=array` | `b64` | revert to number[] marshaling |
+| `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors |
+| `ai=0` | `1` | start with the AI ghost layer hidden |
+| `binarize=0` | `1` | keep antialiased grey (compresses worse) |
+| `bench=1` | | on-device benchmark: rebuilds the page per config and reports min/median ms in the HUD and console; `bench=0` returns |
+
+The HUD status line shows `L<ms>/<count> · C<ms>/<count>`: round trip and pushes per container.
+
 ## Input
+
+Contextual menu (long-press / context gesture): Toggle AI ghost · Follow / fit page ·
+Cycle emphasis · Zoom in · Zoom out. The AI toggle persists.
+
 
 | Gesture | Effect |
 | --- | --- |
