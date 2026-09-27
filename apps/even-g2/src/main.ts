@@ -92,9 +92,10 @@ const ENC: 'b64' | 'array' = cfg('enc', 'array') === 'b64' ? 'b64' : 'array'
 const BENCH = cfg('bench', '0') === '1'
 
 // glasses contextual-menu item ids (non-zero, unique) → actions
-const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7 } as const
+const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8 } as const
 const MENU_ACTION: Record<number, string> = {
   [MENU.newDrawing]: 'new-drawing',
+  [MENU.textView]: 'text-view',
   [MENU.clearAi]: 'clear-ai',
   [MENU.toggleAi]: 'toggle-ai',
   [MENU.toggleMode]: 'toggle-mode',
@@ -145,15 +146,127 @@ let lastImageResult = ''
 const rt = { loupe: 0, canvas: 0 }
 const sent = { loupe: 0, canvas: 0 }
 
-function statusLine(): string {
+// ── typing: keyboard bridged from the tablet ────────────────────────────────
+// `key` messages carry one key-down each; the app owns line editing. Enter
+// commits the line to the transcript; a leading slash makes it a command:
+//   /hw <text>     ask the AI to handwrite <text> on the canvas (prompt, mode handwriting)
+//   /draw <text>   ask the AI to draw <text>                    (prompt, mode draw)
+//   /new           new drawing (clears every client)
+//   /ai            toggle the AI ghost layer
+//   /text          toggle the full-screen text view
+//   /clear         clear the transcript
+type PageMode = 'canvas' | 'text'
+let pageMode: PageMode = cfg('view', 'canvas') === 'text' ? 'text' : 'canvas'
+let inputLine = ''
+const transcript: string[] = []
+const TRANSCRIPT_MAX = 80
+let typingAt = 0 // performance.now() of the last keystroke
+let scrollBack = 0 // lines of transcript hidden below the view (0 = newest)
+let notice = '' // one-line feedback for commands
+
+function isTyping(): boolean {
+  return inputLine.length > 0 || performance.now() - typingAt < 15000
+}
+
+function commitLine(raw: string) {
+  const line = raw.trim()
+  if (!line) return
+  transcript.push(line)
+  while (transcript.length > TRANSCRIPT_MAX) transcript.shift()
+  scrollBack = 0
+  const [cmd, ...rest] = line.split(/\s+/)
+  const arg = rest.join(' ')
+  const send = (o: Record<string, unknown>) => {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ ...o, ts: Date.now() }))
+  }
+  switch (cmd.toLowerCase()) {
+    case '/hw':
+    case '/write':
+      if (arg) send({ t: 'prompt', text: arg, mode: 'handwriting' })
+      notice = arg ? `AI: writing "${arg.slice(0, 40)}"` : 'usage: /hw <text>'
+      break
+    case '/draw':
+    case '/d':
+      if (arg) send({ t: 'prompt', text: arg, mode: 'draw' })
+      notice = arg ? `AI: drawing "${arg.slice(0, 40)}"` : 'usage: /draw <text>'
+      break
+    case '/new':
+      applyAction('new-drawing')
+      notice = 'new drawing'
+      break
+    case '/ai':
+      applyAction('toggle-ai')
+      notice = opts.showAi === false ? 'AI ghost off' : 'AI ghost on'
+      break
+    case '/text':
+      applyAction('text-view')
+      break
+    case '/clear':
+      transcript.length = 0
+      notice = 'transcript cleared'
+      break
+    default:
+      notice = ''
+  }
+}
+
+function handleKey(m: { key?: string; char?: string; mods?: { ctrl?: boolean; alt?: boolean; meta?: boolean } }) {
+  const key = String(m.key || '')
+  const ch = typeof m.char === 'string' ? m.char : ''
+  const mods = m.mods || {}
+  typingAt = performance.now()
+  if (mods.ctrl && key.toLowerCase() === 'l') {
+    transcript.length = 0
+  } else if (ch) {
+    inputLine += ch
+  } else if (key === 'Backspace') {
+    inputLine = inputLine.slice(0, -1)
+  } else if (key === 'Enter') {
+    commitLine(inputLine)
+    inputLine = ''
+  } else if (key === 'Escape') {
+    inputLine = ''
+    notice = ''
+  } else if (key === 'ArrowUp' || key === 'PageUp') {
+    scrollBack = Math.min(Math.max(0, transcript.length - 1), scrollBack + (key === 'PageUp' ? 5 : 1))
+  } else if (key === 'ArrowDown' || key === 'PageDown') {
+    scrollBack = Math.max(0, scrollBack - (key === 'PageDown' ? 5 : 1))
+  } else {
+    return
+  }
+  textDirty = true
+}
+
+function metricsLine(): string {
   const conn = connected ? 'live' : 'reconnecting'
   const c = store.counts()
   const ai = opts.showAi === false ? 'ai off' : `${c.ai} ai`
-  const head = intent && opts.showAi !== false ? `AI: ${intent}` : `${c.user} user · ${ai} · ${opts.mode} · ${opts.highlight}`
   const l = HAS_LOUPE ? ` · L${Math.round(rt.loupe)}ms/${sent.loupe}` : ''
   const k = ` · C${Math.round(rt.canvas)}ms/${sent.canvas}`
   const bad = lastImageResult && lastImageResult !== 'success' ? ' · img:' + lastImageResult : ''
-  return `${head}\n${conn}${l}${k}${bad}`
+  return `${c.user} user · ${ai} · ${opts.mode} · ${conn}${l}${k}${bad}`
+}
+
+/** The text container's content for the current layout and activity. */
+function renderText(): string {
+  const bodyLines = pageMode === 'text' ? 8 : 3 // lines available above the input line
+  if (pageMode === 'canvas' && !isTyping()) {
+    const head = intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine()
+    const foot = intent && opts.showAi !== false ? metricsLine() : notice
+    return foot ? `${head}\n${foot}` : head
+  }
+  const end = Math.max(0, transcript.length - scrollBack)
+  const shown = transcript.slice(Math.max(0, end - bodyLines), end)
+  const lines = [...shown]
+  if (pageMode === 'text') {
+    while (lines.length < bodyLines) lines.unshift('')
+    lines[0] = notice || (intent && opts.showAi !== false ? `AI: ${intent}` : metricsLine())
+  } else if (notice || intent) {
+    lines.unshift(notice || `AI: ${intent}`)
+    while (lines.length > bodyLines) lines.shift()
+  }
+  lines.push(`> ${inputLine}▌${scrollBack ? `  ↑${scrollBack}` : ''}`)
+  return lines.join('\n').slice(0, 1900)
 }
 
 // ── websocket (codrawer protocol) ───────────────────────────────────────────
@@ -225,6 +338,9 @@ function connect() {
         strokeEnded = true
         textDirty = true
         break
+      case 'key':
+        handleKey(m)
+        break
       default:
         break
     }
@@ -232,7 +348,36 @@ function connect() {
 }
 
 // ── glasses page ────────────────────────────────────────────────────────────
-async function initGlasses(b: EvenAppBridge): Promise<boolean> {
+/** Container set for a layout: canvas + loupe + status text, or one full-screen text. */
+function buildPage(mode: PageMode) {
+  const menuObject = new MenuContainerProperty({
+    menuItems: [
+      new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
+      new MenuItemProperty({ itemName: mode === 'text' ? 'Canvas view' : 'Text view', itemID: MENU.textView }),
+      new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
+      new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
+      new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
+      new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
+      new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
+      new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
+    ],
+  })
+  if (mode === 'text') {
+    const textObject = [
+      new TextContainerProperty({
+        xPosition: 8,
+        yPosition: 4,
+        width: SCREEN_W - 16,
+        height: SCREEN_H - 8,
+        containerID: TEXT_ID,
+        containerName: 'status',
+        content: renderText(),
+        textColor: 4,
+        isEventCapture: 1,
+      }),
+    ]
+    return { containerTotalNum: 1, textObject, menuObject }
+  }
   const top = 4
   const imageObject = [
     new ImageContainerProperty({
@@ -273,20 +418,62 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       zOrderIndex: 2,
     }),
   ]
-  // Contextual menu (long-press / context gesture on the glasses). Labels are
-  // static until a rebuild, so they are verbs; current state shows in the status line.
-  const menuObject = new MenuContainerProperty({
-    menuItems: [
-      new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
-      new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
-      new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
-      new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
-      new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
-      new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
-      new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
-    ],
-  })
-  const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
+  return { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
+}
+
+/** Switch layouts with one rebuild (~165 ms); image pushes pause while in text view. */
+async function setPageMode(b: EvenAppBridge, mode: PageMode) {
+  if (mode === pageMode) return
+  pageMode = mode
+  try {
+    localStorage.setItem('codrawer:view', mode)
+  } catch {
+    /* ignore */
+  }
+  pending.loupe = null
+  pending.canvas = null
+  const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode)))
+  console.log('[codrawer] page mode', mode, ok ? 'ok' : 'rebuild failed')
+  lastTextSent = '' // the rebuild carried fresh content; resend on next change
+  if (mode === 'canvas') {
+    canvasDirty = true
+    loupeDirty = true
+    strokeEnded = true
+  }
+  textDirty = true
+}
+
+function applyAction(action: string) {
+  if (action === 'new-drawing') {
+    // wipe locally and tell the session so every client starts fresh
+    store.clear()
+    intent = ''
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: 'clear', ts: Date.now() }))
+  } else if (action === 'clear-ai') {
+    store.clear('ai')
+    intent = ''
+  } else if (action === 'toggle-ai') {
+    opts.showAi = !opts.showAi
+    try {
+      localStorage.setItem('codrawer:ai', opts.showAi ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  } else if (action === 'text-view') {
+    if (bridge) void setPageMode(bridge, pageMode === 'text' ? 'canvas' : 'text')
+    return
+  } else if (action === 'toggle-mode') opts.mode = opts.mode === 'follow' ? 'full' : 'follow'
+  else if (action === 'cycle-highlight') opts.highlight = opts.highlight === 'all' ? 'user' : opts.highlight === 'user' ? 'ai' : 'all'
+  else if (action === 'zoom-in') opts.window = Math.max(0.06, opts.window * 0.8)
+  else if (action === 'zoom-out') opts.window = Math.min(1, opts.window * 1.25)
+  canvasDirty = true
+  loupeDirty = true
+  strokeEnded = true // force a canvas refresh for the new view
+  textDirty = true
+}
+
+async function initGlasses(b: EvenAppBridge): Promise<boolean> {
+  const page = buildPage(pageMode)
   const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
     // A page already exists: the app was reopened from the Even Hub tab while its
@@ -327,29 +514,12 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
       else if (text.eventType === 2) action = 'zoom-out'
     }
     if (!action) return
-    if (action === 'new-drawing') {
-      // wipe locally and tell the session so every client starts fresh
-      store.clear()
-      intent = ''
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: 'clear', ts: Date.now() }))
-    } else if (action === 'clear-ai') {
-      store.clear('ai')
-      intent = ''
-    } else if (action === 'toggle-ai') {
-      opts.showAi = !opts.showAi
-      try {
-        localStorage.setItem('codrawer:ai', opts.showAi ? '1' : '0')
-      } catch {
-        /* ignore */
-      }
-    } else if (action === 'toggle-mode') opts.mode = opts.mode === 'follow' ? 'full' : 'follow'
-    else if (action === 'cycle-highlight') opts.highlight = opts.highlight === 'all' ? 'user' : opts.highlight === 'user' ? 'ai' : 'all'
-    else if (action === 'zoom-in') opts.window = Math.max(0.06, opts.window * 0.8)
-    else if (action === 'zoom-out') opts.window = Math.min(1, opts.window * 1.25)
-    canvasDirty = true
-    loupeDirty = true
-    strokeEnded = true // force a canvas refresh for the new view
-    textDirty = true
+    // In text view the ring scrolls the transcript instead of zooming.
+    if (pageMode === 'text' && (action === 'zoom-in' || action === 'zoom-out')) {
+      handleKey({ key: action === 'zoom-in' ? 'ArrowUp' : 'ArrowDown' })
+      return
+    }
+    applyAction(action)
     console.log('[codrawer] input', action, '→', opts.mode, opts.highlight, opts.window.toFixed(2))
   })
   return true
@@ -402,6 +572,12 @@ function readySlot(): Slot | null {
 
 async function drain(b: EvenAppBridge) {
   if (draining) return
+  if (pageMode === 'text') {
+    // no image containers on this page
+    pending.loupe = null
+    pending.canvas = null
+    return
+  }
   draining = true
   try {
     while (pending.loupe || pending.canvas) {
@@ -443,11 +619,13 @@ let lastTextAt = 0
 function pushText(b: EvenAppBridge, content: string) {
   if (content === lastTextSent) return
   // A text update is a ~83 ms host call that competes with ink frames, so hold
-  // it while a stroke is in progress and never send more than one every 2 s.
+  // it while a stroke is in progress and never send more than one every 2 s,
+  // except while typing, where the line must follow the keys (~150 ms floor).
   // The very first line (replacing "connecting…") always goes out.
   if (lastTextSent !== '') {
-    if (strokeActive) return
-    if (performance.now() - lastTextAt < 2000) return
+    const typing = performance.now() - typingAt < 1500
+    if (!typing && strokeActive) return
+    if (performance.now() - lastTextAt < (typing ? 150 : 2000)) return
   }
   lastTextSent = content
   lastTextAt = performance.now()
@@ -486,9 +664,11 @@ function tick() {
   }
   if (textDirty) {
     textDirty = false
-    const line = statusLine()
+    const line = renderText()
     statusEl.textContent = line
     if (bridge) pushText(bridge, line)
+  } else if (isTyping() && inputLine === '' && performance.now() - typingAt > 15000) {
+    textDirty = true // typing view expires back to the status view
   }
 }
 

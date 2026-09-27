@@ -54,6 +54,25 @@ Contextual menu (long-press / context gesture): Toggle AI ghost · Follow / fit 
 Cycle emphasis · Zoom in · Zoom out. The AI toggle persists.
 
 
+## Keyboard (bridged from the tablet)
+
+A keyboard bonded to the Paper Pro arrives as `key` messages (see `docs/protocol.md`). The app
+keeps a transcript in the text container: the current line shows with a cursor while you type,
+Enter commits it, Backspace/Escape edit, ArrowUp/Down (or the ring in text view) scroll back.
+A leading slash makes a command:
+
+| Command | Effect |
+| --- | --- |
+| `/hw <text>` | AI handwrites `<text>` on the canvas (`prompt`, mode handwriting) |
+| `/draw <text>` | AI draws `<text>` (`prompt`, mode draw) |
+| `/new` | new drawing for every client |
+| `/ai` | toggle the AI ghost layer |
+| `/text` | toggle the full-screen text view (8 transcript lines; one rebuild) |
+| `/clear` | clear the transcript (also Ctrl+L) |
+
+Text updates follow keystrokes at a 150 ms floor while typing, then fall back to the quiet
+2 s cadence so they never compete with ink. `?view=text` starts in the text view.
+
 | Gesture | Effect |
 | --- | --- |
 | click | toggle follow (crop around the pen) / full page |
