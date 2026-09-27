@@ -12,6 +12,15 @@ Superintelligent Group's fluid-interface direction: SIG agents (local and cloud)
 participants, and the Even Realities G2 glasses show a glanceable crop of the same canvas. See
 `docs/sig-integration.md` for the SIG plan and protocol extensions.
 
+## One command to bring the desktop half up
+
+```bash
+scripts/dev/up.sh            # even-terminal + router (:8577) + glasses app (:5188) + simulator (own session)
+scripts/dev/up.sh --tablet   # also restart the bridge + keyboard keeper on the Paper Pro
+```
+
+Parameters, ports and the traps are in `CLAUDE.md`; device steps in `docs/even-g2-testing.md`.
+
 ## Repo layout
 
 | Path | Role |
