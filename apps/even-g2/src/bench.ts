@@ -55,7 +55,7 @@ function frame(w: number, h: number, i: number): Uint8Array {
   return g
 }
 
-async function buildPage(b: EvenAppBridge, w: number, h: number, status: string): Promise<boolean> {
+async function buildPage(b: EvenAppBridge, w: number, h: number, status: string): Promise<true | string> {
   const page = {
     containerTotalNum: 2,
     imageObject: [new ImageContainerProperty({ xPosition: 8, yPosition: 4, width: w, height: h, containerID: IMG_ID, containerName: 'bench', zOrderIndex: 1 })],
@@ -74,9 +74,20 @@ async function buildPage(b: EvenAppBridge, w: number, h: number, status: string)
       }),
     ],
   }
+  // The firmware refuses to create over a live page and (on device, unlike the
+  // simulator) refuses to rebuild into a different container set, so tear the
+  // previous page down first and give the host a moment to settle.
+  try {
+    await b.shutDownPageContainer(0)
+  } catch {
+    /* no page yet */
+  }
+  await new Promise((r) => setTimeout(r, 350))
   const r = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (r === StartUpPageCreateResult.success) return true
-  return b.rebuildPageContainer(new RebuildPageContainer(page))
+  const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
+  if (rebuilt) return true
+  return `create=${String(r)} rebuild=${String(rebuilt)}`
 }
 
 function stats(ms: number[]): { min: number; med: number } {
@@ -90,8 +101,9 @@ export async function runBench(b: EvenAppBridge, report: (lines: string[]) => vo
   const results: string[] = []
   for (const c of CONFIGS) {
     const ok = await buildPage(b, c.w, c.h, `bench: ${c.label}`)
-    if (!ok) {
-      results.push(`${c.label}: page rebuild failed`)
+    if (ok !== true) {
+      results.push(`${c.label}: page failed (${ok})`)
+      report(['bench:', ...results])
       continue
     }
     await new Promise((r) => setTimeout(r, 400))

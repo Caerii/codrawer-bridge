@@ -263,12 +263,25 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
     ],
   })
   const page = { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
-  const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
+  let result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
-    // A page may already exist (e.g. the webview reloaded under HMR); rebuild it in place.
-    const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
-    console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
-    if (!rebuilt) return false
+    // A page may already exist (the WebView reloaded and its unload shutdown never
+    // reached the host). Tear it down and create again; rebuild is the last resort.
+    try {
+      await b.shutDownPageContainer(0)
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 350))
+    result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
+    if (result !== StartUpPageCreateResult.success) {
+      const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
+      console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
+      if (!rebuilt) {
+        statusEl.textContent = `glasses page failed: create=${String(result)} rebuild=${String(rebuilt)}`
+        return false
+      }
+    }
   }
   window.addEventListener('beforeunload', () => {
     void b.shutDownPageContainer(0)
