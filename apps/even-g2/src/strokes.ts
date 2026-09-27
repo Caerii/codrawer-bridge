@@ -237,6 +237,17 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(s)
 }
 
+/**
+ * Canvas → base64 PNG (no data-URL prefix). This is the documented encoded-image
+ * path for updateImageRawData: the host decodes the PNG and converts it to
+ * Gray4 itself. A binarized, mostly-black ink frame is a few hundred bytes of
+ * PNG, so the JSON crossing the WebView bridge is tiny compared with a
+ * number[] of every pixel.
+ */
+export function toPngBase64(canvas: HTMLCanvasElement): string {
+  return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '')
+}
+
 /** Gray8 → packed Gray4 (two pixels per byte, high nibble first), half the bytes. */
 export function packGray4(gray8: Uint8Array): Uint8Array {
   const out = new Uint8Array(Math.ceil(gray8.length / 2))

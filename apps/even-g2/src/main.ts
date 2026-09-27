@@ -33,7 +33,7 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, rasterize, StrokeStore, toBase64, toGray8, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -79,7 +79,10 @@ const LOUPE_ID = 3
 const RENDER_INTERVAL_MS = 50
 const LOUPE_MIN_MS = Number(cfg('frame_ms', '60')) || 60
 const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
-const FMT: 'gray8' | 'gray4' = cfg('fmt', 'gray8') === 'gray4' ? 'gray4' : 'gray8'
+// png: base64 PNG string (the documented encoded-image path; tiny JSON, the host
+// converts to Gray4). gray8 / gray4: raw pixel bytes as number[] (?enc=b64 as a
+// base64 string of the raw bytes, which the phone host rejected on 2026-09-26).
+const FMT: 'png' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' ? v : 'png'))(cfg('fmt', 'png'))
 const BINARIZE = cfg('binarize', '1') !== '0'
 const SHOW_AI = cfg('ai', '1') !== '0'
 // `?enc=b64` sends imageData as a base64 string across the WebView bridge. The
@@ -135,6 +138,7 @@ let textDirty = true
 let canvasDirty = true
 let loupeDirty = true
 let strokeEnded = false
+let strokeActive = false
 let lastImageResult = ''
 const rt = { loupe: 0, canvas: 0 }
 const sent = { loupe: 0, canvas: 0 }
@@ -173,6 +177,7 @@ function connect() {
     switch (m.t) {
       case 'stroke_begin':
         store.begin(m.id, 'user', m.brush || 'pen')
+        strokeActive = true
         loupeDirty = true
         break
       case 'stroke_pts':
@@ -182,9 +187,11 @@ function connect() {
         break
       case 'stroke_end':
         store.end(m.id)
+        strokeActive = false
         loupeDirty = true
         canvasDirty = true
         strokeEnded = true
+        textDirty = true
         break
       case 'ai_stroke_begin':
         store.begin(m.id, 'ai', m.brush || 'ghost')
@@ -350,6 +357,20 @@ let draining = false
 
 type Frame = Uint8Array | string
 function encode(c: CanvasRenderingContext2D, w: number, h: number): Frame {
+  if (FMT === 'png') {
+    if (BINARIZE) {
+      // snap to black/white in place so the PNG is a 1-bit-like image with long runs
+      const img = c.getImageData(0, 0, w, h)
+      const d = img.data
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3 >= 96 ? 255 : 0
+        d[i] = d[i + 1] = d[i + 2] = v
+        d[i + 3] = 255
+      }
+      c.putImageData(img, 0, 0)
+    }
+    return toPngBase64(c.canvas)
+  }
   const g8 = toGray8(c, w, h, BINARIZE ? 96 : 0)
   const bytes = FMT === 'gray4' ? packGray4(g8) : g8
   return ENC === 'b64' ? toBase64(bytes) : bytes
@@ -405,7 +426,10 @@ let lastTextSent = ''
 let lastTextAt = 0
 function pushText(b: EvenAppBridge, content: string) {
   if (content === lastTextSent) return
-  if (performance.now() - lastTextAt < 500) return
+  // A text update is a ~83 ms host call that competes with ink frames, so hold
+  // it while a stroke is in progress and never send more than one every 2 s.
+  if (strokeActive) return
+  if (performance.now() - lastTextAt < 2000) return
   lastTextSent = content
   lastTextAt = performance.now()
   textChain = textChain.then(async () => {

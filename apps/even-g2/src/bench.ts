@@ -21,19 +21,22 @@ import {
   TextContainerUpgrade,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, toBase64 } from './strokes'
+import { packGray4, toBase64, toPngBase64 } from './strokes'
 
 interface Config {
   label: string
   w: number
   h: number
-  fmt: 'gray8' | 'gray4'
+  fmt: 'gray8' | 'gray4' | 'png'
   enc: 'array' | 'b64'
   text?: boolean
 }
 
 const CONFIGS: Config[] = [
   { label: 'text-only', w: 20, h: 20, fmt: 'gray8', enc: 'array', text: true },
+  { label: '20x20 png', w: 20, h: 20, fmt: 'png', enc: 'b64' },
+  { label: '128x64 png', w: 128, h: 64, fmt: 'png', enc: 'b64' },
+  { label: '288x144 png', w: 288, h: 144, fmt: 'png', enc: 'b64' },
   { label: '20x20 g8 arr', w: 20, h: 20, fmt: 'gray8', enc: 'array' },
   { label: '64x32 g8 arr', w: 64, h: 32, fmt: 'gray8', enc: 'array' },
   { label: '128x64 g8 arr', w: 128, h: 64, fmt: 'gray8', enc: 'array' },
@@ -53,6 +56,21 @@ function frame(w: number, h: number, i: number): Uint8Array {
     for (let dx = -1; dx <= 1; dx++) g[y * w + x + dx] = 255
   }
   return g
+}
+
+/** Gray8 → canvas (for the PNG path). */
+function paint(g8: Uint8Array, w: number, h: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const c = canvas.getContext('2d')!
+  const img = c.createImageData(w, h)
+  for (let i = 0, j = 0; i < g8.length; i++, j += 4) {
+    img.data[j] = img.data[j + 1] = img.data[j + 2] = g8[i]
+    img.data[j + 3] = 255
+  }
+  c.putImageData(img, 0, 0)
+  return canvas
 }
 
 async function buildPage(b: EvenAppBridge, w: number, h: number, status: string): Promise<true | string> {
@@ -115,8 +133,13 @@ export async function runBench(b: EvenAppBridge, report: (lines: string[]) => vo
           await b.textContainerUpgrade(new TextContainerUpgrade({ containerID: TEXT_ID, containerName: 'status', content: `bench: text ${i} ${'·'.repeat(i)}` }))
         } else {
           const g8 = frame(c.w, c.h, i)
-          const bytes = c.fmt === 'gray4' ? packGray4(g8) : g8
-          const imageData = c.enc === 'b64' ? toBase64(bytes) : bytes
+          let imageData: string | Uint8Array
+          if (c.fmt === 'png') {
+            imageData = toPngBase64(paint(g8, c.w, c.h))
+          } else {
+            const bytes = c.fmt === 'gray4' ? packGray4(g8) : g8
+            imageData = c.enc === 'b64' ? toBase64(bytes) : bytes
+          }
           const r = await b.updateImageRawData(new ImageRawDataUpdate({ containerID: IMG_ID, containerName: 'bench', imageData }))
           if (String(r) !== 'success') {
             results.push(`${c.label}: ${String(r)}`)
@@ -131,8 +154,8 @@ export async function runBench(b: EvenAppBridge, report: (lines: string[]) => vo
     }
     if (times.length) {
       const { min, med } = stats(times)
-      const bytes = c.text ? 0 : (c.fmt === 'gray4' ? (c.w * c.h) / 2 : c.w * c.h)
-      results.push(`${c.label}: min ${min} med ${med} ms (${bytes} B)`)
+      const bytes = c.text ? 0 : c.fmt === 'png' ? -1 : c.fmt === 'gray4' ? (c.w * c.h) / 2 : c.w * c.h
+      results.push(`${c.label}: min ${min} med ${med} ms${bytes >= 0 ? ` (${bytes} B)` : ''}`)
     }
     console.log('[bench]', results[results.length - 1])
     report(['bench:', ...results])
