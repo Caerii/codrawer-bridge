@@ -14,10 +14,11 @@ async def main(text, delay):
                 k = text[i + 1]; i += 2
                 m = {"t": "key", "key": k, "code": 0, "repeat": False, "mods": {"shift": False, "ctrl": True, "alt": False, "meta": False}}
                 await ws.send(json.dumps(m)); await asyncio.sleep(delay); continue
-            if ch == "#":
-                j = text.find(";", i)
+            NAMES = ("Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown", "Del", "Tab", "Esc")
+            j = text.find(";", i) if ch == "#" else -1
+            if ch == "#" and j > i and text[i + 1:j] in NAMES:
                 name = text[i + 1:j]; i = j + 1
-                m = {"t": "key", "key": {"Del": "Delete"}.get(name, name), "code": 0, "repeat": False, "mods": {"shift": False, "ctrl": False, "alt": False, "meta": False}}
+                m = {"t": "key", "key": {"Del": "Delete", "Up": "ArrowUp", "Down": "ArrowDown", "Left": "ArrowLeft", "Right": "ArrowRight", "Esc": "Escape"}.get(name, name), "code": 0, "repeat": False, "mods": {"shift": False, "ctrl": False, "alt": False, "meta": False}}
                 await ws.send(json.dumps(m)); await asyncio.sleep(delay); continue
             i += 1
             if ch in NAMED:
