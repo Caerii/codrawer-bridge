@@ -21,7 +21,7 @@ import {
   TextContainerUpgrade,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, toBase64, toPngBase64 } from './strokes'
+import { packGray4, toBase64, toPngBase64, toPngBytes } from './strokes'
 
 interface Config {
   label: string
@@ -34,9 +34,9 @@ interface Config {
 
 const CONFIGS: Config[] = [
   { label: 'text-only', w: 20, h: 20, fmt: 'gray8', enc: 'array', text: true },
-  { label: '20x20 png', w: 20, h: 20, fmt: 'png', enc: 'b64' },
-  { label: '128x64 png', w: 128, h: 64, fmt: 'png', enc: 'b64' },
-  { label: '288x144 png', w: 288, h: 144, fmt: 'png', enc: 'b64' },
+  { label: '20x20 png arr', w: 20, h: 20, fmt: 'png', enc: 'array' },
+  { label: '128x64 png arr', w: 128, h: 64, fmt: 'png', enc: 'array' },
+  { label: '288x144 png arr', w: 288, h: 144, fmt: 'png', enc: 'array' },
   { label: '20x20 g8 arr', w: 20, h: 20, fmt: 'gray8', enc: 'array' },
   { label: '64x32 g8 arr', w: 64, h: 32, fmt: 'gray8', enc: 'array' },
   { label: '128x64 g8 arr', w: 128, h: 64, fmt: 'gray8', enc: 'array' },
@@ -135,7 +135,7 @@ export async function runBench(b: EvenAppBridge, report: (lines: string[]) => vo
           const g8 = frame(c.w, c.h, i)
           let imageData: string | Uint8Array
           if (c.fmt === 'png') {
-            imageData = toPngBase64(paint(g8, c.w, c.h))
+            imageData = c.enc === 'b64' ? toPngBase64(paint(g8, c.w, c.h)) : toPngBytes(paint(g8, c.w, c.h))
           } else {
             const bytes = c.fmt === 'gray4' ? packGray4(g8) : g8
             imageData = c.enc === 'b64' ? toBase64(bytes) : bytes

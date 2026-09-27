@@ -248,6 +248,20 @@ export function toPngBase64(canvas: HTMLCanvasElement): string {
   return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '')
 }
 
+/**
+ * Canvas → PNG bytes. The phone host (Even app 2.2.x, 2026-09-27) answers
+ * sendFailed for any string imageData, base64 raw or base64 PNG alike, but
+ * accepts a byte array, which the SDK marshals as number[]. PNG bytes keep
+ * that array a few hundred entries long instead of one per pixel.
+ */
+export function toPngBytes(canvas: HTMLCanvasElement): Uint8Array {
+  const b64 = toPngBase64(canvas)
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
 /** Gray8 → packed Gray4 (two pixels per byte, high nibble first), half the bytes. */
 export function packGray4(gray8: Uint8Array): Uint8Array {
   const out = new Uint8Array(Math.ceil(gray8.length / 2))

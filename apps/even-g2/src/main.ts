@@ -33,7 +33,7 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -369,7 +369,8 @@ function encode(c: CanvasRenderingContext2D, w: number, h: number): Frame {
       }
       c.putImageData(img, 0, 0)
     }
-    return toPngBase64(c.canvas)
+    // string imageData (base64) is rejected by the phone host; send PNG bytes as an array
+    return ENC === 'b64' ? toPngBase64(c.canvas) : toPngBytes(c.canvas)
   }
   const g8 = toGray8(c, w, h, BINARIZE ? 96 : 0)
   const bytes = FMT === 'gray4' ? packGray4(g8) : g8
