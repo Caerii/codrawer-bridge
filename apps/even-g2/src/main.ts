@@ -82,9 +82,10 @@ const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 const FMT: 'gray8' | 'gray4' = cfg('fmt', 'gray8') === 'gray4' ? 'gray4' : 'gray8'
 const BINARIZE = cfg('binarize', '1') !== '0'
 const SHOW_AI = cfg('ai', '1') !== '0'
-// b64 sends imageData as a base64 string instead of a JSON number[] across the
-// WebView bridge; `?enc=array` restores the SDK's default marshaling.
-const ENC: 'b64' | 'array' = cfg('enc', 'b64') === 'array' ? 'array' : 'b64'
+// `?enc=b64` sends imageData as a base64 string across the WebView bridge. The
+// simulator accepts it but the phone host answered sendFailed (2026-09-26), so the
+// SDK's number[] marshaling stays the default; the bench compares both.
+const ENC: 'b64' | 'array' = cfg('enc', 'array') === 'b64' ? 'b64' : 'array'
 const BENCH = cfg('bench', '0') === '1'
 
 // glasses contextual-menu item ids (non-zero, unique) → actions
