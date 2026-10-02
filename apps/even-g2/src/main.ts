@@ -33,10 +33,11 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPng1Bytes, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { LoupeCamera, packGray4, rasterize, StrokeStore, toBase64, toGray8, toPng1Bytes, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
 import { Editor } from './editor'
 import { CollabDoc } from './collab'
+import { runProbe } from './probe'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -127,8 +128,13 @@ const opts: RasterOptions = {
   pageAspect: 1620 / 2160,
   showAi: SHOW_AI,
 }
+const loupeCam = new LoupeCamera(LOUPE_H / Math.max(1, LOUPE_W), opts.pageAspect)
+const LOUPE_CAM = cfg('loupe_cam', '1') !== '0' // 0: plain re-centring on the pen every frame
 function loupeOpts(): RasterOptions {
-  return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: opts.window * 0.45 }
+  const base = opts.window * 0.45
+  if (!LOUPE_CAM) return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: base }
+  const cam = loupeCam.update(store.lastPoint, base, performance.now())
+  return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: cam.window, center: cam.center }
 }
 
 // ── state ───────────────────────────────────────────────────────────────────
@@ -1282,6 +1288,14 @@ async function attachGlasses(b: EvenAppBridge) {
     textDirty = true
     setTimeout(() => void attachGlasses(b), Math.min(10_000, 2000 + glassesRetries * 1000))
     return
+  }
+  if (params.get('probe') === '1' && HAS_LOUPE) {
+    // one-shot link probe (probe.ts); read from the URL directly so it never sticks in storage
+    glassesState = 'glasses: probing link…'
+    await runProbe(b, { id: LOUPE_ID, name: 'loupe', w: LOUPE_W, h: LOUPE_H }, { id: IMG_ID, name: 'canvas', w: IMG_W, h: IMG_H }, TEXT_ID, (lines) => {
+      statusEl.textContent = lines.join('\n')
+    })
+    lastTextSent = '' // the probe overwrote the status text
   }
   glassesState = 'glasses: on'
   bridge = b

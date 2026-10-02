@@ -57,3 +57,30 @@ test('follow tracks the user pen, not AI ink', () => {
   assert.deepEqual(s.lastPoint, [0.3, 0.4])
   assert.deepEqual(s.all()[0].box, [0.3, 0.4, 0.3, 0.4])
 })
+
+test('loupe camera: steady in the middle, leads past the edge, jumps far, zooms with speed', async () => {
+  const { LoupeCamera } = await import('../src/strokes')
+  const cam = new LoupeCamera(0.5, 1620 / 2160)
+  const base = 0.1
+  let t = 0
+  let v = cam.update([0.5, 0.5], base, t)
+  assert.deepEqual(v.center, [0.5, 0.5])
+
+  // slow drift inside the middle: the frame holds still
+  for (let i = 1; i <= 5; i++) v = cam.update([0.5 + i * 0.004, 0.5], base, (t += 200))
+  assert.deepEqual(v.center, [0.5, 0.5])
+
+  // past the middle 60%: the frame moves ahead of the pen (room in the writing direction)
+  v = cam.update([0.5 + v.window * 0.35, 0.5], base, (t += 200))
+  assert.ok(v.center[0] > 0.5 + v.window * 0.35, 'centre is ahead of the pen')
+
+  // a new stroke far away: straight there
+  v = cam.update([0.1, 0.9], base, (t += 200))
+  assert.deepEqual(v.center, [0.1, 0.9])
+
+  // fast writing widens the window; slow writing brings it back
+  for (let i = 1; i <= 8; i++) v = cam.update([0.1 + i * 0.03, 0.9], base, (t += 50))
+  assert.ok(v.window > base * 1.3, `fast: ${v.window}`)
+  for (let i = 1; i <= 30; i++) v = cam.update([0.34 + i * 0.0005, 0.9], base, (t += 100))
+  assert.ok(v.window < base * 1.1, `slow: ${v.window}`)
+})

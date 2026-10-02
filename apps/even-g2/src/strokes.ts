@@ -35,6 +35,8 @@ export interface RasterOptions {
   pageAspect: number
   /** draw the AI layer at all (false = user ink only, saves bytes on the HUD) */
   showAi?: boolean
+  /** follow mode: centre of the window in page coords (default: the pen) */
+  center?: [number, number]
 }
 
 // Memory and raster cost scale with points, so the page is bounded by points (oldest finished
@@ -172,7 +174,7 @@ function inkBounds(strokes: Stroke[]): [number, number, number, number] | null {
 
 /** The follow window in page coords [x0, y0, x1, y1], or null when there is no pen yet. */
 function followWindow(o: RasterOptions, store: StrokeStore): [number, number, number, number] | null {
-  const last = store.lastPoint
+  const last = o.center ?? store.lastPoint
   if (!last) return null
   const winW = o.window
   const winH = (o.window * o.height) / o.width / o.pageAspect
@@ -182,7 +184,7 @@ function followWindow(o: RasterOptions, store: StrokeStore): [number, number, nu
 
 /** Map normalized page coords into pixel coords for the chosen view. */
 function makeMapper(o: RasterOptions, store: StrokeStore) {
-  const last = store.lastPoint
+  const last = o.center ?? store.lastPoint
   if (o.mode === 'follow' && last) {
     const winW = o.window
     const winH = (o.window * o.height) / o.width / o.pageAspect
@@ -405,4 +407,64 @@ export function toPng1Bytes(ctx: CanvasRenderingContext2D, width: number, height
     o += p.length
   }
   return out
+}
+
+/**
+ * Loupe camera: frames the pen for a view that refreshes only a few times a second.
+ *
+ * - Steady: the frame holds still while the pen stays in its middle, instead of re-centring
+ *   on every frame (at ~5 fps that reads as jitter).
+ * - Look-ahead: when the pen nears an edge the frame moves so there is more room in the
+ *   direction of writing than behind it.
+ * - Speed zoom: fast strokes widen the window (each frame covers the motion), slow careful
+ *   writing narrows it back to the base zoom for detail.
+ */
+export class LoupeCamera {
+  private cx = 0.5
+  private cy = 0.5
+  private win = 0
+  private speed = 0 // page widths per second, smoothed
+  private last: [number, number] | null = null
+  private lastT = 0
+
+  constructor(
+    private aspect: number, // loupe height / width in pixels
+    private pageAspect: number, // page width / height (Paper Pro 1620/2160)
+  ) {}
+
+  /** Advance the camera to the pen; returns the window centre and width to render with. */
+  update(pen: [number, number] | null, baseWin: number, now: number): { center: [number, number]; window: number } {
+    if (!this.win) this.win = baseWin
+    if (pen) {
+      if (this.last) {
+        const dt = Math.max(0.016, (now - this.lastT) / 1000)
+        const d = Math.hypot(pen[0] - this.last[0], (pen[1] - this.last[1]) / this.pageAspect)
+        // a jump (new stroke elsewhere) is not speed
+        const v = d > this.win ? 0 : d / dt
+        this.speed = 0.75 * this.speed + 0.25 * v
+      } else {
+        this.cx = pen[0]
+        this.cy = pen[1]
+      }
+      // speed zoom: up to 2.2x the base window at fast writing speeds
+      const target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
+      this.win += (target - this.win) * 0.35
+      const winH = (this.win * this.aspect) / this.pageAspect
+      const dx = pen[0] - this.cx
+      const dy = pen[1] - this.cy
+      if (Math.abs(dx) > this.win * 0.75 || Math.abs(dy) > winH * 0.75) {
+        // far outside (new stroke elsewhere): jump straight there
+        this.cx = pen[0]
+        this.cy = pen[1]
+      } else {
+        // steady inside the middle 60%; past it, move so the pen sits 20% behind centre
+        // (the room is ahead, in the direction it was heading)
+        if (Math.abs(dx) > this.win * 0.3) this.cx = pen[0] + Math.sign(dx) * this.win * 0.2
+        if (Math.abs(dy) > winH * 0.3) this.cy = pen[1] + Math.sign(dy) * winH * 0.2
+      }
+      this.last = pen
+      this.lastT = now
+    }
+    return { center: [this.cx, this.cy], window: this.win || baseWin }
+  }
 }
