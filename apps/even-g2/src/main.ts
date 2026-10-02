@@ -89,7 +89,7 @@ const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 // base64 string of the raw bytes, which the phone host rejected on 2026-09-26).
 const FMT: 'png' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' ? v : 'png'))(cfg('fmt', 'png'))
 const BINARIZE = cfg('binarize', '1') !== '0'
-const SHOW_AI = cfg('ai', '1') !== '0'
+const SHOW_AI = cfg('ai', '0') !== '0'
 // `?enc=b64` sends imageData as a base64 string across the WebView bridge. The
 // simulator accepts it but the phone host answered sendFailed (2026-09-26), so the
 // SDK's number[] marshaling stays the default; the bench compares both.
@@ -1049,8 +1049,9 @@ async function main() {
   rasterize(ctx, store, opts)
   if (HAS_LOUPE) rasterize(lctx, store, loupeOpts())
   statusEl.textContent = `waiting for Even bridge… (${WS_URL})`
+  const bridgeP = waitForEvenAppBridge()
   const b = await Promise.race<EvenAppBridge | null>([
-    waitForEvenAppBridge(),
+    bridgeP,
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
   ])
   if (b && BENCH) {
@@ -1060,26 +1061,33 @@ async function main() {
     })
     return
   }
-  let ready = false
-  if (b) {
-    try {
-      ready = await initGlasses(b)
-    } catch (e) {
-      // e.g. a host callback lost across a hot reload; keep the preview alive
-      console.warn('[codrawer] glasses init threw', e)
-    }
-  }
-  if (b && ready) {
-    bridge = b
-    canvasDirty = true
-    loupeDirty = true
-    strokeEnded = true
-    console.log('[codrawer] glasses page ready', { canvas: `${IMG_W}x${IMG_H}`, loupe: HAS_LOUPE ? `${LOUPE_W}x${LOUPE_H}` : 'off', fmt: FMT })
-  } else {
-    console.log('[codrawer] no Even bridge; browser preview only')
-  }
   textDirty = true
   setInterval(tick, RENDER_INTERVAL_MS)
+  if (b) {
+    await attachGlasses(b)
+  } else {
+    // A packaged (.ehpk) app can take longer than 3 s to get its bridge on a cold start; keep
+    // the browser preview running and attach whenever it arrives instead of giving up.
+    console.log('[codrawer] no Even bridge yet; browser preview until it arrives')
+    void bridgeP.then(attachGlasses)
+  }
+}
+
+async function attachGlasses(b: EvenAppBridge) {
+  let ready = false
+  try {
+    ready = await initGlasses(b)
+  } catch (e) {
+    // e.g. a host callback lost across a hot reload; keep the preview alive
+    console.warn('[codrawer] glasses init threw', e)
+  }
+  if (!ready) return
+  bridge = b
+  canvasDirty = true
+  loupeDirty = true
+  strokeEnded = true
+  textDirty = true
+  console.log('[codrawer] glasses page ready', { canvas: `${IMG_W}x${IMG_H}`, loupe: HAS_LOUPE ? `${LOUPE_W}x${LOUPE_H}` : 'off', fmt: FMT })
 }
 
 main().catch((e) => {
