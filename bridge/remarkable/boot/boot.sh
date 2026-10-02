@@ -43,6 +43,9 @@ start() {
     echo "CODRAWER_VERSION=$(version_of "$REL")"
     [ -f "$STATE/os_changed" ] && echo "CODRAWER_OS_CHANGED=$(cut -d' ' -f1 "$STATE/os_changed")"
   } > /run/codrawer/env
+  # files copied from Windows (scp) arrive without the executable bit; every path through start
+  # (first install, activate, rollback, boot) must be able to run them
+  chmod +x "$REL/codrawer_bridge_native" "$REL"/*.sh 2> /dev/null || true
   for u in $UNITS; do
     cp "$REL/units/$u" "/run/systemd/system/$u"
   done
@@ -98,6 +101,10 @@ rollback() {
   [ -n "$cur" ] && ln -sfn "$cur" "$ROOT/previous"
   sh "$ROOT/current/boot.sh" start
   echo "rolled back to $(version_of "$ROOT/current")"
+  if [ "${1:-}" != --no-check ] && ! wait_healthy; then
+    echo "warning: $(version_of "$ROOT/current") is not healthy after 60 s (boot.sh rollback to go back)"
+    return 1
+  fi
 }
 
 # prune: keep current, previous and the three newest releases.
@@ -136,7 +143,7 @@ activate() {
     return 0
   fi
   echo "release $1 is not healthy after 60 s; rolling back"
-  [ -n "$old" ] && [ "$old" != "$new" ] && rollback
+  [ -n "$old" ] && [ "$old" != "$new" ] && rollback --no-check
   return 1
 }
 

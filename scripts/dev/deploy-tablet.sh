@@ -61,6 +61,7 @@ echo "[deploy] activating"
 timeout 200 "${SSH[@]}" "set -e
   cd /home/root/codrawer
   R=releases/$VERSION
+  chmod +x \$R/codrawer_bridge_native \$R/*.sh   # scp from Windows drops the executable bit
   [ -f bridge.env ] || cp \$R/bridge.env.example bridge.env
   $ENV_EDIT
   # leftovers of the flat layout (before releases/): scripts at the top level

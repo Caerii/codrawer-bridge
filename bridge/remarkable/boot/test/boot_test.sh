@@ -61,7 +61,8 @@ mkrel() { # mkrel <version> <bad?>
     # a "bad" release: a script that is not the bridge (it still verifies: it is signed)
     printf '#!/bin/sh\necho CODRAWER_TEST_BROKEN\n' > "$d/codrawer_bridge_native"
   fi
-  chmod +x "$d/codrawer_bridge_native"
+  # as on the tablet after scp from Windows: no executable bits anywhere
+  chmod -x "$d/codrawer_bridge_native" "$d"/*.sh
   /work/tool seal "$d" "$1" /tmp/key
 }
 
@@ -120,8 +121,17 @@ n=$(ls $R/releases | wc -l)
 [ -d $R/releases/v8 ] && [ -d $R/releases/v7 ] || fail "kept current and previous"
 pass "old releases pruned"
 
-# 8. doctor reports
+# 8. rollback to a release that was only ever installed by the first-install path (never activated)
+mkrel v9
+chmod -x $R/releases/v9/codrawer_bridge_native
+ln -sfn $R/releases/v9 $R/previous
+sh $R/current/boot.sh rollback > /tmp/out 2>&1 || { cat /tmp/out; fail "rollback to a never-activated release"; }
+[ -x $R/releases/v9/codrawer_bridge_native ] || fail "start made the binary executable"
+sh $R/current/boot.sh rollback > /dev/null 2>&1 || fail "roll forward again"
+pass "rollback works without executable bits"
+
+# 9. doctor reports
 sh $R/current/boot.sh doctor > /tmp/out
-grep -q '^release=v8$' /tmp/out && grep -q '^previous=v7$' /tmp/out && grep -q '^healthy=1$' /tmp/out || { cat /tmp/out; fail "doctor"; }
+grep -q '^release=v8$' /tmp/out && grep -q '^previous=v9$' /tmp/out && grep -q '^healthy=1$' /tmp/out || { cat /tmp/out; fail "doctor"; }
 pass "doctor"
 echo "all boot.sh tests passed"
