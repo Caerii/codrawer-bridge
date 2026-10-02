@@ -130,6 +130,28 @@ const store = new StrokeStore()
 const preview = document.getElementById('preview') as HTMLCanvasElement
 const loupePreview = document.getElementById('loupe') as HTMLCanvasElement
 const statusEl = document.getElementById('status') as HTMLDivElement
+// Glasses state shown on the phone page above the status line (it is otherwise overwritten).
+let glassesState = 'waiting for the Even bridge…'
+
+// Dev builds mirror console output to the dev server (vite.config.ts → .codrawer/logs/phone.log),
+// so device problems can be read on the desktop without a phone debugger.
+if (import.meta.env.DEV) {
+  const post = (level: string, args: unknown[]) => {
+    const text = args.map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a) } catch { return String(a) } })())).join(' ')
+    void fetch('/__log', { method: 'POST', body: `${level} ${text}`.slice(0, 2000), keepalive: true }).catch(() => {})
+  }
+  for (const level of ['log', 'warn', 'error'] as const) {
+    const orig = console[level].bind(console)
+    console[level] = (...args: unknown[]) => {
+      orig(...args)
+      if (typeof args[0] === 'string' && args[0].startsWith('[EvenAppBridge]')) return // noisy
+      post(level, args)
+    }
+  }
+  window.addEventListener('error', (e) => post('error', ['window.onerror', e.message, `${e.filename}:${e.lineno}`]))
+  window.addEventListener('unhandledrejection', (e) => post('error', ['unhandledrejection', String(e.reason)]))
+  post('log', ['[codrawer] page loaded', navigator.userAgent, location.href])
+}
 function fit(c: HTMLCanvasElement, w: number, h: number) {
   c.width = Math.max(1, w)
   c.height = Math.max(1, h)
@@ -928,7 +950,8 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
     const rebuilt = await b.rebuildPageContainer(new RebuildPageContainer(page))
     console.warn('[codrawer] startup page create returned', result, '→ rebuild', rebuilt)
     if (!rebuilt) {
-      statusEl.textContent = `glasses page failed: create=${String(result)} rebuild=${String(rebuilt)}`
+      glassesState = `glasses page failed: create=${String(result)} rebuild=${String(rebuilt)}`
+      console.error('[codrawer]', glassesState)
       return false
     }
   }
@@ -1116,6 +1139,7 @@ function pushText(b: EvenAppBridge, content: string): boolean {
 
 // ── render loop ─────────────────────────────────────────────────────────────
 let wasTyping = false
+let sendCanvasPending = false // the preview changed since the glasses last got the canvas
 function tick() {
   if (store.prune()) {
     canvasDirty = true
@@ -1132,14 +1156,18 @@ function tick() {
     rasterize(lctx, store, loupeOpts())
     if (bridge) offer('loupe', encode(lctx, LOUPE_W, LOUPE_H), bridge)
   }
-  // The canvas is a big send: with a loupe showing live ink it waits for stroke_end, so it
-  // never holds the link during a stroke. With no loupe it is the only view: refresh at most
-  // every CANVAS_MIN_MS while drawing.
-  const canvasDue = strokeEnded || (!HAS_LOUPE && now - lastPushAt.canvas >= CANVAS_MIN_MS)
-  if (canvasDirty && canvasDue) {
+  // The phone preview redraws live, every tick. The glasses copy of the canvas is a big send:
+  // with a loupe showing live ink it waits for stroke_end, so it never holds the link during a
+  // stroke; with no loupe it is the only view, so it refreshes at most every CANVAS_MIN_MS.
+  if (canvasDirty) {
     canvasDirty = false
-    strokeEnded = false
     rasterize(ctx, store, opts)
+    sendCanvasPending = true
+  }
+  const canvasDue = strokeEnded || (!HAS_LOUPE && now - lastPushAt.canvas >= CANVAS_MIN_MS)
+  if (sendCanvasPending && canvasDue) {
+    sendCanvasPending = false
+    strokeEnded = false
     if (bridge) offer('canvas', encode(ctx, IMG_W, IMG_H), bridge)
   }
   const typingNow = isTyping()
@@ -1148,7 +1176,7 @@ function tick() {
   if (textDirty) {
     textDirty = false
     const line = renderText()
-    statusEl.textContent = line
+    statusEl.textContent = `${glassesState}\n${line}`
     if (bridge && !pushText(bridge, line)) textDirty = true // deferred: retry next tick
   }
   // autosave the document 2 s after the last edit
@@ -1183,20 +1211,32 @@ async function main() {
   } else {
     // A packaged (.ehpk) app can take longer than 3 s to get its bridge on a cold start; keep
     // the browser preview running and attach whenever it arrives instead of giving up.
+    glassesState = 'no Even bridge yet (still waiting)'
     console.log('[codrawer] no Even bridge yet; browser preview until it arrives')
     void bridgeP.then(attachGlasses)
   }
 }
 
+let glassesRetries = 0
 async function attachGlasses(b: EvenAppBridge) {
   let ready = false
   try {
     ready = await initGlasses(b)
   } catch (e) {
     // e.g. a host callback lost across a hot reload; keep the preview alive
-    console.warn('[codrawer] glasses init threw', e)
+    glassesState = `glasses init threw: ${String(e)}`
+    console.error('[codrawer] glasses init threw', String(e))
   }
-  if (!ready) return
+  if (!ready) {
+    // Usually another app (or an earlier copy of this one) still holds the glasses display.
+    // Keep trying; the moment it lets go, this app takes over.
+    glassesRetries++
+    glassesState += ` · close other glasses apps; retrying (${glassesRetries})`
+    textDirty = true
+    setTimeout(() => void attachGlasses(b), Math.min(10_000, 2000 + glassesRetries * 1000))
+    return
+  }
+  glassesState = 'glasses: on'
   bridge = b
   canvasDirty = true
   loupeDirty = true
