@@ -119,8 +119,10 @@ func findKeyboardDevice(explicit string) (string, error) {
 			continue
 		}
 		lname := strings.ToLower(d.name)
+		// Skip the power key, our own typer, and any other virtual (uinput) keyboard: e.g.
+		// smart_remarkable's typist would otherwise be streamed as the user's keystrokes.
 		if strings.Contains(lname, "powerkey") || strings.Contains(lname, "power button") ||
-			lname == virtualKeyboardName {
+			lname == virtualKeyboardName || d.virtual {
 			continue
 		}
 		path := filepath.Join("/dev/input", event)

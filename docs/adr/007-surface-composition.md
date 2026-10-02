@@ -49,11 +49,18 @@ Rules:
 1. **One session, many surfaces.** The tablet works with no glasses and no desktop viewer:
    bridge + router + smart_remarkable on the tablet is a complete product. The glasses are
    a glance surface; the web viewer and iPad are render surfaces. None is required by another.
-2. **One render-back path on the tablet: smart_remarkable's pen.** AI ink from the session
-   (`ai_stroke_*`, ADR 003) is delivered to the tablet by the bridge and drawn through
-   smart_remarkable's virtual pen, not by a second implementation. The bridge's own uinput
-   keyboard and smart_remarkable's `keyboard.rs` are the same capability; they converge on one
-   typing service (ADR 005) rather than two devices.
+2. **One render-back path on the tablet, owned by the codrawer bridge.** *(Revised 2026-10-02
+   after `docs/investigations/smart-remarkable.md`.)* smart_remarkable's "virtual pen" writes
+   events into the real pen device (`/dev/input/event2`), which the bridge also reads: its ink
+   would be streamed back as the user's, and nothing keeps it from drawing while the user's pen
+   is down. So the writer must sit next to the pen reader: the bridge injects strokes (porting
+   smart_remarkable's pen sequencing, pacing and corner splitting, ~300 lines), marks what it
+   injected so it is never echoed, and waits until the user's pen is out of range.
+   smart_remarkable sends "draw"/"type" requests to the bridge (its external-writer mode) and
+   keeps its LLM, Select Mode and buttons. Tool and colour come from a small XOVI extension on
+   the inkling pattern, not from tapping the toolbar. The bridge owns all input devices (one
+   uinput keyboard: ADR 005) and the display-buffer reader (XOVI framebuffer-spy, with the
+   size-based search as fallback).
 3. **One agent path: through the session.** smart_remarkable's triggers (corner tap, LLM
    button, Draw button, Select Mode) become session events: a trigger submits a turn
    (ADR 001) with the selection as the attachment (ADR 002). The LLM call runs in the
@@ -77,7 +84,8 @@ Rules:
 - The bridge keeps evdev/uinput as the low-level layer; the higher-level "type this" and
   "draw this" become session messages consumed by whichever tablet process owns the
   injector. Until that lands, the bridge's own typing stays on for the single-user case.
-- SIG's GLASS-04 plan is updated: Phase 5 (render-back) is "integrate smart_remarkable's
-  pen", not a new implementation.
+- SIG's GLASS-04 plan is updated: Phase 5 (render-back) is "the bridge's injector, built from
+  smart_remarkable's pen algorithms", with smart_remarkable as a participant that requests
+  drawing. Community fixes and ours go to `Caerii/smart_remarkable` (integration branch → `dev`).
 - Docs: `docs/sig-integration.md` gets this diagram; `smart_remarkable` gets a
   `docs/codrawer-session.md` describing the participant client once it is written.

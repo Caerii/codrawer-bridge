@@ -23,6 +23,7 @@ import (
 type inputDeviceInfo struct {
 	name     string
 	handlers []string
+	virtual  bool // a uinput device (bus 0x06), e.g. a typist injecting text
 }
 
 func listProcInputDevices() []inputDeviceInfo {
@@ -35,6 +36,10 @@ func listProcInputDevices() []inputDeviceInfo {
 	for _, blk := range blocks {
 		info := inputDeviceInfo{}
 		for _, line := range strings.Split(blk, "\n") {
+			// "I: Bus=0006 Vendor=…": bus 0x06 is BUS_VIRTUAL (uinput devices)
+			if strings.HasPrefix(line, "I: Bus=") {
+				info.virtual = strings.HasPrefix(strings.TrimPrefix(line, "I: Bus="), "0006")
+			}
 			if strings.HasPrefix(line, "N: Name=") {
 				parts := strings.SplitN(line, "=", 2)
 				if len(parts) == 2 {

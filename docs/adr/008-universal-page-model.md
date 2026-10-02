@@ -81,7 +81,7 @@ Many people draw at once and it must feel immediate:
 - **Remote peers**: WebSocket/TCP stalls all motion behind one lost packet; for live motion over
   the internet use a loss-tolerant channel (WebRTC data channel, unordered), while committed
   strokes go through the reliable CRDT so nothing is lost.
-- **On the reMarkable page**: true simultaneity needs the in-app (XOVI) write path; a virtual pen
+- **On the reMarkable page**: true simultaneity needs in-app insertion (research); pen injection
   can only draw while the user's own pen is out of range, so it queues.
 
 ### 3. Sources reconcile into the model
@@ -95,15 +95,20 @@ Many people draw at once and it must feel immediate:
 
 ### 4. Strokes from others appear natively on the reMarkable page
 
-Ownership stays with smart_remarkable (ADR 007), which already has a virtual pen and a XOVI
-extension. Ranked:
+The bridge owns the writer (ADR 007 as revised; `docs/investigations/smart-remarkable.md`).
+Ranked:
 
-1. **XOVI extension inside xochitl** — insert strokes into the open scene with any tool and
-   colour, no input simulation; depends on a durable install across OS updates
+1. **Pen injection by the bridge** — replays a stroke as pen input so xochitl renders, saves and
+   can undo it natively. Built from smart_remarkable's pen algorithms, written by the process
+   that reads the pen, so injected strokes are tagged (never echoed as the user's) and only
+   drawn while the user's pen is out of range (queued meanwhile). Whether xochitl on the Paper
+   Pro also accepts a separate uinput pen device is still to probe. Tool, colour and size per
+   author are set through a small **XOVI extension** (inkling's pattern switches tools natively),
+   not by tapping the toolbar.
+2. **Direct insertion into xochitl's scene from inside the app** (XOVI) — any tool and colour
+   with no input simulation and truly simultaneous with the user's pen; no project does this
+   yet and it needs an internal hook, so it is research, gated by OS version
    (`docs/investigations/durable-install.md`).
-2. **Virtual pen (uinput)** — replays a stroke as if drawn by hand, so xochitl renders, saves and
-   can undo it; draws with the currently selected tool and colour (per-author colour would need
-   toolbar automation), and must wait until the user's pen is out of range.
 3. **Writing `.rm` files** — only for pages that are not open (xochitl would overwrite them).
 
 The bridge marks strokes it injected (`origin=injected`, the model id) so the `.rm`
