@@ -21,6 +21,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "release" {
+		os.Exit(runRelease(os.Args[2:]))
+	}
 	cfg := BridgeConfig{
 		WsURL:              getenvDefault("DESKTOP_WS", "ws://127.0.0.1:8000/ws/session1"),
 		Brush:              getenvDefault("BRUSH", "pen"),

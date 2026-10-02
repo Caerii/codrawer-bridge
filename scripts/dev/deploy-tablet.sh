@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
-# Build the bridge and deploy it, with the boot files, to the Paper Pro (Windows / Git Bash).
-#   scripts/dev/deploy-tablet.sh            # build + copy + restart + health check
-#   CODRAWER_TABLET_UPLINK=1 scripts/dev/deploy-tablet.sh   # bridge streams to the desktop router
-# Waits for the tablet to wake (it drops off Wi-Fi when it autosleeps). Re-installs the systemd
-# units into the rootfs only when they changed (or after an OS update removed them).
+# Build a signed codrawer release and deploy it to the Paper Pro (Windows / Git Bash).
+#   scripts/dev/deploy-tablet.sh                           # build, sign, upload, activate
+#   CODRAWER_TABLET_UPLINK=1 scripts/dev/deploy-tablet.sh  # bridge streams to the desktop router
+#
+# Layout on the tablet (docs/investigations/durable-install.md): /home/root/codrawer/
+# releases/<version>/ (binary + boot files + MANIFEST + MANIFEST.sig), current, previous,
+# bridge.env, release.pub. Activation verifies the signature with the binary already trusted,
+# health-checks for 60 s and rolls back by itself. The only rootfs write is the stub unit, which
+# install.sh re-adds when an OS update removed it — so this also repairs after an update.
+# Signing key: ~/.codrawer/release.key (created on first run; keep it private).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
 LAN_IP="${CODRAWER_LAN_IP:-192.168.50.2}"
+KEYDIR="${CODRAWER_KEYDIR:-$HOME/.codrawer}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET")
+NATIVE="$ROOT/bridge/remarkable/native"
+VERSION="$(date -u +%Y.%m.%d-%H%M)-$(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet || echo -dirty)"
+STAGE="$ROOT/.codrawer/releases/$VERSION"
 
-echo "[deploy] building bridge (linux/arm64)"
-(cd "$ROOT/bridge/remarkable/native" && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .)
+echo "[deploy] building release $VERSION"
+mkdir -p "$KEYDIR" "$STAGE/units"
+(cd "$NATIVE" && GOOS=linux GOARCH=arm64 go build -o "$STAGE/codrawer_bridge_native" .)
+TOOL="$ROOT/.codrawer/codrawer-release.exe"
+(cd "$NATIVE" && go build -o "$TOOL" ./cmd/codrawer-release)
+B="$ROOT/bridge/remarkable/boot"
+cp "$B"/boot.sh "$B"/install.sh "$B"/bt-up.sh "$B"/keyboard-keeper.sh "$B"/bridge.env.example \
+  "$B"/compat.conf "$B"/codrawer-boot.service "$STAGE/"
+cp "$B"/units/*.service "$STAGE/units/"
+if [ ! -f "$KEYDIR/release.key" ]; then
+  echo "[deploy] creating signing key $KEYDIR/release.key"
+  "$TOOL" keygen "$KEYDIR/release.key" "$KEYDIR/release.pub"
+fi
+"$TOOL" seal "$STAGE" "$VERSION" "$KEYDIR/release.key"
+"$TOOL" verify "$STAGE" "$KEYDIR/release.pub" > /dev/null
 
 echo -n "[deploy] waiting for $TABLET (wake the tablet if this hangs)"
 for _ in $(seq 1 60); do
@@ -21,37 +43,39 @@ for _ in $(seq 1 60); do
 done
 timeout 8 "${SSH[@]}" true || { echo; echo "[deploy] tablet unreachable"; exit 1; }
 
-echo "[deploy] copying binary and boot files"
-timeout 60 "${SSH[@]}" "mkdir -p /home/root/codrawer"
-timeout 120 scp -q "$ROOT/bridge/remarkable/native/codrawer_bridge_native" "root@$TABLET:/home/root/codrawer_bridge_native.new"
-timeout 60 scp -q "$ROOT"/bridge/remarkable/boot/* "root@$TABLET:/home/root/codrawer/"
+echo "[deploy] uploading"
+timeout 60 "${SSH[@]}" "mkdir -p /home/root/codrawer/releases/$VERSION/units"
+timeout 180 scp -q -r "$STAGE"/* "root@$TABLET:/home/root/codrawer/releases/$VERSION/"
+# Trust on first use over SSH: the key that signs every later release.
+timeout 30 "${SSH[@]}" "[ -f /home/root/codrawer/release.pub ]" ||
+  timeout 30 scp -q "$KEYDIR/release.pub" "root@$TABLET:/home/root/codrawer/release.pub"
 
 if [ "${CODRAWER_TABLET_UPLINK:-0}" = 1 ]; then
-  ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:8577/ws/session1#' -e 's#^SERVE_ADDR=#\#SERVE_ADDR=#' /home/root/codrawer/bridge.env"
+  ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:8577/ws/session1#' -e 's#^SERVE_ADDR=#\#SERVE_ADDR=#' bridge.env"
 else
-  ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://127.0.0.1:8577/ws/session1#' -e 's#^\#SERVE_ADDR=#SERVE_ADDR=#' /home/root/codrawer/bridge.env; \
-    grep -q '^SERVE_ADDR=' /home/root/codrawer/bridge.env || echo SERVE_ADDR=:8577 >> /home/root/codrawer/bridge.env"
+  ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://127.0.0.1:8577/ws/session1#' -e 's#^\#SERVE_ADDR=#SERVE_ADDR=#' bridge.env; \
+    grep -q '^SERVE_ADDR=' bridge.env || echo SERVE_ADDR=:8577 >> bridge.env"
 fi
 
-timeout 120 "${SSH[@]}" "set -e
-  cd /home/root
-  cp -f codrawer_bridge_native codrawer_bridge_native.prev 2>/dev/null || true
-  chmod +x codrawer_bridge_native.new && mv -f codrawer_bridge_native.new codrawer_bridge_native
-  [ -f codrawer/bridge.env ] || cp codrawer/bridge.env.example codrawer/bridge.env
+echo "[deploy] activating"
+timeout 200 "${SSH[@]}" "set -e
+  cd /home/root/codrawer
+  R=releases/$VERSION
+  [ -f bridge.env ] || cp \$R/bridge.env.example bridge.env
   $ENV_EDIT
-  changed=0
-  for u in codrawer-bluetooth.service codrawer-bridge.service; do
-    cmp -s codrawer/\$u /etc/systemd/system/\$u || changed=1
-  done
-  if [ \$changed = 1 ]; then echo '[deploy] units changed or missing: installing into rootfs'; sh codrawer/install.sh; fi
-  systemctl restart codrawer-bluetooth codrawer-bridge
-  sleep 4
-  systemctl is-active codrawer-bluetooth codrawer-bridge
-  journalctl -u codrawer-bridge -n 6 --no-pager"
+  # leftovers of the flat layout (before releases/): scripts at the top level
+  rm -f bt-up.sh keyboard-keeper.sh install.sh codrawer-bluetooth.service codrawer-bridge.service
+  if [ -e current ]; then
+    sh \$R/boot.sh activate $VERSION
+  else
+    echo '[deploy] first install of the release layout'
+    ln -sfn /home/root/codrawer/\$R current
+  fi
+  # (re-)add the rootfs stub if an OS update removed it, migrate the pre-stub units, start
+  sh current/install.sh --if-needed"
 
 if grep -q '^SERVE_ADDR' <(timeout 20 "${SSH[@]}" cat /home/root/codrawer/bridge.env); then
-  curl -s -m 5 "http://$TABLET:8577/healthz" | grep -q '"ok":true' \
-    && echo "[deploy] router healthy at ws://$TABLET:8577/ws/session1" \
-    || echo "[deploy] WARN router not answering on $TABLET:8577 (firewall?)"
+  curl -s -m 5 "http://$TABLET:8577/healthz" | grep -q '"ok":true' &&
+    echo "[deploy] router healthy at ws://$TABLET:8577/ws/session1" ||
+    echo "[deploy] WARN router not answering on $TABLET:8577"
 fi
-echo "[deploy] previous binary kept as /home/root/codrawer_bridge_native.prev"

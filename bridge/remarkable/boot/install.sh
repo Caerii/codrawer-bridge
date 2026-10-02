@@ -1,51 +1,97 @@
 #!/bin/sh
-# Start the codrawer pieces at boot on a Paper Pro (run on the tablet as root):
-#   codrawer-bluetooth.service  Bluetooth radio + keyboard keeper
-#   codrawer-bridge.service     pen + keyboard bridge (/home/root/codrawer_bridge_native)
+# codrawer's only write to the reMarkable's root partition: the stub unit codrawer-boot.service,
+# which starts /home/root/codrawer/current at boot. Everything else lives in /home and survives
+# OS updates; an OS update swaps the root partition and drops the stub, so this re-adds it.
 #
-#   ssh root@<tablet> mkdir -p /home/root/codrawer
-#   scp bridge/remarkable/boot/* root@<tablet>:/home/root/codrawer/
-#   ssh root@<tablet> sh /home/root/codrawer/install.sh          # --remove to undo
+#   install.sh [--if-needed]   install the stub if missing or changed, start codrawer (default)
+#   install.sh --status        report: stub, release, OS, last OS change; exit 1 if repair needed
+#   install.sh --remove        remove the stub (and the pre-stub units), stop codrawer
 #
-# /etc is an overlay whose upper dir is tmpfs (/var/volatile/etc), so runtime edits to /etc are
-# lost on reboot; the units go into the rootfs underneath it. An OS update swaps the root
-# partition: re-run this script afterwards (everything in /home, and the pairing, survives).
+# Run from a release directory (/home/root/codrawer/current/install.sh). Safe to run any time,
+# from the desktop (scripts/dev/deploy-tablet.sh, the repair watcher), from a restricted SSH key,
+# or from Vellum's post-OS-upgrade hook (VELLUM_REENABLE=1: / is already writable and Vellum
+# restores it, so we leave the mount state alone). Never `umount -R /etc` (it drops the
+# /etc/dropbear bind and can break SSH); we reach the rootfs's own /etc through a bind of /.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
-DEST=/home/root/codrawer
-UNITS="codrawer-bluetooth.service codrawer-bridge.service"
+ROOT=/home/root/codrawer
+STUB=codrawer-boot.service
+LEGACY="codrawer-bluetooth.service codrawer-bridge.service" # rootfs units before the stub
 LOWER=/tmp/codrawer-rootfs
+MODE=${1:---if-needed}
 
-mount -o remount,rw /
-mkdir -p "$LOWER"
-mount --bind / "$LOWER"
-trap 'umount "$LOWER" 2>/dev/null; mount -o remount,ro / 2>/dev/null' EXIT
+stub_installed() {
+  cmp -s "$HERE/$STUB" "/etc/systemd/system/$STUB" && [ -L "/etc/systemd/system/multi-user.target.wants/$STUB" ]
+}
 
-if [ "${1:-}" = "--remove" ]; then
-  for u in $UNITS; do
-    systemctl disable --now "$u" 2>/dev/null || true
+status() {
+  echo "stub=$(stub_installed && echo ok || echo missing)"
+  echo "release=$(sed -n '1s/^version //p' "$ROOT/current/MANIFEST" 2>/dev/null)"
+  echo "os=$( (. /etc/os-release; echo "${IMG_VERSION:-${VERSION_ID:-unknown}}") )"
+  echo "os_changed=$(cat "$ROOT/state/os_changed" 2>/dev/null)"
+  stub_installed
+}
+
+# with_rootfs <command…>: run with the rootfs's own /etc reachable at $LOWER/etc, writable.
+with_rootfs() {
+  if [ "${VELLUM_REENABLE:-0}" = 1 ]; then
+    LOWER="" # Vellum already made / writable with the /etc overlay out of the way
+    "$@"
+    return
+  fi
+  mount -o remount,rw /
+  mkdir -p "$LOWER"
+  mount --bind / "$LOWER"
+  trap 'umount "$LOWER" 2>/dev/null; mount -o remount,ro / 2>/dev/null' EXIT
+  "$@"
+}
+
+put_stub() {
+  cp "$HERE/$STUB" "$LOWER/etc/systemd/system/$STUB"
+  ln -sf "../$STUB" "$LOWER/etc/systemd/system/multi-user.target.wants/$STUB"
+  for u in $LEGACY; do
     rm -f "$LOWER/etc/systemd/system/$u" "$LOWER/etc/systemd/system/multi-user.target.wants/$u"
-    rm -f "/etc/systemd/system/$u" "/etc/systemd/system/multi-user.target.wants/$u"
   done
-  systemctl daemon-reload
-  echo "removed: $UNITS"
-  exit 0
-fi
+  sync
+}
 
-mkdir -p "$DEST"
-[ "$HERE" = "$DEST" ] || cp "$HERE/bt-up.sh" "$HERE/keyboard-keeper.sh" "$HERE/bridge.env.example" "$DEST/"
-[ -f "$DEST/bridge.env" ] || cp "$DEST/bridge.env.example" "$DEST/bridge.env"
+drop_stub() {
+  for u in $STUB $LEGACY; do
+    rm -f "$LOWER/etc/systemd/system/$u" "$LOWER/etc/systemd/system/multi-user.target.wants/$u"
+  done
+  sync
+}
 
-# Hand-started copies (nohup) would race the services.
-for p in $(ps | grep -E 'keyboard-keeper.sh|codrawer_bridge_native' | grep -v grep | awk '{print $1}'); do
-  kill "$p" 2>/dev/null || true
-done
-
-for u in $UNITS; do
-  cp "$HERE/$u" "$LOWER/etc/systemd/system/$u"
-  ln -sf "../$u" "$LOWER/etc/systemd/system/multi-user.target.wants/$u"
-done
-sync
-systemctl daemon-reload
-for u in $UNITS; do systemctl restart "$u"; done
-echo "installed: $UNITS (journalctl -u codrawer-bridge -f; config $DEST/bridge.env)"
+case "$MODE" in
+  --status)
+    status
+    ;;
+  --remove)
+    systemctl stop "$STUB" codrawer-bluetooth.service codrawer-bridge.service 2>/dev/null || true
+    with_rootfs drop_stub
+    rm -f "/run/systemd/system/codrawer-bluetooth.service" "/run/systemd/system/codrawer-bridge.service"
+    systemctl daemon-reload
+    echo "codrawer stub removed (files in $ROOT kept)"
+    ;;
+  --if-needed | --stub)
+    # first install from a release directory: make it current
+    if [ ! -e "$ROOT/current" ]; then
+      ln -sfn "$HERE" "$ROOT/current"
+    fi
+    [ -f "$ROOT/bridge.env" ] || cp "$HERE/bridge.env.example" "$ROOT/bridge.env"
+    if stub_installed && [ -z "$(for u in $LEGACY; do [ -e "/etc/systemd/system/$u" ] && echo x; done)" ]; then
+      echo "codrawer stub already installed"
+    else
+      for u in $LEGACY; do systemctl stop "$u" 2>/dev/null || true; done
+      with_rootfs put_stub
+      echo "codrawer stub installed"
+    fi
+    systemctl daemon-reload
+    systemctl restart "$STUB"
+    sh "$ROOT/current/boot.sh" doctor
+    ;;
+  *)
+    echo "usage: install.sh [--if-needed|--status|--remove]" >&2
+    exit 2
+    ;;
+esac

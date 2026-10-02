@@ -1,0 +1,14 @@
+# Bluetooth radio + keyboard keeper. Installed into /run/systemd/system by boot.sh at every boot
+# (never into the rootfs), so a codrawer update can change it freely.
+[Unit]
+Description=codrawer: Bluetooth radio + keyboard keeper
+After=var-lib-bluetooth.mount
+RequiresMountsFor=/home/root /var/lib/bluetooth
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /home/root/codrawer/current/bt-up.sh
+Restart=always
+RestartSec=30
