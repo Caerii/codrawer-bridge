@@ -37,6 +37,8 @@ export interface RasterOptions {
   showAi?: boolean
   /** follow mode: centre of the window in page coords (default: the pen) */
   center?: [number, number]
+  /** a rectangle in page coords to outline (the loupe's view, shown on the big canvas) */
+  marker?: [number, number, number, number]
 }
 
 // Memory and raster cost scale with points, so the page is bounded by points (oldest finished
@@ -265,6 +267,13 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     ctx.stroke()
   }
   ctx.setLineDash([])
+  if (o.marker) {
+    const [ax, ay] = map(o.marker[0], o.marker[1])
+    const [bx, by] = map(o.marker[2], o.marker[3])
+    ctx.strokeStyle = 'rgb(200,200,200)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(Math.round(ax) + 0.5, Math.round(ay) + 0.5, Math.round(bx - ax), Math.round(by - ay))
+  }
   if (follow && store.lastPoint) {
     // pen cursor
     const [cx, cy] = map(store.lastPoint[0], store.lastPoint[1])
@@ -412,18 +421,23 @@ export function toPng1Bytes(ctx: CanvasRenderingContext2D, width: number, height
 /**
  * Loupe camera: frames the pen for a view that refreshes only a few times a second.
  *
- * - Steady: the frame holds still while the pen stays in its middle, instead of re-centring
- *   on every frame (at ~5 fps that reads as jitter).
- * - Look-ahead: when the pen nears an edge the frame moves so there is more room in the
- *   direction of writing than behind it.
- * - Speed zoom: fast strokes widen the window (each frame covers the motion), slow careful
- *   writing narrows it back to the base zoom for detail.
+ * It frames writing the way a reader follows it:
+ * - Steady: the frame holds still while the pen moves inside a generous middle region.
+ * - Writing direction: the frame leads along the *trend* of motion (smoothed over ~1 s), not the
+ *   instantaneous direction, which flips inside every letter. With no clear trend it assumes
+ *   left-to-right writing. When it re-frames, the pen lands near the trailing edge so most of
+ *   the window is room ahead.
+ * - Lines: a return to the left on a lower line (a new line of writing) re-frames at the start
+ *   of that line instead of panning back across.
+ * - Speed zoom: fast strokes widen the window; slow, careful writing returns to the base zoom.
  */
 export class LoupeCamera {
   private cx = 0.5
   private cy = 0.5
   private win = 0
   private speed = 0 // page widths per second, smoothed
+  private vx = 0 // trend velocity (page widths per second, ~1 s smoothing)
+  private vy = 0
   private last: [number, number] | null = null
   private lastT = 0
 
@@ -432,39 +446,64 @@ export class LoupeCamera {
     private pageAspect: number, // page width / height (Paper Pro 1620/2160)
   ) {}
 
+  /** The window in page coords [x0, y0, x1, y1] for the last update (for a minimap marker). */
+  rect(): [number, number, number, number] {
+    const w = this.win
+    const h = (w * this.aspect) / this.pageAspect
+    return [this.cx - w / 2, this.cy - h / 2, this.cx + w / 2, this.cy + h / 2]
+  }
+
   /** Advance the camera to the pen; returns the window centre and width to render with. */
   update(pen: [number, number] | null, baseWin: number, now: number): { center: [number, number]; window: number } {
     if (!this.win) this.win = baseWin
-    if (pen) {
-      if (this.last) {
-        const dt = Math.max(0.016, (now - this.lastT) / 1000)
-        const d = Math.hypot(pen[0] - this.last[0], (pen[1] - this.last[1]) / this.pageAspect)
-        // a jump (new stroke elsewhere) is not speed
-        const v = d > this.win ? 0 : d / dt
-        this.speed = 0.75 * this.speed + 0.25 * v
-      } else {
-        this.cx = pen[0]
-        this.cy = pen[1]
-      }
-      // speed zoom: up to 2.2x the base window at fast writing speeds
-      const target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
-      this.win += (target - this.win) * 0.35
-      const winH = (this.win * this.aspect) / this.pageAspect
-      const dx = pen[0] - this.cx
-      const dy = pen[1] - this.cy
-      if (Math.abs(dx) > this.win * 0.75 || Math.abs(dy) > winH * 0.75) {
-        // far outside (new stroke elsewhere): jump straight there
-        this.cx = pen[0]
-        this.cy = pen[1]
-      } else {
-        // steady inside the middle 60%; past it, move so the pen sits 20% behind centre
-        // (the room is ahead, in the direction it was heading)
-        if (Math.abs(dx) > this.win * 0.3) this.cx = pen[0] + Math.sign(dx) * this.win * 0.2
-        if (Math.abs(dy) > winH * 0.3) this.cy = pen[1] + Math.sign(dy) * winH * 0.2
-      }
+    if (!pen) return { center: [this.cx, this.cy], window: this.win }
+    if (!this.last) {
       this.last = pen
       this.lastT = now
+      this.place(pen, 1)
+      return { center: [this.cx, this.cy], window: this.win }
     }
-    return { center: [this.cx, this.cy], window: this.win || baseWin }
+    const dt = Math.max(0.016, (now - this.lastT) / 1000)
+    const dx = pen[0] - this.last[0]
+    const dy = (pen[1] - this.last[1]) / this.pageAspect // in page-width units
+    const jump = Math.hypot(dx, dy) > this.win * 0.6 // pen lifted and set down elsewhere
+    if (!jump) {
+      const k = Math.min(1, dt / 1.0) // ~1 s trend
+      this.vx += (dx / dt - this.vx) * k
+      this.vy += (dy / dt - this.vy) * k
+      this.speed = 0.75 * this.speed + 0.25 * (Math.hypot(dx, dy) / dt)
+    }
+    this.last = pen
+    this.lastT = now
+
+    const target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
+    this.win += (target - this.win) * 0.35
+    const winH = (this.win * this.aspect) / this.pageAspect
+    const relX = (pen[0] - this.cx) / this.win // -0.5 .. 0.5 inside the frame
+    const relY = (pen[1] - this.cy) / winH
+
+    const newLine = dy > (winH / this.pageAspect) * 0.25 && dx < -this.win * 0.25 // dy is in page-width units
+    if (jump || newLine || Math.abs(relX) > 0.5 || Math.abs(relY) > 0.5) {
+      // outside the frame, a new line, or a stroke elsewhere: frame it fresh
+      this.place(pen, 1)
+    } else {
+      // steady while inside [15%, 85%] horizontally and the middle 60% vertically
+      const dir = this.direction()
+      if (relX * dir > 0.35) this.place(pen, dir) // reached the leading edge: move ahead
+      else if (relX * dir < -0.35) this.place(pen, -dir) // went back past the trailing edge
+      if (Math.abs(relY) > 0.3) this.cy = pen[1] // vertical: re-centre on the line
+    }
+    return { center: [this.cx, this.cy], window: this.win }
+  }
+
+  /** +1 writing right, -1 writing left (only when the trend clearly says so). */
+  private direction(): number {
+    return this.vx < -0.05 ? -1 : 1
+  }
+
+  /** Put the pen 30% in from the trailing edge, so 70% of the window is room ahead. */
+  private place(pen: [number, number], dir: number) {
+    this.cx = pen[0] + dir * this.win * 0.2
+    this.cy = pen[1]
   }
 }

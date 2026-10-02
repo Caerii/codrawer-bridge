@@ -58,27 +58,38 @@ test('follow tracks the user pen, not AI ink', () => {
   assert.deepEqual(s.all()[0].box, [0.3, 0.4, 0.3, 0.4])
 })
 
-test('loupe camera: steady in the middle, leads past the edge, jumps far, zooms with speed', async () => {
+test('loupe camera: room ahead, steady while writing, new line, jump, speed zoom', async () => {
   const { LoupeCamera } = await import('../src/strokes')
   const cam = new LoupeCamera(0.5, 1620 / 2160)
   const base = 0.1
   let t = 0
   let v = cam.update([0.5, 0.5], base, t)
-  assert.deepEqual(v.center, [0.5, 0.5])
+  // first frame: pen near the left of the window, room ahead to the right
+  assert.ok(v.center[0] > 0.5, 'room ahead on the first frame')
+  const first = v.center[0]
 
-  // slow drift inside the middle: the frame holds still
-  for (let i = 1; i <= 5; i++) v = cam.update([0.5 + i * 0.004, 0.5], base, (t += 200))
-  assert.deepEqual(v.center, [0.5, 0.5])
+  // writing to the right inside the window, with back-and-forth inside letters: no movement
+  const xs = [0.505, 0.502, 0.51, 0.507, 0.515, 0.512, 0.52]
+  for (const x of xs) v = cam.update([x, 0.5], base, (t += 120))
+  assert.equal(v.center[0], first, 'steady while writing inside the frame')
 
-  // past the middle 60%: the frame moves ahead of the pen (room in the writing direction)
-  v = cam.update([0.5 + v.window * 0.35, 0.5], base, (t += 200))
-  assert.ok(v.center[0] > 0.5 + v.window * 0.35, 'centre is ahead of the pen')
+  // reaching the leading edge: the frame moves ahead once (pen near its trailing side), then
+  // holds still again while the writing fills the new room
+  const centres: number[] = []
+  for (let i = 1; i <= 12; i++) centres.push(cam.update([0.52 + i * 0.006, 0.5], base, (t += 120)).center[0])
+  const moves = centres.filter((c, i) => i > 0 && c !== centres[i - 1]).length
+  assert.equal(moves, 1, `moved once, not every frame: ${centres.map((c) => c.toFixed(3))}`)
+  assert.ok(centres[11] > first + 0.04, 'frame advanced with the writing')
 
-  // a new stroke far away: straight there
-  v = cam.update([0.1, 0.9], base, (t += 200))
-  assert.deepEqual(v.center, [0.1, 0.9])
+  // carriage return to the next line: frame the start of the new line
+  v = cam.update([0.5, 0.5 + 0.05], base, (t += 300))
+  assert.ok(Math.abs(v.center[1] - 0.55) < 1e-9 && v.center[0] > 0.5, 'new line framed at its start')
 
-  // fast writing widens the window; slow writing brings it back
+  // a stroke far away: framed there
+  v = cam.update([0.1, 0.9], base, (t += 300))
+  assert.ok(Math.abs(v.center[1] - 0.9) < 1e-9)
+
+  // fast strokes widen the window; slow writing brings it back
   for (let i = 1; i <= 8; i++) v = cam.update([0.1 + i * 0.03, 0.9], base, (t += 50))
   assert.ok(v.window > base * 1.3, `fast: ${v.window}`)
   for (let i = 1; i <= 30; i++) v = cam.update([0.34 + i * 0.0005, 0.9], base, (t += 100))

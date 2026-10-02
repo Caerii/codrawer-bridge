@@ -76,7 +76,10 @@ const WS_URL = cfg('ws', defaultWs)
 // Tunables: ?img=240x120 (canvas) ?loupe=128x64 (or 0 to disable) ?fmt=gray4
 // ?frame_ms=60 (loupe floor) ?canvas_ms=1200 (canvas floor) ?ai=0 (hide AI ink)
 const [IMG_W, IMG_H] = size('img', '288x144', 288, 144)
-const [LOUPE_W, LOUPE_H] = size('loupe', '128x64', 288, 144)
+// The phone converts every frame to an uncompressed 4-bpp bitmap for the glasses, so the cost
+// per send grows with the loupe's pixel area (~12 ms per KB of bitmap measured: 128x64 ≈ 4 KB ≈
+// 200 ms, 288x144 ≈ 20 KB ≈ 400 ms), not with our PNG size. Up to 272x144 fits beside the canvas.
+const [LOUPE_W, LOUPE_H] = size('loupe', '128x64', 272, 144)
 const HAS_LOUPE = LOUPE_W > 0
 const SCREEN_W = 576
 const SCREEN_H = 288
@@ -131,7 +134,7 @@ const opts: RasterOptions = {
 const loupeCam = new LoupeCamera(LOUPE_H / Math.max(1, LOUPE_W), opts.pageAspect)
 const LOUPE_CAM = cfg('loupe_cam', '1') !== '0' // 0: plain re-centring on the pen every frame
 function loupeOpts(): RasterOptions {
-  const base = opts.window * 0.45
+  const base = opts.window * 0.45 * (LOUPE_W / 128) // same zoom as the original 128-px loupe
   if (!LOUPE_CAM) return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: base }
   const cam = loupeCam.update(store.lastPoint, base, performance.now())
   return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: cam.window, center: cam.center }
@@ -1210,7 +1213,10 @@ function tick() {
   // stroke; with no loupe it is the only view, so it refreshes at most every CANVAS_MIN_MS.
   if (canvasDirty) {
     canvasDirty = false
-    rasterize(ctx, store, opts)
+    // in the full-page view, outline the loupe's view so you can see where you are zoomed in
+    // (in follow view the canvas is zoomed in too, and only a stray edge would show)
+    const marked = HAS_LOUPE && LOUPE_CAM && opts.mode === 'full'
+    rasterize(ctx, store, marked ? { ...opts, marker: loupeCam.rect() } : opts)
     sendCanvasPending = true
   }
   // With a loupe, wait for a lull in the writing, not every stroke_end: in handwriting every
