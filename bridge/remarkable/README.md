@@ -34,6 +34,9 @@ Note: **`uv` is for desktop dev**. On the Paper Pro we keep it simple and use `p
 
 ## systemd (optional)
 
+The native bridge starts at boot via `boot/install.sh` (see `docs/remarkable_setup.md`); on the
+Paper Pro a unit copied into `/etc` is lost on reboot. For the Python bridge:
+
 1) Copy unit:
 
 ```bash

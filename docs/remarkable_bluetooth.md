@@ -21,14 +21,31 @@ bluetoothctl show             # Powered: yes
 bluetoothctl --timeout 10 scan on
 ```
 
-Make it survive a reboot:
+### Make it survive reboots
+
+`/etc` on Codex is an overlay whose upper dir is tmpfs (`/var/volatile/etc`): anything written there
+at runtime (`/etc/modules-load.d/…`, `systemctl enable`) is gone after a reboot. What does persist:
+the read-only rootfs underneath, and `/home` (reMarkable already bind-mounts `/var/lib/bluetooth`
+there, so pairings survive). `bridge/remarkable/boot/install.sh` writes one unit,
+`codrawer-bluetooth.service` (and the pen bridge's `codrawer-bridge.service`), into the rootfs (remount rw, bind `/` to reach under the overlay)
+and keeps the logic in `/home/root/codrawer/`:
 
 ```sh
-printf 'btnxpuart\n' > /etc/modules-load.d/btnxpuart.conf
+ssh root@<tablet> mkdir -p /home/root/codrawer
+scp bridge/remarkable/boot/* root@<tablet>:/home/root/codrawer/
+ssh root@<tablet> sh /home/root/codrawer/install.sh      # --remove to undo
+journalctl -u codrawer-bluetooth -f
 ```
 
-Undo: delete that file, `systemctl stop bluetooth`, `rmmod btnxpuart`. Developer mode already
-voided the warranty; this changes nothing on disk beyond the one file.
+At boot `bt-up.sh` holds a wake lock, loads `btnxpuart`, starts `bluetoothd`, retries the driver
+if `hci0` does not come up, then execs `keyboard-keeper.sh` (reconnects every paired device).
+Verified across a reboot 2026-10-02 on Codex 6.0.105. **An OS update swaps the root partition:
+re-run `install.sh` afterwards** (the files in `/home` and the pairing survive).
+
+- **Never bring the chip up while the tablet sleeps.** Codex autosleeps (`/sys/power/autosleep` =
+  `mem`, deep suspend every ~1 s with the screen off, SSH still answering). A suspend during the
+  firmware load wedges the chip: `FW already running`, then `Opcode 0x0c03 failed: -110` on every
+  retry, and only a reboot recovers it. `bt-up.sh` holds `/sys/power/wake_lock` for this reason.
 
 ## Pair a Bluetooth keyboard
 

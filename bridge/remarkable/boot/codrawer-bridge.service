@@ -1,0 +1,19 @@
+# The pen + keyboard bridge (bridge/remarkable/native) streaming to the desktop router.
+# Installed into the read-only rootfs by install.sh (see codrawer-bluetooth.service for why).
+# Settings live in /home/root/codrawer/bridge.env; the binary reconnects forever, so starting
+# before Wi-Fi or the router is up is fine. Logs: journalctl -u codrawer-bridge -f
+[Unit]
+Description=codrawer: pen + keyboard bridge to the desktop router
+After=network-online.target codrawer-bluetooth.service
+Wants=network-online.target
+RequiresMountsFor=/home/root
+
+[Service]
+Type=simple
+EnvironmentFile=/home/root/codrawer/bridge.env
+ExecStart=/home/root/codrawer_bridge_native
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

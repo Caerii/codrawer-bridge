@@ -156,15 +156,23 @@ ssh root@<PAPER_PRO_IP> "chmod +x /home/root/codrawer_bridge_native.new && mv -f
 ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<DESKTOP_IP>:8000/ws/session1 -touch-mode auto"
 ```
 
-### Run it as a systemd service (optional)
+### Start it at boot
+
+On Codex (Paper Pro) `/etc` is an overlay on tmpfs, so copying a unit into `/etc/systemd/system`
+and `systemctl enable` both vanish at the next reboot. `bridge/remarkable/boot/install.sh` puts the
+units into the read-only rootfs underneath instead, along with Bluetooth + the keyboard keeper
+(see `docs/remarkable_bluetooth.md`):
 
 ```bash
-scp bridge/remarkable/systemd/codrawer-bridge-native.service root@<PAPER_PRO_IP>:/etc/systemd/system/codrawer-bridge.service
-ssh root@<PAPER_PRO_IP> systemctl daemon-reload
-ssh root@<PAPER_PRO_IP> systemctl enable codrawer-bridge
+ssh root@<PAPER_PRO_IP> mkdir -p /home/root/codrawer
+scp bridge/remarkable/boot/* root@<PAPER_PRO_IP>:/home/root/codrawer/
+ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/install.sh      # --remove to undo
+ssh root@<PAPER_PRO_IP> vi /home/root/codrawer/bridge.env       # DESKTOP_WS etc., then:
 ssh root@<PAPER_PRO_IP> systemctl restart codrawer-bridge
 ssh root@<PAPER_PRO_IP> journalctl -u codrawer-bridge -f
 ```
+
+Re-run `install.sh` after a reMarkable OS update (it swaps the root partition).
 
 ## 5) Configure the server URL
 
@@ -190,7 +198,8 @@ You should see reconnect logs if the network is flaky. When you start drawing, t
 
 ## 7) Optional: systemd service
 
-Copy unit + enable:
+For the native bridge use `bridge/remarkable/boot/install.sh` (section 4) instead: on the Paper Pro a
+unit copied into `/etc` does not survive a reboot. For the Python bridge, copy unit + enable:
 
 ```bash
 scp bridge/remarkable/systemd/codrawer-bridge.service root@<PAPER_PRO_IP>:/etc/systemd/system/codrawer-bridge.service

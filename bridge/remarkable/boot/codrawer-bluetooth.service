@@ -1,0 +1,17 @@
+# Bring up the Paper Pro's Bluetooth radio at boot and keep bonded keyboards connected.
+# Installed into the read-only rootfs by install.sh: /etc is a tmpfs overlay on Codex, so
+# anything written to /etc at runtime (modules-load.d, systemctl enable) is lost on reboot.
+# The logic lives in /home/root/codrawer/ so it can change without touching the rootfs.
+[Unit]
+Description=codrawer: Bluetooth radio + keyboard keeper
+After=var-lib-bluetooth.mount
+RequiresMountsFor=/home/root /var/lib/bluetooth
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /home/root/codrawer/bt-up.sh
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

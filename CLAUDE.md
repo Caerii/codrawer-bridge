@@ -43,15 +43,16 @@ hub.evenrealities.com with the same account, then force-quitting the app) → Sc
 Tablet (`192.168.50.156` on Wi-Fi, `10.11.99.1` on USB, ssh key installed; it sleeps within
 ~2 minutes and drops SSH — wake it first):
 
+The pen bridge and Bluetooth + keyboard keeper start at boot (`codrawer-bridge.service`,
+`codrawer-bluetooth.service`, from `bridge/remarkable/boot/`; settings in
+`/home/root/codrawer/bridge.env`). Re-run `/home/root/codrawer/install.sh` after a reMarkable OS update.
+
 ```bash
-ssh root@192.168.50.156 "NO_GRAB=1 nohup /home/root/codrawer_bridge_native \
-  -ws ws://192.168.50.2:8577/ws/session1 -input /dev/input/event2 -touch-mode auto \
-  -keyboard auto -type-replies > /tmp/codrawer_bridge.log 2>&1 &"
-ssh root@192.168.50.156 "nohup sh /home/root/keyboard-keeper.sh > /dev/null 2>&1 &"   # reconnects the Pebble
+ssh root@192.168.50.156 "systemctl restart codrawer-bridge; journalctl -u codrawer-bridge -f"
 ```
 
 Rebuild + deploy the bridge: `cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .`
-then `scp` to `/home/root/codrawer_bridge_native.new`, `chmod +x`, `mv -f`, restart as above.
+then `scp` to `/home/root/codrawer_bridge_native.new`, `chmod +x`, `mv -f`, `systemctl restart codrawer-bridge`.
 
 ## Facts that cost hours (do not rediscover)
 
@@ -70,6 +71,9 @@ then `scp` to `/home/root/codrawer_bridge_native.new`, `chmod +x`, `mv -f`, rest
 - **The bridge must select on socket errors, not only after a pen read** (fixed; keep it that way).
 - **Git Bash converts `/hw` arguments into `C:/Program Files/Git/hw`**: set `MSYS_NO_PATHCONV=1`
   for the harness scripts. Python heredocs in Bash mangle backslashes — put patch scripts in files.
+- **Tablet `/etc` is tmpfs-backed** (overlay on `/var/volatile`): runtime edits vanish on reboot.
+  Persist via the rootfs (see `bridge/remarkable/boot/install.sh`) or `/home`. Never load the
+  Bluetooth driver while the tablet autosleeps: the chip wedges until reboot (hold a wake lock).
 - **Windows Swift-Pairs any keyboard in pairing mode**; turn the PC's Bluetooth off before pairing
   a keyboard to the tablet. The Pebble's address changes per channel.
 

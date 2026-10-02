@@ -56,9 +56,11 @@ fi
 # 5. tablet (optional; it must be awake)
 if [ "$WANT_TABLET" = 1 ]; then
   if timeout 8 ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET" "true" 2>/dev/null; then
-    timeout 40 ssh -o BatchMode=yes "root@$TABLET" "killall codrawer_bridge_native 2>/dev/null; sleep 1; \
-      (NO_GRAB=1 nohup /home/root/codrawer_bridge_native -ws ws://$LAN_IP:$ROUTER_PORT/ws/session1 -input /dev/input/event2 -touch-mode auto -keyboard auto -type-replies > /tmp/codrawer_bridge.log 2>&1 &); \
-      n=\$(ps | grep keyboard-keeper.sh | grep -v grep | wc -l); [ \"\$n\" = 0 ] && (nohup sh /home/root/keyboard-keeper.sh > /dev/null 2>&1 &); sleep 4; tail -n 3 /tmp/codrawer_bridge.log"
+    # The bridge and Bluetooth run as boot services (bridge/remarkable/boot/); point the bridge
+    # at this machine and restart it.
+    timeout 40 ssh -o BatchMode=yes "root@$TABLET" "sed -i 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:$ROUTER_PORT/ws/session1#' /home/root/codrawer/bridge.env; \
+      systemctl start codrawer-bluetooth; systemctl restart codrawer-bridge; sleep 4; \
+      journalctl -u codrawer-bridge -n 3 --no-pager"
     echo "[up] tablet bridge restarted"
   else
     echo "[up] tablet $TABLET unreachable (asleep?) — wake it and rerun with --tablet"
