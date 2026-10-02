@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Scripts and units copied to the tablet must keep LF endings.
+*.sh eol=lf
+bridge/remarkable/boot/* eol=lf
