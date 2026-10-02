@@ -84,6 +84,15 @@ case "$MODE" in
     else
       for u in $LEGACY; do systemctl stop "$u" 2>/dev/null || true; done
       with_rootfs put_stub
+      # The overlay on /etc does not show files added underneath it while mounted, so systemd
+      # would not see the stub until the next boot: put it in the live (volatile) /etc too.
+      # The rootfs copy is what every later boot uses.
+      cp "$HERE/$STUB" "/etc/systemd/system/$STUB"
+      mkdir -p /etc/systemd/system/multi-user.target.wants
+      ln -sf "../$STUB" "/etc/systemd/system/multi-user.target.wants/$STUB"
+      for u in $LEGACY; do
+        rm -f "/etc/systemd/system/$u" "/etc/systemd/system/multi-user.target.wants/$u"
+      done
       echo "codrawer stub installed"
     fi
     # Vellum users: `vellum reenable` (and reManager's Reenable button) restores codrawer too.
