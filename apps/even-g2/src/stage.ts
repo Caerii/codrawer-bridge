@@ -9,8 +9,10 @@
  *   tighter than a third of the page) so a projector is not mostly empty paper. The camera glides
  *   to its target instead of jumping.
  * - Pointer: where the pen hovers (cursor messages), so viewers can follow before ink appears.
- * - Finished strokes live in an offscreen cache while the camera is still; a frame then costs one
- *   blit plus the strokes still being drawn.
+ * - Backdrop: the phone camera (live video, or a still) instead of paper: ink is drawn white with
+ *   a soft dark halo so it reads over any scene. Drawing over the world.
+ * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
+ *   is then the background (paper or video), one blit, and the strokes still being drawn.
  */
 import type { Stroke, StrokeStore } from './strokes'
 
@@ -30,7 +32,8 @@ interface Cam {
 }
 
 export class Stage {
-  private cache = document.createElement('canvas')
+  private cache = document.createElement('canvas') // finished ink, transparent
+  private live = document.createElement('canvas') // strokes still being drawn
   private cacheValid = false
   private cachedDone = 0
   private cachedLastId = ''
@@ -38,6 +41,7 @@ export class Stage {
   private cam: Cam = { cx: 0, cy: 0.5, h: 1.1 }
   private camAt: Cam = { cx: 0, cy: 0.5, h: 1.1 } // camera the cache was drawn with
   private pointer: { x: number; y: number; tool: string; at: number } | null = null
+  private backdrop: HTMLVideoElement | HTMLImageElement | null = null
   theme: Theme = 'paper'
   view: View = 'focus'
   showAi = false
@@ -71,6 +75,16 @@ export class Stage {
   setTheme(t: Theme) {
     this.theme = t
     this.invalidate()
+  }
+
+  /** Draw over a camera feed or photo instead of paper (null: back to paper). */
+  setBackdrop(b: HTMLVideoElement | HTMLImageElement | null) {
+    this.backdrop = b
+    this.invalidate() // ink style changes (halo) with the backdrop
+  }
+
+  get hasBackdrop() {
+    return this.backdrop !== null
   }
 
   setView(v: View) {
@@ -144,7 +158,8 @@ export class Stage {
       this.dirty = true
     }
     if (this.pointer && performance.now() - this.pointer.at > 2500) this.setPointer(null) // stale
-    if (this.dirty) this.draw()
+    const live = this.backdrop instanceof HTMLVideoElement && !this.backdrop.paused
+    if (this.dirty || live) this.draw()
   }
 
   /** page units → device pixels for the current camera */
@@ -168,12 +183,31 @@ export class Stage {
     // ~0.5 mm fineliner at full pressure on the 1620-px-wide page, scaled to the view
     const base = (scale * this.pageAspect) / 1620
     const eraser = s.brush === 'eraser'
-    ctx.strokeStyle = eraser ? t.page : s.layer === 'ai' ? t.ai : t.ink
-    ctx.fillStyle = ctx.strokeStyle
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
+    if (eraser) {
+      // the ink layer is transparent: erasing cuts it, whatever is behind (paper, video) shows
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.strokeStyle = ctx.fillStyle = '#000'
+    } else if (this.backdrop) {
+      ctx.strokeStyle = ctx.fillStyle = s.layer === 'ai' ? '#9cc7ff' : '#ffffff'
+      ctx.shadowColor = 'rgba(0,0,0,0.75)'
+      ctx.shadowBlur = Math.max(2, base * 6)
+    } else {
+      ctx.strokeStyle = ctx.fillStyle = s.layer === 'ai' ? t.ai : t.ink
+    }
     const pts = s.pts
-    const width = (p: number) => (eraser ? base * 24 : base * (1.4 + 4.2 * p))
+    const width = (p: number) => (eraser ? base * 24 : base * (this.backdrop ? 2 : 1.4) + base * 4.2 * p)
+    try {
+      this.paintPath(ctx, pts, width, X, Y)
+    } finally {
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.shadowBlur = 0
+      ctx.shadowColor = 'transparent'
+    }
+  }
+
+  private paintPath(ctx: CanvasRenderingContext2D, pts: number[][], width: (p: number) => number, X: (n: number) => number, Y: (n: number) => number) {
     if (pts.length === 1) {
       ctx.beginPath()
       ctx.arc(X(pts[0][0]), Y(pts[0][1]), width(pts[0][2]) / 2, 0, Math.PI * 2)
@@ -209,7 +243,22 @@ export class Stage {
     ctx.stroke()
   }
 
-  private paintPage(ctx: CanvasRenderingContext2D, cam: Cam) {
+  private paintBackground(ctx: CanvasRenderingContext2D, cam: Cam) {
+    const b = this.backdrop
+    if (b) {
+      // cover the screen with the camera image, cropping the excess (like a camera viewfinder)
+      const bw = b instanceof HTMLVideoElement ? b.videoWidth : b.naturalWidth
+      const bh = b instanceof HTMLVideoElement ? b.videoHeight : b.naturalHeight
+      const W = this.canvas.width
+      const H = this.canvas.height
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, W, H)
+      if (bw && bh) {
+        const k = Math.max(W / bw, H / bh)
+        ctx.drawImage(b, (W - bw * k) / 2, (H - bh * k) / 2, bw * k, bh * k)
+      }
+      return
+    }
     const t = THEMES[this.theme]
     const { X, Y } = this.xf(cam)
     ctx.fillStyle = t.surround
@@ -254,7 +303,7 @@ export class Stage {
     const extendsCache = done.length >= this.cachedDone && (this.cachedDone === 0 || done[this.cachedDone - 1]?.id === this.cachedLastId)
     if (!this.cacheValid || camMoved || !extendsCache) {
       const c = this.cache.getContext('2d')!
-      this.paintPage(c, cam)
+      c.clearRect(0, 0, this.cache.width, this.cache.height) // ink only; the background is per frame
       for (const s of done) this.paintStroke(c, s, cam)
       this.camAt = { ...cam }
       this.cacheValid = true
@@ -265,8 +314,16 @@ export class Stage {
     this.cachedDone = done.length
     this.cachedLastId = done.length ? done[done.length - 1].id : ''
     const ctx = this.canvas.getContext('2d')!
+    this.paintBackground(ctx, cam)
     ctx.drawImage(this.cache, 0, 0)
-    for (const s of strokes) if (!s.done) this.paintStroke(ctx, s, cam)
+    // live strokes go through a scratch layer too, so an eraser cuts ink and never the background
+    if (strokes.some((s) => !s.done)) {
+      const l = this.live.getContext('2d')!
+      this.live.width = this.canvas.width
+      this.live.height = this.canvas.height
+      for (const s of strokes) if (!s.done) this.paintStroke(l, s, cam)
+      ctx.drawImage(this.live, 0, 0)
+    }
     this.paintPointer(ctx)
   }
 }

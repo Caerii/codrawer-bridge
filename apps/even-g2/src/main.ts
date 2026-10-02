@@ -215,6 +215,71 @@ function applyView(v: View) {
 applyView(cfg('stage', 'focus') === 'page' ? 'page' : 'focus')
 viewBtn.onclick = () => applyView(stage.view === 'focus' ? 'page' : 'focus')
 
+// ── camera: draw over the world ─────────────────────────────────────────────
+// Live video from the back camera behind the ink (getUserMedia). If the WebView will not grant
+// live video, fall back to the Even app's own camera (a still photo via the SDK).
+let evenSdk: EvenAppBridge | null = null // the SDK bridge, even when the glasses page is not up
+const camBtn = document.getElementById('camBtn') as HTMLButtonElement
+const freezeBtn = document.getElementById('freezeBtn') as HTMLButtonElement
+const video = document.getElementById('camera') as HTMLVideoElement
+let camStream: MediaStream | null = null
+
+function stopCamera() {
+  camStream?.getTracks().forEach((t) => t.stop())
+  camStream = null
+  video.srcObject = null
+  stage.setBackdrop(null)
+  camBtn.textContent = 'Camera'
+  freezeBtn.hidden = true
+}
+
+async function startCamera() {
+  camBtn.textContent = 'Starting…'
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia unavailable')
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    })
+    video.srcObject = camStream
+    await video.play()
+    stage.setBackdrop(video)
+    camBtn.textContent = 'Paper'
+    freezeBtn.hidden = false
+    freezeBtn.textContent = 'Freeze'
+    console.log('[codrawer] camera live', video.videoWidth, 'x', video.videoHeight)
+    return
+  } catch (e) {
+    console.warn('[codrawer] live camera unavailable; trying a photo', String(e))
+  }
+  try {
+    const shot = evenSdk ? await evenSdk.captureImageFromCamera() : null
+    if (!shot?.base64) throw new Error(evenSdk ? 'no photo taken' : 'no Even bridge')
+    const img = new Image()
+    img.src = shot.base64.startsWith('data:') ? shot.base64 : `data:${shot.mimeType || 'image/jpeg'};base64,${shot.base64}`
+    await img.decode()
+    stage.setBackdrop(img)
+    camBtn.textContent = 'Paper'
+    console.log('[codrawer] camera photo', img.naturalWidth, 'x', img.naturalHeight)
+  } catch (e) {
+    console.warn('[codrawer] camera unavailable', String(e))
+    camBtn.textContent = 'Camera'
+    notice = 'camera unavailable'
+  }
+}
+camBtn.onclick = () => (stage.hasBackdrop ? stopCamera() : void startCamera())
+// Freeze holds the current frame so you can draw over a moment; tap again to go live.
+freezeBtn.onclick = () => {
+  if (video.paused) {
+    void video.play()
+    freezeBtn.textContent = 'Freeze'
+  } else {
+    video.pause()
+    freezeBtn.textContent = 'Live'
+  }
+  stage.touch()
+}
+
 // Keep the phone screen on while this page is visible (presenting). The lock is released by
 // the browser whenever the page is hidden, so take it again on every return.
 async function keepAwake() {
@@ -1327,6 +1392,9 @@ async function main() {
   if (HAS_LOUPE) rasterize(lctx, store, loupeOpts())
   statusEl.textContent = `waiting for Even bridge… (${WS_URL})`
   const bridgeP = waitForEvenAppBridge()
+  void bridgeP.then((sdk) => {
+    evenSdk = sdk
+  })
   const b = await Promise.race<EvenAppBridge | null>([
     bridgeP,
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),

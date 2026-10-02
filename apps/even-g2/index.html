@@ -16,6 +16,8 @@
       #conn::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
       #conn.live::before { background: var(--live); }
       #bar .spacer { flex: 1; }
+      #bar button[hidden] { display: none; }
+      #bar { flex-wrap: wrap; }
       #bar button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
       #stage { flex: 1; width: 100%; min-height: 0; display: block; touch-action: manipulation; }
       #debug { display: none; padding: 8px 12px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, monospace; }
@@ -29,11 +31,14 @@
       <span id="title">codrawer</span>
       <span id="conn">connecting</span>
       <span class="spacer"></span>
+      <button id="camBtn" type="button">Camera</button>
+      <button id="freezeBtn" type="button" hidden>Freeze</button>
       <button id="viewBtn" type="button">Page</button>
       <button id="themeBtn" type="button">Dark</button>
       <button id="debugBtn" type="button">Glasses</button>
     </div>
     <canvas id="stage"></canvas>
+    <video id="camera" playsinline muted autoplay hidden></video>
     <div id="debug">
       <div style="display:flex;gap:12px;align-items:flex-start">
         <canvas id="preview" width="288" height="144"></canvas>
