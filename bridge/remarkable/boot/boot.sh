@@ -50,6 +50,9 @@ start() {
     cp "$REL/units/$u" "/run/systemd/system/$u"
   done
   systemctl daemon-reload
+  # A deliberate start (boot, activate, rollback) clears systemd's crash-loop limit, which would
+  # otherwise keep refusing a unit that crash-looped earlier ("Start request repeated too quickly").
+  systemctl reset-failed $UNITS 2> /dev/null || true
   # --no-block: this runs inside the stub unit's start at boot; never wait on boot ordering
   systemctl --no-block restart $UNITS
   echo "codrawer $(version_of "$REL") started (OS $os, tested=$tested)"
