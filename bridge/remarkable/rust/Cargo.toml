@@ -1,0 +1,38 @@
+[package]
+name = "codrawer_bridge_rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Rust port of the reMarkable Paper Pro native bridge (bridge/remarkable/native)"
+publish = false
+
+[lib]
+name = "codrawer_bridge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codrawer_bridge_rs"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+socket2 = { version = "0.6", features = ["all"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+# Release is tuned for the tablet: one codegen unit + LTO, abort on panic (systemd restarts the
+# service, same as a Go panic), symbols stripped. `--profile min-size` trades speed for bytes.
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.min-size]
+inherits = "release"
+opt-level = "z"

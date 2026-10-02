@@ -72,3 +72,6 @@ Thumbs.db
 # Even Hub packages (apps/even-g2: pnpm ehpk)
 *.ehpk
 .vite/
+
+# Rust bridge build output (bridge/remarkable/rust/README.md)
+bridge/remarkable/rust/target/
