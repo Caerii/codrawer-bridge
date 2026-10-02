@@ -32,7 +32,9 @@ type WSConn struct {
 	OnMessage func(data []byte)
 }
 
-func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait time.Duration) (*WSConn, error) {
+// DialWS connects and starts the keepalive. onMessage (may be nil) is installed before the
+// reader starts, so no early server message is missed.
+func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait time.Duration, onMessage func(data []byte)) (*WSConn, error) {
 	u, err := url.Parse(wsURL)
 	if err != nil {
 		return nil, err
@@ -52,9 +54,10 @@ func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait
 	}
 
 	w := &WSConn{
-		Conn: conn,
-		done: make(chan struct{}),
-		errC: make(chan error, 1),
+		Conn:      conn,
+		done:      make(chan struct{}),
+		errC:      make(chan error, 1),
+		OnMessage: onMessage,
 	}
 
 	// Keepalive needs READ to process PONG/close frames.
@@ -132,6 +135,11 @@ func (w *WSConn) WriteJSON(v any) error {
 	if err != nil {
 		return err
 	}
+	return w.WriteRaw(b)
+}
+
+// WriteRaw sends an already encoded JSON message.
+func (w *WSConn) WriteRaw(b []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))

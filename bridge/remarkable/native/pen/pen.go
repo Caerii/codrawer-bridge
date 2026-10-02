@@ -1,0 +1,279 @@
+// Package pen turns raw evdev pen events into codrawer stroke messages (docs/protocol.md).
+//
+// It is pure logic with no device or socket access, so it is unit-tested on any OS. The bridge
+// runs one Machine for the life of the process and feeds it every event, whatever the state of
+// the network: contact state can never be lost to a stalled socket (a dropped pen-up used to
+// leave the pen "down", so hovering drew ink). Messages go to Emit; when Emit refuses one (the
+// outbox is full because the link is down), the rest of that stroke is skipped as a whole
+// rather than event by event, so receivers never see a stroke with holes or a merged one.
+package pen
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Linux input constants this package interprets.
+const (
+	EvSyn = 0x00
+	EvKey = 0x01
+	EvAbs = 0x03
+
+	SynReport  = 0x00
+	SynDropped = 0x03
+
+	BtnTouch      = 0x14A
+	BtnToolPen    = 0x140
+	BtnToolRubber = 0x141
+
+	AbsX        = 0x00
+	AbsY        = 0x01
+	AbsPressure = 0x18
+	AbsDistance = 0x19
+)
+
+// Event is one input_event, with its kernel timestamp in Unix milliseconds.
+type Event struct {
+	Type   uint16
+	Code   uint16
+	Value  int32
+	TimeMS int64
+}
+
+// Ranges are the device's axis ranges (EVIOCGABS).
+type Ranges struct {
+	XMin, XMax int32
+	YMin, YMax int32
+	PMin, PMax int32
+}
+
+type Config struct {
+	Brush             string // brush hint for pen strokes ("pen"); the rubber end is "eraser"
+	Color             string // optional color hint
+	TouchMode         string // auto|btn|pressure|distance|tool
+	PressureThreshold float64
+	DistanceThreshold int
+	FlushEvery        time.Duration // batch window after the first point of a stroke
+	MaxBatch          int           // flush early at this many points
+}
+
+// Machine is the pen state machine. It is not safe for concurrent use.
+type Machine struct {
+	cfg  Config
+	rng  Ranges
+	mode string
+	// Emit delivers one encoded message; false means it could not be queued.
+	Emit func(msg []byte) bool
+	// OnStroke, if set, is called at pen-down (true) and pen-up (false).
+	OnStroke func(down bool)
+	// Now is the clock for batching and fallback timestamps (tests replace it).
+	Now func() time.Time
+
+	x, y, p, d          int32
+	hasX, hasY          bool
+	btnTouch, toolPen   bool
+	toolRubber          bool
+	touching            bool
+	lost                bool // the current stroke's messages are being skipped
+	id                  string
+	brush               string
+	batch               []byte // encoded points of the pending batch, comma separated
+	batchN              int
+	lastFlush           time.Time
+	lastX, lastY        float64
+	haveLast            bool
+	strokes, lostStroke int64
+}
+
+func New(cfg Config, rng Ranges, emit func([]byte) bool) *Machine {
+	mode := strings.ToLower(strings.TrimSpace(cfg.TouchMode))
+	if mode == "" {
+		mode = "auto"
+	}
+	if cfg.MaxBatch <= 0 {
+		cfg.MaxBatch = 64
+	}
+	return &Machine{cfg: cfg, rng: rng, mode: mode, Emit: emit, Now: time.Now, brush: cfg.Brush}
+}
+
+func (m *Machine) Touching() bool     { return m.touching }
+func (m *Machine) Strokes() int64     { return m.strokes }
+func (m *Machine) LostStrokes() int64 { return m.lostStroke }
+
+// Pending reports whether points are waiting for the batch window, and when it closes.
+func (m *Machine) Pending() (bool, time.Time) {
+	return m.batchN > 0, m.lastFlush.Add(m.cfg.FlushEvery)
+}
+
+// Flush sends the pending batch if its window has closed (or force).
+func (m *Machine) Flush(force bool) {
+	if m.batchN == 0 {
+		return
+	}
+	if !force && m.Now().Sub(m.lastFlush) < m.cfg.FlushEvery && m.batchN < m.cfg.MaxBatch {
+		return
+	}
+	msg := make([]byte, 0, len(m.batch)+64)
+	msg = append(msg, `{"t":"stroke_pts","id":"`...)
+	msg = append(msg, m.id...)
+	msg = append(msg, `","pts":[`...)
+	msg = append(msg, m.batch...)
+	msg = append(msg, "]}"...)
+	m.batch = m.batch[:0]
+	m.batchN = 0
+	m.lastFlush = m.Now()
+	m.send(msg)
+}
+
+func (m *Machine) send(msg []byte) {
+	if m.lost {
+		return
+	}
+	if !m.Emit(msg) {
+		m.lost = true // skip the rest of this stroke; the router ends it if we drop off
+		m.lostStroke++
+	}
+}
+
+func norm(v, lo, hi int32) float64 {
+	if hi <= lo {
+		return 0
+	}
+	return math.Min(1, math.Max(0, float64(v-lo)/float64(hi-lo)))
+}
+
+// appendFixed writes v rounded to n decimals without trailing zeros (0.1235, 1, 0).
+func appendFixed(b []byte, v float64, n int) []byte {
+	s := math.Pow(10, float64(n))
+	return strconv.AppendFloat(b, math.Round(v*s)/s, 'f', -1, 64)
+}
+
+// Handle consumes one event and emits whatever messages it completes.
+func (m *Machine) Handle(ev Event) {
+	switch ev.Type {
+	case EvAbs:
+		switch ev.Code {
+		case AbsX:
+			m.x, m.hasX = ev.Value, true
+		case AbsY:
+			m.y, m.hasY = ev.Value, true
+		case AbsPressure:
+			m.p = ev.Value
+		case AbsDistance:
+			m.d = ev.Value
+		}
+	case EvKey:
+		switch ev.Code {
+		case BtnTouch:
+			m.btnTouch = ev.Value != 0
+		case BtnToolPen:
+			m.toolPen = ev.Value != 0
+		case BtnToolRubber:
+			m.toolRubber = ev.Value != 0
+		}
+	case EvSyn:
+		if ev.Code == SynReport {
+			m.report(ev.TimeMS)
+		}
+	}
+}
+
+func (m *Machine) down() bool {
+	mode := m.mode
+	if mode == "auto" {
+		// prefer BTN_TOUCH when it is set, else the pressure threshold
+		if m.btnTouch {
+			return true
+		}
+		mode = "pressure"
+	}
+	switch mode {
+	case "pressure":
+		return norm(m.p, m.rng.PMin, m.rng.PMax) > m.cfg.PressureThreshold
+	case "distance":
+		return int(m.d) <= m.cfg.DistanceThreshold
+	case "tool":
+		return m.toolPen || m.toolRubber
+	default: // btn
+		return m.btnTouch
+	}
+}
+
+// report handles one SYN_REPORT: contact transitions, then one coherent point.
+func (m *Machine) report(tsMS int64) {
+	now := m.Now()
+	// Kernel timestamps keep stroke velocity true even when events queue up; fall back to the
+	// wall clock if the device clock is clearly off (not set yet at boot).
+	if tsMS <= 0 || math.Abs(float64(tsMS-now.UnixMilli())) > 10*60*1000 {
+		tsMS = now.UnixMilli()
+	}
+	down := m.down()
+	if down && !m.touching {
+		m.touching, m.lost, m.haveLast = true, false, false
+		m.batch, m.batchN = m.batch[:0], 0
+		m.lastFlush = time.Time{} // the first point goes out at once
+		m.brush = m.cfg.Brush
+		if m.toolRubber {
+			m.brush = "eraser"
+		}
+		m.id = fmt.Sprintf("u_%x", now.UnixNano())
+		msg := []byte(`{"t":"stroke_begin","id":"` + m.id + `","layer":"user","brush":`)
+		msg = strconv.AppendQuote(msg, m.brush) // config strings are ASCII; Go quoting is valid JSON
+		if m.cfg.Color != "" {
+			msg = append(msg, `,"color":`...)
+			msg = strconv.AppendQuote(msg, m.cfg.Color)
+		}
+		msg = append(msg, `,"ts":`...)
+		msg = strconv.AppendInt(msg, tsMS, 10)
+		msg = append(msg, '}')
+		if m.OnStroke != nil {
+			m.OnStroke(true)
+		}
+		m.send(msg)
+	} else if !down && m.touching {
+		m.Flush(true)
+		msg := []byte(`{"t":"stroke_end","id":"` + m.id + `","ts":`)
+		msg = strconv.AppendInt(msg, tsMS, 10)
+		msg = append(msg, '}')
+		// The end goes out even after a skipped stroke: if it gets through, receivers close
+		// the stroke now instead of when the router notices we left.
+		m.lost = false
+		m.send(msg)
+		m.touching = false
+		m.strokes++
+		if m.OnStroke != nil {
+			m.OnStroke(false)
+		}
+		return
+	}
+	if !m.touching || !m.hasX || !m.hasY {
+		return
+	}
+	x := norm(m.x, m.rng.XMin, m.rng.XMax)
+	y := norm(m.y, m.rng.YMin, m.rng.YMax)
+	if m.haveLast {
+		dx, dy := x-m.lastX, y-m.lastY
+		if dx*dx+dy*dy < 1e-8 { // sub-pixel jitter
+			return
+		}
+	}
+	m.lastX, m.lastY, m.haveLast = x, y, true
+	if m.batchN > 0 {
+		m.batch = append(m.batch, ',')
+	}
+	// 4 decimals ≈ 0.2 px on the 2160-px axis; about half the bytes of full float64 output.
+	m.batch = append(m.batch, '[')
+	m.batch = appendFixed(m.batch, x, 4)
+	m.batch = append(m.batch, ',')
+	m.batch = appendFixed(m.batch, y, 4)
+	m.batch = append(m.batch, ',')
+	m.batch = appendFixed(m.batch, norm(m.p, m.rng.PMin, m.rng.PMax), 3)
+	m.batch = append(m.batch, ',')
+	m.batch = strconv.AppendInt(m.batch, tsMS, 10)
+	m.batch = append(m.batch, ']')
+	m.batchN++
+	m.Flush(false)
+}

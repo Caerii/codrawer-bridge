@@ -10,6 +10,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"codrawer-bridge-native/pen"
 )
 
 // Minimal Linux input constants
@@ -48,11 +50,6 @@ type absInfo struct {
 	Resolution int32
 }
 
-type absRanges struct {
-	xMin, xMax int32
-	yMin, yMax int32
-	pMin, pMax int32
-}
 
 // ioctl request encoding (Linux _IOC macro)
 const (
@@ -93,21 +90,32 @@ func getAbsInfo(fd int, absCode int) (absInfo, error) {
 	return info, nil
 }
 
-func getRanges(fd int) absRanges {
+func getRanges(fd int) pen.Ranges {
 	x, errX := getAbsInfo(fd, ABS_X)
 	y, errY := getAbsInfo(fd, ABS_Y)
 	p, errP := getAbsInfo(fd, ABS_PRESSURE)
-	r := absRanges{xMin: 0, xMax: 1, yMin: 0, yMax: 1, pMin: 0, pMax: 4096}
+	r := pen.Ranges{XMin: 0, XMax: 1, YMin: 0, YMax: 1, PMin: 0, PMax: 4096}
 	if errX == nil {
-		r.xMin, r.xMax = x.Min, x.Max
+		r.XMin, r.XMax = x.Min, x.Max
 	}
 	if errY == nil {
-		r.yMin, r.yMax = y.Min, y.Max
+		r.YMin, r.YMax = y.Min, y.Max
 	}
 	if errP == nil {
-		r.pMin, r.pMax = p.Min, p.Max
+		r.PMin, r.PMax = p.Min, p.Max
 	}
 	return r
+}
+
+// getKeyBits reads the device's current key state (EVIOCGKEY): bit k of the result is key k.
+func getKeyBits(fd int) ([96]byte, error) {
+	var bits [96]byte // KEY_MAX 0x2ff → 96 bytes
+	req := ioc(iocRead, uint32('E'), 0x18, uint32(len(bits)))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), req, uintptr(unsafe.Pointer(&bits[0])))
+	if errno != 0 {
+		return bits, errno
+	}
+	return bits, nil
 }
 
 func tryGrab(fd int) {
@@ -123,33 +131,51 @@ type inputParser struct {
 }
 
 func (p *inputParser) feed(chunk []byte, cb func(etype uint16, code uint16, value int32)) {
-	p.buf = append(p.buf, chunk...)
+	p.feedTimed(chunk, func(ev pen.Event) { cb(ev.Type, ev.Code, ev.Value) })
+}
+
+// feedTimed parses events with their kernel timestamps (Unix ms). The struct size follows the
+// platform's timeval: 24 bytes where long is 64-bit (the Paper Pro is aarch64), else 16. The
+// old guess from the first read's length misread 48-byte reads of 16-byte events.
+func (p *inputParser) feedTimed(chunk []byte, cb func(ev pen.Event)) {
 	if p.sz == 0 {
-		if len(p.buf) >= 48 && len(p.buf)%24 == 0 {
-			p.sz = 24
-		} else if len(p.buf) >= 32 && len(p.buf)%16 == 0 {
-			p.sz = 16
-		} else if len(p.buf) >= 24 {
-			// fallback: assume 24 on 64-bit devices (Paper Pro likely aarch64)
+		p.sz = 16
+		if unsafe.Sizeof(uintptr(0)) == 8 {
 			p.sz = 24
 		}
 	}
-	for p.sz != 0 && len(p.buf) >= p.sz {
+	if len(p.buf) == 0 {
+		p.buf = chunk // common case: whole events, no copy
+	} else {
+		p.buf = append(p.buf, chunk...)
+	}
+	for len(p.buf) >= p.sz {
 		ev := p.buf[:p.sz]
 		p.buf = p.buf[p.sz:]
-		var etype, code uint16
-		var value int32
+		var e pen.Event
 		if p.sz == 24 {
-			etype = binary.LittleEndian.Uint16(ev[16:18])
-			code = binary.LittleEndian.Uint16(ev[18:20])
-			value = int32(binary.LittleEndian.Uint32(ev[20:24]))
+			sec := int64(binary.LittleEndian.Uint64(ev[0:8]))
+			usec := int64(binary.LittleEndian.Uint64(ev[8:16]))
+			e = pen.Event{
+				Type:   binary.LittleEndian.Uint16(ev[16:18]),
+				Code:   binary.LittleEndian.Uint16(ev[18:20]),
+				Value:  int32(binary.LittleEndian.Uint32(ev[20:24])),
+				TimeMS: sec*1000 + usec/1000,
+			}
 		} else {
-			etype = binary.LittleEndian.Uint16(ev[8:10])
-			code = binary.LittleEndian.Uint16(ev[10:12])
-			value = int32(binary.LittleEndian.Uint32(ev[12:16]))
+			sec := int64(int32(binary.LittleEndian.Uint32(ev[0:4])))
+			usec := int64(int32(binary.LittleEndian.Uint32(ev[4:8])))
+			e = pen.Event{
+				Type:   binary.LittleEndian.Uint16(ev[8:10]),
+				Code:   binary.LittleEndian.Uint16(ev[10:12]),
+				Value:  int32(binary.LittleEndian.Uint32(ev[12:16])),
+				TimeMS: sec*1000 + usec/1000,
+			}
 		}
-		cb(etype, code, value)
+		cb(e)
 	}
+	// keep a partial event for the next read, detached from the caller's reused buffer
+	p.buf = append([]byte(nil), p.buf...)
 }
 
 

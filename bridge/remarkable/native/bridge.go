@@ -1,31 +1,31 @@
 package main
 
-// Bridge run loop + stroke state machine.
+// Bridge run loop.
 //
-// This file is intentionally verbose and heavily commented because it is the "business logic"
-// for turning Linux input events into protocol messages.
-//
-// Structure:
-//   - penReaderForever: a goroutine that owns the pen device for the life of the process and
-//     parses input_events into a channel (reopening the device on error).
-//   - runKeyboardForever (keyboard.go): the same for a keyboard, producing `key` messages.
-//   - RunBridgeForever: connects the WebSocket, runs runOnce until the socket dies, reconnects.
-//   - runOnce: the stroke state machine. It selects on pen events, socket errors and a flush
-//     timer, so a dead socket is noticed even while the pen is idle. (The earlier version only
-//     checked the socket after a pen read returned, so an idle tablet never reconnected and
-//     keyboard input pumped into a dead socket was dropped.)
+// Structure (one direction of data, no shared mutable state between stages):
+//   - penReaderForever: owns the pen device for the life of the process and parses input_events
+//     (with kernel timestamps) into evC, reopening the device on error. After a kernel
+//     SYN_DROPPED it resynchronises contact and position from the device state.
+//   - penMachineForever: one pen.Machine for the life of the process. It always drains evC, so
+//     contact state is never lost while the network is down, and turns events into encoded
+//     messages on the outbox (outC). A full outbox skips whole strokes, never single events.
+//   - runKeyboardForever (keyboard.go): a keyboard paired to the tablet, producing `key`s.
+//   - RunBridgeForever: dials the router and writes the outbox until the socket dies, then
+//     reconnects. It also notices a suspend/resume and reconnects at once instead of writing
+//     into a socket that died while the tablet slept.
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"net/url"
 	"os"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	"codrawer-bridge-native/pen"
 )
 
 type BridgeConfig struct {
@@ -71,33 +71,9 @@ type termMsg struct {
 	Text string `json:"text"`
 }
 
-type outStrokeBegin struct {
-	T     string `json:"t"`
-	ID    string `json:"id"`
-	Layer string `json:"layer"`
-	Brush string `json:"brush"`
-	Color string `json:"color,omitempty"`
-	TS    int64  `json:"ts"`
-}
-
-type outStrokePts struct {
-	T   string      `json:"t"`
-	ID  string      `json:"id"`
-	Pts [][]float64 `json:"pts"`
-}
-
-type outStrokeEnd struct {
-	T  string `json:"t"`
-	ID string `json:"id"`
-	TS int64  `json:"ts"`
-}
-
-// rawEvent is one parsed Linux input_event from the pen device.
-type rawEvent struct {
-	etype uint16
-	code  uint16
-	value int32
-}
+// outboxSize bounds what is held while the link is down: about 30 s of continuous drawing
+// at 60 batches/s. Older ink is delivered first when the link returns.
+const outboxSize = 2048
 
 func RunBridgeForever(cfg BridgeConfig) error {
 	if cfg.ListDevices {
@@ -114,20 +90,20 @@ func RunBridgeForever(cfg BridgeConfig) error {
 	}
 	fmt.Printf("[bridge] using input device: %s\n", path)
 
-	// The pen reader owns the device for the whole process; runOnce consumes its events.
-	evC := make(chan rawEvent, 4096)
-	readyC := make(chan absRanges, 1)
+	evC := make(chan pen.Event, 4096)
+	readyC := make(chan pen.Ranges, 1)
 	go penReaderForever(path, cfg, evC, readyC)
 	rng := <-readyC
 
-	flushEvery := time.Second / time.Duration(max(1, cfg.BatchHz))
+	outC := make(chan []byte, outboxSize)
+	go penMachineForever(cfg, rng, evC, outC)
+
 	pingEvery := time.Duration(float64(time.Second) * math.Max(1, cfg.PingSeconds))
 	pongWait := time.Duration(float64(time.Second) * math.Max(2, cfg.PongTimeoutSeconds))
+	wsURL := sourceURL(cfg.WsURL)
 
 	reconnectDelay := 500 * time.Millisecond
 	maxReconnectDelay := 5 * time.Second
-
-	var strokesSent atomic.Int64
 
 	// Keyboard events flow through this channel regardless of socket state; the
 	// per-connection pump below drains it while a socket is up.
@@ -174,8 +150,7 @@ func RunBridgeForever(cfg BridgeConfig) error {
 	}
 
 	for {
-		ctx := context.Background()
-		ws, err := DialWS(ctx, cfg.WsURL, pingEvery, pongWait)
+		ws, err := DialWS(context.Background(), wsURL, pingEvery, pongWait, onMessage)
 		if err != nil {
 			j := time.Duration(rand.Int63n(int64(250 * time.Millisecond)))
 			fmt.Printf("[bridge] ws connect error: %v; retrying in %s\n", err, reconnectDelay+j)
@@ -184,26 +159,121 @@ func RunBridgeForever(cfg BridgeConfig) error {
 			continue
 		}
 
-		fmt.Printf("[bridge] connected ws=%s\n", cfg.WsURL)
+		fmt.Printf("[bridge] connected ws=%s\n", wsURL)
 		reconnectDelay = 500 * time.Millisecond
-		ws.OnMessage = onMessage
 
 		stopPump := make(chan struct{})
 		if keyC != nil {
 			go pumpKeys(ws, keyC, stopPump)
 		}
-		err = runOnce(evC, rng, cfg, ws, flushEvery, &strokesSent)
+		err = writeOutbox(ws, outC)
 		close(stopPump)
 		ws.Close()
-		fmt.Printf("[bridge] disconnected; strokes_sent=%d; reconnecting in %s (err=%v)\n", strokesSent.Load(), reconnectDelay, err)
+		fmt.Printf("[bridge] disconnected; reconnecting in %s (err=%v)\n", reconnectDelay, err)
 		time.Sleep(reconnectDelay)
 	}
 }
 
+// sourceURL marks the bridge as a pen source: a replaying router (the Go one) then skips the
+// page replay, which the bridge has no use for. Routers that do not replay ignore it.
+func sourceURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	if q.Get("replay") == "" {
+		q.Set("replay", "0")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
+// writeOutbox writes queued messages until the socket fails. A wall clock that jumps ahead of
+// the monotonic clock means the tablet was suspended: the socket is presumed dead (its timers
+// did not run while asleep) and the caller reconnects immediately.
+func writeOutbox(ws *WSConn, outC <-chan []byte) error {
+	check := time.NewTicker(time.Second)
+	defer check.Stop()
+	lastWall, lastMono := time.Now().Round(0), time.Now()
+	for {
+		select {
+		case err := <-ws.Err():
+			return err
+		case msg := <-outC:
+			if err := ws.WriteRaw(msg); err != nil {
+				// The message is lost with the socket; the router ends the stroke when we drop.
+				return err
+			}
+		case <-check.C:
+			wall, mono := time.Now().Round(0), time.Now()
+			if gap := wall.Sub(lastWall) - mono.Sub(lastMono); gap > 2*time.Second {
+				return fmt.Errorf("resumed after ~%s asleep", gap.Round(time.Second))
+			}
+			lastWall, lastMono = wall, mono
+		}
+	}
+}
+
+// penMachineForever runs the stroke state machine for the life of the process.
+func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, outC chan<- []byte) {
+	m := pen.New(pen.Config{
+		Brush:             cfg.Brush,
+		Color:             cfg.Color,
+		TouchMode:         cfg.TouchMode,
+		PressureThreshold: cfg.PressureThreshold,
+		DistanceThreshold: cfg.DistanceThreshold,
+		FlushEvery:        time.Second / time.Duration(max(1, cfg.BatchHz)),
+		MaxBatch:          cfg.MaxBatchPoints,
+	}, rng, func(msg []byte) bool {
+		select {
+		case outC <- msg:
+			return true
+		default:
+			return false
+		}
+	})
+	m.OnStroke = func(bool) { holdAwake() }
+
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	armed := false
+	debugTick := time.Now()
+	for {
+		select {
+		case ev := <-evC:
+			m.Handle(ev)
+		case <-timer.C:
+			armed = false
+			m.Flush(false)
+		}
+		// Arm the batch timer only while points are waiting: no wakeups while the pen is idle.
+		if pending, due := m.Pending(); pending && !armed {
+			wait := time.Until(due)
+			if wait < 0 {
+				wait = 0
+			}
+			timer.Reset(wait)
+			armed = true
+		}
+		if cfg.Debug && time.Since(debugTick) > 2*time.Second {
+			debugTick = time.Now()
+			fmt.Printf("[bridge] stats touching=%v strokes=%d skipped=%d outbox=%d\n", m.Touching(), m.Strokes(), m.LostStrokes(), len(outC))
+		}
+	}
+}
+
+// holdAwake keeps the tablet out of autosleep for 3 s after pen activity, so the last stroke
+// leaves the radio before the system suspends. A timed kernel wake lock expires by itself.
+func holdAwake() {
+	_ = os.WriteFile("/sys/power/wake_lock", []byte("codrawer-pen 3000000000"), 0)
+}
+
 // penReaderForever reads the pen device into evC for the lifetime of the process,
 // reopening it on error. The first successful open reports the axis ranges on ready.
-func penReaderForever(path string, cfg BridgeConfig, evC chan<- rawEvent, ready chan<- absRanges) {
+func penReaderForever(path string, cfg BridgeConfig, evC chan<- pen.Event, ready chan<- pen.Ranges) {
 	first := true
+	buf := make([]byte, 64*24) // reused: up to 64 events per read, no garbage per read
 	for {
 		f, err := os.Open(path)
 		if err != nil {
@@ -219,26 +289,69 @@ func penReaderForever(path string, cfg BridgeConfig, evC chan<- rawEvent, ready 
 			ready <- getRanges(fd)
 			first = false
 		}
-		reader := bufio.NewReaderSize(f, 4096)
 		parser := &inputParser{}
+		resync := false
+		emit := func(ev pen.Event) {
+			// The machine never blocks, so this only fills if it is wedged; dropping is the
+			// lesser evil there, and SYN_DROPPED-style resync below repairs the state.
+			select {
+			case evC <- ev:
+			default:
+			}
+		}
 		for {
-			chunk := make([]byte, 4096)
-			n, err := reader.Read(chunk)
+			n, err := f.Read(buf)
 			if err != nil {
 				fmt.Printf("[bridge] pen device read failed (%v); reopening in 2s\n", err)
 				break
 			}
-			parser.feed(chunk[:n], func(etype uint16, code uint16, value int32) {
-				select {
-				case evC <- rawEvent{etype, code, value}:
-				default:
-					// consumer stalled (no socket); drop rather than block the device
+			parser.feedTimed(buf[:n], func(ev pen.Event) {
+				if cfg.DumpEvents {
+					fmt.Printf("[ev] type=%d code=%d value=%d t=%d\n", ev.Type, ev.Code, ev.Value, ev.TimeMS)
 				}
+				if ev.Type == pen.EvSyn && ev.Code == pen.SynDropped {
+					// The kernel buffer overflowed: discard up to the next SYN_REPORT, then
+					// read the true state from the device (evdev's documented recovery).
+					fmt.Printf("[bridge] kernel dropped pen events; resyncing\n")
+					resync = true
+					return
+				}
+				if resync {
+					if ev.Type == pen.EvSyn && ev.Code == pen.SynReport {
+						resync = false
+						for _, s := range deviceState(fd, ev.TimeMS) {
+							emit(s)
+						}
+					}
+					return
+				}
+				emit(ev)
 			})
 		}
 		f.Close()
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// deviceState reads contact and position from the device and returns them as events ending in
+// a SYN_REPORT, so the machine sees one coherent, current sample.
+func deviceState(fd int, tsMS int64) []pen.Event {
+	var evs []pen.Event
+	if keys, err := getKeyBits(fd); err == nil {
+		for _, k := range []uint16{pen.BtnToolPen, pen.BtnToolRubber, pen.BtnTouch} {
+			v := int32(0)
+			if keys[k/8]&(1<<(k%8)) != 0 {
+				v = 1
+			}
+			evs = append(evs, pen.Event{Type: pen.EvKey, Code: k, Value: v, TimeMS: tsMS})
+		}
+	}
+	for _, a := range []uint16{pen.AbsX, pen.AbsY, pen.AbsPressure, pen.AbsDistance} {
+		if info, err := getAbsInfo(fd, int(a)); err == nil {
+			evs = append(evs, pen.Event{Type: pen.EvAbs, Code: a, Value: info.Value, TimeMS: tsMS})
+		}
+	}
+	return append(evs, pen.Event{Type: pen.EvSyn, Code: pen.SynReport, TimeMS: tsMS})
 }
 
 // typerForever owns the virtual keyboard and types whatever arrives on in.
@@ -266,8 +379,8 @@ func typerForever(in <-chan string, perChar time.Duration, debug bool) {
 }
 
 // pumpKeys forwards keyboard messages over the current socket until stop closes.
-// WSConn.WriteJSON is mutex-protected, so this is safe next to the stroke writer.
-// A write failure is reported to the socket's error channel so runOnce reconnects.
+// WSConn writes are mutex-protected, so this is safe next to the outbox writer.
+// A write failure is reported to the socket's error channel so the writer reconnects.
 func pumpKeys(ws *WSConn, keyC <-chan outKey, stop <-chan struct{}) {
 	for {
 		select {
@@ -278,196 +391,6 @@ func pumpKeys(ws *WSConn, keyC <-chan outKey, stop <-chan struct{}) {
 				ws.sendErr(err)
 				return
 			}
-		}
-	}
-}
-
-func runOnce(evC <-chan rawEvent, rng absRanges, cfg BridgeConfig, ws *WSConn, flushEvery time.Duration, strokesSent *atomic.Int64) error {
-	// Input state (raw)
-	var (
-		xRaw, yRaw, pRaw, dRaw int32
-		hasX, hasY             bool
-	)
-
-	// Tool + brush state
-	var (
-		btnTouchDown   bool
-		toolPenDown    bool
-		toolRubberDown bool
-		curBrush       = cfg.Brush
-	)
-
-	// Stroke state
-	var (
-		touching     bool
-		strokeID     string
-		batch        [][]float64
-		lastFlush    = time.Now()
-		lastAnyEvent = time.Now()
-
-		// Used to drop micro-jitter after normalization.
-		lastNormX    float64
-		lastNormY    float64
-		haveLastNorm bool
-	)
-
-	sendPts := func(force bool) error {
-		if strokeID == "" || len(batch) == 0 {
-			return nil
-		}
-		if !force && time.Since(lastFlush) < flushEvery && len(batch) < cfg.MaxBatchPoints {
-			return nil
-		}
-		if err := ws.WriteJSON(outStrokePts{T: "stroke_pts", ID: strokeID, Pts: batch}); err != nil {
-			return err
-		}
-		batch = nil
-		lastFlush = time.Now()
-		return nil
-	}
-
-	handle := func(etype uint16, code uint16, value int32) {
-		lastAnyEvent = time.Now()
-		if cfg.DumpEvents {
-			fmt.Printf("[ev] type=%d code=%d value=%d\n", etype, code, value)
-		}
-
-		switch etype {
-		case EV_ABS:
-			switch code {
-			case ABS_X:
-				xRaw = value
-				hasX = true
-			case ABS_Y:
-				yRaw = value
-				hasY = true
-			case ABS_PRESSURE:
-				pRaw = value
-			case ABS_DISTANCE:
-				dRaw = value
-			}
-
-		case EV_KEY:
-			switch code {
-			case BTN_TOUCH:
-				btnTouchDown = value != 0
-			case BTN_TOOL_PEN:
-				toolPenDown = value != 0
-			case BTN_TOOL_RUBBER:
-				toolRubberDown = value != 0
-			}
-
-			// Maintain current brush based on current tool state.
-			if toolRubberDown {
-				curBrush = "eraser"
-			} else {
-				curBrush = cfg.Brush
-			}
-
-		case EV_SYN:
-			if code != SYN_REPORT {
-				return
-			}
-
-			// Decide "down" based on chosen mode, using the most recent state.
-			mode := strings.ToLower(strings.TrimSpace(cfg.TouchMode))
-			if mode == "" {
-				mode = "auto"
-			}
-
-			// Auto heuristic: prefer BTN_TOUCH when available, else pressure, else distance, else tool.
-			if mode == "auto" {
-				if btnTouchDown {
-					mode = "btn"
-				} else {
-					// We treat "pressure mode" as a threshold on the normalized pressure value,
-					// but only if pressure range is meaningful.
-					mode = "pressure"
-				}
-			}
-
-			var down bool
-			switch mode {
-			case "btn":
-				down = btnTouchDown
-			case "pressure":
-				down = norm(pRaw, rng.pMin, rng.pMax) > cfg.PressureThreshold
-			case "distance":
-				down = int(dRaw) <= cfg.DistanceThreshold
-			case "tool":
-				down = toolPenDown || toolRubberDown
-			default:
-				down = btnTouchDown
-			}
-
-			// Start/end strokes on transitions.
-			if down && !touching {
-				touching = true
-				strokeID = fmt.Sprintf("u_%x", time.Now().UnixNano())
-				batch = nil
-				haveLastNorm = false
-				lastFlush = time.Now()
-				_ = ws.WriteJSON(outStrokeBegin{T: "stroke_begin", ID: strokeID, Layer: "user", Brush: curBrush, Color: cfg.Color, TS: nowMS()})
-			} else if !down && touching {
-				touching = false
-				_ = sendPts(true)
-				_ = ws.WriteJSON(outStrokeEnd{T: "stroke_end", ID: strokeID, TS: nowMS()})
-				strokesSent.Add(1)
-				strokeID = ""
-				return
-			}
-
-			// Emit one coherent point per SYN_REPORT (prevents X/Y desync artifacts).
-			if touching && strokeID != "" && hasX && hasY {
-				x := norm(xRaw, rng.xMin, rng.xMax)
-				y := norm(yRaw, rng.yMin, rng.yMax)
-				p := norm(pRaw, rng.pMin, rng.pMax)
-
-				if haveLastNorm {
-					dx := x - lastNormX
-					dy := y - lastNormY
-					if (dx*dx + dy*dy) < 1e-8 {
-						return
-					}
-				}
-				lastNormX, lastNormY, haveLastNorm = x, y, true
-
-				batch = append(batch, []float64{x, y, p, float64(nowMS())})
-				_ = sendPts(false)
-			}
-		}
-	}
-
-	debugTick := time.Now()
-	flushTick := time.NewTicker(flushEvery)
-	defer flushTick.Stop()
-
-	for {
-		select {
-		case err := <-ws.Err():
-			// ping/pong/close/write failure: bail so the outer loop reconnects
-			return err
-		case ev := <-evC:
-			handle(ev.etype, ev.code, ev.value)
-		case <-flushTick.C:
-		}
-
-		// Flush on timer even if SYN_REPORT is sparse.
-		if strokeID != "" && len(batch) > 0 && time.Since(lastFlush) >= flushEvery {
-			if err := sendPts(true); err != nil {
-				return err
-			}
-		}
-
-		if cfg.Debug && time.Since(debugTick) > 2*time.Second {
-			debugTick = time.Now()
-			fmt.Printf("[bridge] stats touching=%v strokes=%d brush=%s\n", touching, strokesSent.Load(), curBrush)
-		}
-
-		// If input goes quiet, print a hint in debug mode.
-		if cfg.Debug && time.Since(lastAnyEvent) > 5*time.Second {
-			fmt.Printf("[bridge] note: no pen events for 5s (fine if idle; else try -list-devices or -input /dev/input/eventX)\n")
-			lastAnyEvent = time.Now()
 		}
 	}
 }
