@@ -58,10 +58,10 @@ WebView bridge as base64 (2x faster than the SDK's default number array even in 
 | --- | --- | --- |
 | `img=WxH` | `288x144` | canvas container size (max 288x144) |
 | `loupe=WxH` / `loupe=0` | `128x64` | loupe size, or disable it |
-| `fmt=gray4` | `gray8` | packed 4-bit pixels, half the bytes |
-| `enc=array` | `b64` | revert to number[] marshaling |
-| `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors |
-| `ai=0` | `1` | start with the AI ghost layer hidden |
+| `fmt=gray8` / `fmt=gray4` | `png` | raw pixels instead of PNG (gray4: packed 4-bit, half of gray8) |
+| `enc=b64` | `array` | base64 string imageData (the phone host rejects it; simulator/bench only) |
+| `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors (with a loupe the canvas refreshes at `stroke_end`) |
+| `ai=1` | `0` | show the AI ghost layer |
 | `binarize=0` | `1` | keep antialiased grey (compresses worse) |
 | `bench=1` | | on-device benchmark: rebuilds the page per config and reports min/median ms in the HUD and console; `bench=0` returns |
 

@@ -55,8 +55,8 @@ The pen bridge and Bluetooth + keyboard keeper start at boot (`codrawer-bridge.s
 ssh root@192.168.50.156 "systemctl restart codrawer-bridge; journalctl -u codrawer-bridge -f"
 ```
 
-Rebuild + deploy the bridge: `cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .`
-then `scp` to `/home/root/codrawer_bridge_native.new`, `chmod +x`, `mv -f`, `systemctl restart codrawer-bridge`.
+Rebuild + deploy the bridge and boot files: `scripts/dev/deploy-tablet.sh` (waits for the tablet to
+wake, re-installs the units only if they changed, health-checks the router; keeps `.prev`).
 
 ## Facts that cost hours (do not rediscover)
 

@@ -9,6 +9,7 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 | `keysend.py "<text>" [delay]` | types `<text>` into the session as `key` messages the way the tablet keyboard would; `\n` Enter, `\t` Tab, `^k` Ctrl+K, `#Up;` / `#Home;` / `#Del;` named keys. On Git Bash set `MSYS_NO_PATHCONV=1` or a leading `/hw` becomes a Windows path. |
 | `termlisten.py <secs>` | prints every `term` message (terminal replies) for N seconds |
 | `keytail.py <logfile> <secs>` | persistent key decoder: appends committed and partial lines to a file |
+| `deploy-tablet.sh` | builds the bridge and deploys it + boot files to the tablet, restarts, health-checks |
 | `replay_to.py <ws-url> <recording.jsonl> <secs>` | streams a recording's strokes into any session, capping idle gaps |
 | `termdirect.py` | sends one `term_prompt` (edit the text / `attach` field) and prints the reply |
 
