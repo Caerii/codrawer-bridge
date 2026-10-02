@@ -1,90 +1,89 @@
 //! Linux input constants and the `input_event` stream parser (linux_input.go). Portable: the
 //! parser only sees bytes, so it is tested on any host; the ioctls live in `linux`.
 
-pub const EV_SYN: u16 = 0x00;
-pub const EV_KEY: u16 = 0x01;
-pub const EV_ABS: u16 = 0x03;
+pub use crate::pen::{
+    Event as RawEvent, Ranges as AbsRanges, ABS_DISTANCE, ABS_PRESSURE, ABS_X, ABS_Y, BTN_TOOL_PEN, BTN_TOOL_RUBBER,
+    BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, SYN_DROPPED, SYN_REPORT,
+};
 
-// Stylus tool keys
-pub const BTN_TOUCH: u16 = 0x14A;
-pub const BTN_TOOL_PEN: u16 = 0x140;
-pub const BTN_TOOL_RUBBER: u16 = 0x141;
+/// `sizeof(struct input_event)` on this platform: a `timeval` of two `long`s, then type, code
+/// and value. 24 bytes where `long` is 64-bit (the Paper Pro is aarch64), else 16.
+pub const EVENT_SIZE: usize = if std::mem::size_of::<usize>() == 8 { 24 } else { 16 };
 
-// ABS axes
-pub const ABS_X: u16 = 0x00;
-pub const ABS_Y: u16 = 0x01;
-pub const ABS_PRESSURE: u16 = 0x18;
-pub const ABS_DISTANCE: u16 = 0x19;
-
-pub const SYN_REPORT: u16 = 0x00;
-
-/// One parsed `input_event` (type, code, value).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RawEvent {
-    pub etype: u16,
-    pub code: u16,
-    pub value: i32,
-}
-
-/// Axis ranges from EVIOCGABS, used to normalize to 0..1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AbsRanges {
-    pub x_min: i32,
-    pub x_max: i32,
-    pub y_min: i32,
-    pub y_max: i32,
-    pub p_min: i32,
-    pub p_max: i32,
-}
-
-impl Default for AbsRanges {
-    /// The fallback when an ioctl fails (same as Go).
-    fn default() -> Self {
-        AbsRanges { x_min: 0, x_max: 1, y_min: 0, y_max: 1, p_min: 0, p_max: 4096 }
-    }
-}
-
-/// Parses `input_event` structs from a byte stream. The kernel struct is 24 bytes on 64-bit
-/// (timeval 16 + type 2 + code 2 + value 4) and 16 on 32-bit; the size is guessed from the
-/// first chunk exactly as the Go parser does.
-#[derive(Debug, Default)]
+/// Parses `input_event` structs, with their kernel timestamps, from a byte stream. The struct
+/// size follows the platform (Go used to guess it from the first read, which misread 48-byte
+/// reads of 16-byte events).
+#[derive(Debug)]
 pub struct InputParser {
+    /// A partial event carried over to the next read.
     buf: Vec<u8>,
     sz: usize,
 }
 
+impl Default for InputParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputParser {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_size(EVENT_SIZE)
+    }
+
+    /// A parser for `sz`-byte events (16 or 24); tests use it to cover the other layout.
+    pub fn with_size(sz: usize) -> Self {
+        assert!(sz == 16 || sz == 24, "input_event is 16 or 24 bytes");
+        InputParser { buf: Vec::new(), sz }
     }
 
     pub fn feed(&mut self, chunk: &[u8], mut cb: impl FnMut(RawEvent)) {
-        self.buf.extend_from_slice(chunk);
-        if self.sz == 0 {
-            let n = self.buf.len();
-            if n >= 48 && n % 24 == 0 {
-                self.sz = 24;
-            } else if n >= 32 && n % 16 == 0 {
-                self.sz = 16;
-            } else if n >= 24 {
-                // fallback: assume 24 on 64-bit devices (Paper Pro is aarch64)
-                self.sz = 24;
-            }
-        }
-        if self.sz == 0 {
-            return;
-        }
         let sz = self.sz;
-        let whole = self.buf.len() / sz * sz;
-        for ev in self.buf[..whole].chunks_exact(sz) {
-            let off = if sz == 24 { 16 } else { 8 };
-            cb(RawEvent {
-                etype: u16::from_le_bytes([ev[off], ev[off + 1]]),
-                code: u16::from_le_bytes([ev[off + 2], ev[off + 3]]),
-                value: i32::from_le_bytes([ev[off + 4], ev[off + 5], ev[off + 6], ev[off + 7]]),
-            });
+        let mut rest = chunk;
+        if !self.buf.is_empty() {
+            // complete the carried-over partial event first
+            let need = sz - self.buf.len();
+            let take = need.min(rest.len());
+            self.buf.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            if self.buf.len() < sz {
+                return;
+            }
+            cb(decode(&self.buf, sz));
+            self.buf.clear();
         }
-        self.buf.drain(..whole);
+        // common case: whole events straight from the caller's (reused) buffer, no copy
+        let mut evs = rest.chunks_exact(sz);
+        for ev in &mut evs {
+            cb(decode(ev, sz));
+        }
+        self.buf.extend_from_slice(evs.remainder());
+    }
+}
+
+fn le16(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
+}
+
+fn le32(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+
+fn le64(b: &[u8], o: usize) -> u64 {
+    u64::from_le_bytes(b[o..o + 8].try_into().expect("8 bytes"))
+}
+
+fn decode(ev: &[u8], sz: usize) -> RawEvent {
+    let (sec, usec, off) = if sz == 24 {
+        (le64(ev, 0) as i64, le64(ev, 8) as i64, 16)
+    } else {
+        (le32(ev, 0) as i32 as i64, le32(ev, 4) as i32 as i64, 8)
+    };
+    RawEvent {
+        etype: le16(ev, off),
+        code: le16(ev, off + 2),
+        value: le32(ev, off + 4) as i32,
+        time_ms: sec * 1000 + usec / 1000,
     }
 }
 
@@ -101,34 +100,59 @@ pub fn encode_event24(etype: u16, code: u16, value: i32) -> [u8; 24] {
 mod tests {
     use super::*;
 
+    fn ev(etype: u16, code: u16, value: i32, time_ms: i64) -> RawEvent {
+        RawEvent { etype, code, value, time_ms }
+    }
+
+    fn timed24(etype: u16, code: u16, value: i32, sec: i64, usec: i64) -> [u8; 24] {
+        let mut b = encode_event24(etype, code, value);
+        b[0..8].copy_from_slice(&sec.to_le_bytes());
+        b[8..16].copy_from_slice(&usec.to_le_bytes());
+        b
+    }
+
+    fn timed16(etype: u16, code: u16, value: i32, sec: i32, usec: i32) -> [u8; 16] {
+        let mut b = [0u8; 16];
+        b[0..4].copy_from_slice(&sec.to_le_bytes());
+        b[4..8].copy_from_slice(&usec.to_le_bytes());
+        b[8..10].copy_from_slice(&etype.to_le_bytes());
+        b[10..12].copy_from_slice(&code.to_le_bytes());
+        b[12..16].copy_from_slice(&value.to_le_bytes());
+        b
+    }
+
     #[test]
     fn parses_24_byte_events_across_chunk_boundaries() {
         let mut bytes = Vec::new();
-        bytes.extend(encode_event24(EV_ABS, ABS_X, 1234));
+        bytes.extend(timed24(EV_ABS, ABS_X, 1234, 1_790_000_000, 123_456));
         bytes.extend(encode_event24(EV_KEY, BTN_TOUCH, 1));
         bytes.extend(encode_event24(EV_SYN, SYN_REPORT, 0));
-        let mut p = InputParser::new();
+        let mut p = InputParser::with_size(24);
         let mut got = Vec::new();
-        p.feed(&bytes[..48], |e| got.push(e)); // first chunk fixes the size
-        p.feed(&bytes[48..60], |e| got.push(e)); // half an event
+        p.feed(&bytes[..10], |e| got.push(e)); // less than one event
+        p.feed(&bytes[10..60], |e| got.push(e)); // ends half way through the third
         p.feed(&bytes[60..], |e| got.push(e));
         assert_eq!(
             got,
-            vec![
-                RawEvent { etype: EV_ABS, code: ABS_X, value: 1234 },
-                RawEvent { etype: EV_KEY, code: BTN_TOUCH, value: 1 },
-                RawEvent { etype: EV_SYN, code: SYN_REPORT, value: 0 },
-            ]
+            vec![ev(EV_ABS, ABS_X, 1234, 1_790_000_000_123), ev(EV_KEY, BTN_TOUCH, 1, 0), ev(EV_SYN, SYN_REPORT, 0, 0)]
         );
     }
 
     #[test]
-    fn negative_values_survive() {
-        let mut p = InputParser::new();
+    fn parses_16_byte_events_even_in_48_byte_reads() {
+        // Three 16-byte events are 48 bytes: the old size guess took them for two 24-byte ones.
+        let mut bytes = Vec::new();
+        bytes.extend(timed16(EV_ABS, ABS_X, 7, 100, 2_000));
+        bytes.extend(timed16(EV_ABS, ABS_Y, -7, 100, 3_000));
+        bytes.extend(timed16(EV_SYN, SYN_REPORT, 0, 100, 4_999));
+        let mut p = InputParser::with_size(16);
         let mut got = Vec::new();
-        let mut b = encode_event24(EV_ABS, ABS_Y, -7).to_vec();
-        b.extend(encode_event24(EV_SYN, SYN_REPORT, 0));
-        p.feed(&b, |e| got.push(e));
-        assert_eq!(got[0].value, -7);
+        p.feed(&bytes, |e| got.push(e));
+        assert_eq!(got, vec![ev(EV_ABS, ABS_X, 7, 100_002), ev(EV_ABS, ABS_Y, -7, 100_003), ev(EV_SYN, SYN_REPORT, 0, 100_004)]);
+    }
+
+    #[test]
+    fn size_follows_the_platform() {
+        assert_eq!(EVENT_SIZE, if cfg!(target_pointer_width = "64") { 24 } else { 16 });
     }
 }

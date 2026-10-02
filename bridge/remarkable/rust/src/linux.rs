@@ -93,6 +93,19 @@ pub fn get_ranges(fd: i32) -> AbsRanges {
     r
 }
 
+/// KEY_MAX 0x2ff → 96 bytes of key bits.
+const KEY_BITS_LEN: usize = 96;
+
+/// EVIOCGKEY(len) = _IOR('E', 0x18, len): the device's current key state.
+const EVIOCGKEY: u32 = ioc(IOC_READ, b'E' as u32, 0x18, KEY_BITS_LEN as u32);
+
+/// Reads the device's current key state: bit k of the result is key k.
+fn get_key_bits(fd: i32) -> io::Result<[u8; KEY_BITS_LEN]> {
+    let mut bits = [0u8; KEY_BITS_LEN];
+    ioctl_ptr(fd, EVIOCGKEY, bits.as_mut_ptr())?;
+    Ok(bits)
+}
+
 pub fn try_grab(fd: i32) {
     let mut one: libc::c_int = 1;
     let _ = ioctl_ptr(fd, EVIOCGRAB, &mut one);
@@ -205,10 +218,23 @@ pub fn auto_detect_active_device(explicit: &str, debug: bool, probe: Duration) -
 // ── pen reader ─────────────────────────────────────────────────────────────
 
 /// Reads the pen device into `ev_tx` for the life of the process, reopening it on error. The
-/// first successful open reports the axis ranges on `ready`.
-pub fn pen_reader_forever(path: &str, no_grab: bool, ev_tx: mpsc::Sender<RawEvent>, ready: oneshot::Sender<AbsRanges>) {
+/// first successful open reports the axis ranges on `ready`. After a kernel SYN_DROPPED it
+/// discards up to the next SYN_REPORT, then synthesizes the true device state (evdev's
+/// documented recovery), so the machine never keeps a stale contact state.
+pub fn pen_reader_forever(
+    path: &str,
+    no_grab: bool,
+    dump_events: bool,
+    ev_tx: mpsc::Sender<RawEvent>,
+    ready: oneshot::Sender<AbsRanges>,
+) {
     let mut ready = Some(ready);
-    let mut buf = [0u8; 4096];
+    let mut buf = vec![0u8; 64 * EVENT_SIZE]; // reused: up to 64 events per read
+    // The machine never blocks, so this only fills if it is wedged; dropping is the lesser evil
+    // there, and the SYN_DROPPED-style resync repairs the state.
+    let emit = |ev: RawEvent| {
+        let _ = ev_tx.try_send(ev);
+    };
     loop {
         let mut f = match File::open(path) {
             Ok(f) => f,
@@ -226,6 +252,7 @@ pub fn pen_reader_forever(path: &str, no_grab: bool, ev_tx: mpsc::Sender<RawEven
             let _ = r.send(get_ranges(fd));
         }
         let mut parser = InputParser::new();
+        let mut resync = false;
         loop {
             let n = match f.read(&mut buf) {
                 Ok(0) => {
@@ -239,14 +266,64 @@ pub fn pen_reader_forever(path: &str, no_grab: bool, ev_tx: mpsc::Sender<RawEven
                     break;
                 }
             };
-            // consumer stalled (no socket): drop rather than block the device
-            parser.feed(&buf[..n], |e| {
-                let _ = ev_tx.try_send(e);
+            parser.feed(&buf[..n], |ev| {
+                if dump_events {
+                    println!("[ev] type={} code={} value={} t={}", ev.etype, ev.code, ev.value, ev.time_ms);
+                }
+                if ev.etype == EV_SYN && ev.code == SYN_DROPPED {
+                    // The kernel buffer overflowed: discard up to the next SYN_REPORT, then read
+                    // the true state from the device.
+                    println!("[bridge] kernel dropped pen events; resyncing");
+                    resync = true;
+                    return;
+                }
+                if resync {
+                    if ev.etype == EV_SYN && ev.code == SYN_REPORT {
+                        resync = false;
+                        for s in device_state(fd, ev.time_ms) {
+                            emit(s);
+                        }
+                    }
+                    return;
+                }
+                emit(ev);
             });
         }
         drop(f);
         sleep(Duration::from_secs(2));
     }
+}
+
+/// Contact and position read from the device, as events ending in a SYN_REPORT, so the machine
+/// sees one coherent, current sample.
+fn device_state(fd: i32, ts_ms: i64) -> Vec<RawEvent> {
+    let ev = |etype, code, value| RawEvent { etype, code, value, time_ms: ts_ms };
+    let mut evs = Vec::with_capacity(8);
+    if let Ok(keys) = get_key_bits(fd) {
+        for k in [BTN_TOOL_PEN, BTN_TOOL_RUBBER, BTN_TOUCH] {
+            evs.push(ev(EV_KEY, k, key_down(&keys, k) as i32));
+        }
+    }
+    for a in [ABS_X, ABS_Y, ABS_PRESSURE, ABS_DISTANCE] {
+        if let Ok(info) = get_abs_info(fd, a) {
+            evs.push(ev(EV_ABS, a, info.value));
+        }
+    }
+    evs.push(ev(EV_SYN, SYN_REPORT, 0));
+    evs
+}
+
+fn key_down(bits: &[u8; KEY_BITS_LEN], k: u16) -> bool {
+    bits[(k / 8) as usize] & (1 << (k % 8)) != 0
+}
+
+/// Takes a 3 s timed kernel wake lock, so the last stroke leaves the radio before autosleep
+/// suspends the tablet. It expires by itself; errors (no such file, no permission) are ignored.
+pub fn hold_awake() {
+    let _ = OpenOptions::new()
+        .write(true)
+        .open("/sys/power/wake_lock")
+        .and_then(|mut f| f.write_all(b"codrawer-pen 3000000000"));
 }
 
 // ── keyboard reader ────────────────────────────────────────────────────────
@@ -413,6 +490,16 @@ mod tests {
     fn ioctl_numbers_match_the_kernel_headers() {
         assert_eq!(eviocgabs(ABS_X), 0x8018_4540);
         assert_eq!(EVIOCGRAB, 0x4004_4590);
+        assert_eq!(EVIOCGKEY, 0x8060_4518);
+    }
+
+    #[test]
+    fn key_bits_index_like_the_kernel() {
+        let mut bits = [0u8; KEY_BITS_LEN];
+        bits[(BTN_TOUCH / 8) as usize] = 1 << (BTN_TOUCH % 8);
+        assert!(key_down(&bits, BTN_TOUCH));
+        assert!(!key_down(&bits, BTN_TOOL_PEN));
+        assert!(!key_down(&bits, BTN_TOOL_RUBBER));
         assert_eq!(ioc(IOC_WRITE, b'U' as u32, 3, 92), UI_DEV_SETUP);
         assert_eq!(ioc(IOC_WRITE, b'U' as u32, 100, 4), UI_SET_EVBIT);
     }

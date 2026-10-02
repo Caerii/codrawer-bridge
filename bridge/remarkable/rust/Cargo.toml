@@ -25,6 +25,10 @@ socket2 = { version = "0.6", features = ["all"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
+# Tests only: the router ordering tests run the server on several threads for real concurrency.
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+
 # Release is tuned for the tablet: one codegen unit + LTO, abort on panic (systemd restarts the
 # service, same as a Go panic), symbols stripped. `--profile min-size` trades speed for bytes.
 [profile.release]

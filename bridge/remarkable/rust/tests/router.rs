@@ -18,10 +18,15 @@ async fn new_server() -> String {
     addr
 }
 
-async fn dial(addr: &str, session: &str) -> Ws {
+/// Connects to `ws://{addr}{path}` without reading anything.
+async fn dial_path(addr: &str, path: &str) -> Ws {
     let stream = TcpStream::connect(addr).await.unwrap();
-    let url = format!("ws://{addr}/ws/{session}");
-    let (mut ws, _) = tokio_tungstenite::client_async(url, stream).await.expect("dial");
+    let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}{path}"), stream).await.expect("dial");
+    ws
+}
+
+async fn dial(addr: &str, session: &str) -> Ws {
+    let mut ws = dial_path(addr, &format!("/ws/{session}")).await;
     let m = read(&mut ws).await;
     assert!(m["t"] == "hello" && m["session"] == session, "want hello for {session}, got {m}");
     ws
@@ -232,4 +237,111 @@ async fn stalled_client_is_dropped_not_blocking() {
     }
     send(&mut tablet, r#"{"t":"key","key":"z"}"#).await;
     assert_eq!(read(&mut glasses).await["key"], "z");
+}
+
+fn stroke_id(i: usize) -> String {
+    format!("u_{}{}", (b'a' + (i % 26) as u8) as char, "x".repeat(i / 26))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn big_page_replay_does_not_drop_joiner() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut watcher = dial(&srv, "s1").await;
+    const STROKES: usize = 600; // 1800 replay messages, well past SEND_QUEUE
+    // The watcher drains while the tablet sends (a live client keeps up); it also tells us when
+    // the router has processed everything.
+    let drained = tokio::spawn(async move {
+        for _ in 0..STROKES * 3 {
+            read(&mut watcher).await;
+        }
+        watcher
+    });
+    for i in 0..STROKES {
+        let id = stroke_id(i);
+        send(&mut tablet, &format!(r#"{{"t":"stroke_begin","id":"{id}"}}"#)).await;
+        send(&mut tablet, &format!(r#"{{"t":"stroke_pts","id":"{id}","pts":[[0.5,0.5,0.5,1]]}}"#)).await;
+        send(&mut tablet, &format!(r#"{{"t":"stroke_end","id":"{id}"}}"#)).await;
+    }
+    let _watcher = drained.await.expect("watcher");
+    let mut late = dial(&srv, "s1").await;
+    for i in 0..STROKES * 3 {
+        let m = read(&mut late).await;
+        assert!(m["t"].is_string(), "replay message {i}: {m}");
+    }
+}
+
+#[tokio::test]
+async fn hello_says_replay_and_source_can_skip_it() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut watcher = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_1"}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_1"}"#).await;
+    read(&mut watcher).await;
+    read(&mut watcher).await;
+
+    let mut src = dial_path(&srv, "/ws/s1?replay=0").await;
+    let m = read(&mut src).await;
+    assert!(m["t"] == "hello" && m["replay"] == false, "hello for a source: {m}");
+
+    let mut v = dial_path(&srv, "/ws/s1").await;
+    let m = read(&mut v).await;
+    assert_eq!(m["replay"], true, "hello for a viewer: {m}");
+    let m = read(&mut v).await;
+    assert_eq!(m["t"], "stroke_begin", "viewer replay: {m}");
+    expect_quiet(&mut src, Duration::from_millis(150)).await; // the pen source got no page replay
+}
+
+#[tokio::test]
+async fn leaving_mid_stroke_ends_it_for_everyone() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut glasses = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_1"}"#).await;
+    read(&mut glasses).await;
+    drop(tablet); // the bridge's socket dies mid-stroke
+    let m = read(&mut glasses).await;
+    assert!(m["t"] == "stroke_end" && m["id"] == "u_1", "want synthetic stroke_end, got {m}");
+    let mut late = dial(&srv, "s1").await;
+    read(&mut late).await; // stroke_begin
+    let m = read(&mut late).await;
+    assert_eq!(m["t"], "stroke_end", "replayed stroke still open: {m}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_messages_during_replay_keep_order() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut watcher = dial(&srv, "s1").await;
+    const PAGE: usize = 400;
+    for i in 0..PAGE {
+        send(&mut tablet, &format!(r#"{{"t":"stroke_begin","id":"u_{i}"}}"#)).await;
+        send(&mut tablet, &format!(r#"{{"t":"stroke_end","id":"u_{i}"}}"#)).await;
+    }
+    for _ in 0..PAGE * 2 {
+        read(&mut watcher).await;
+    }
+    // Join while the tablet keeps drawing: nothing replayed may arrive after a live message.
+    const LIVE: usize = 50;
+    let writer = tokio::spawn(async move {
+        for i in 0..LIVE {
+            send(&mut tablet, &format!(r#"{{"t":"stroke_begin","id":"live_{i}"}}"#)).await;
+        }
+        tablet
+    });
+    let mut late = dial(&srv, "s1").await;
+    let _tablet = writer.await.expect("writer");
+    let (mut n_live, mut n_replayed) = (0, 0);
+    for _ in 0..PAGE * 2 + LIVE {
+        let m = read(&mut late).await;
+        let id = m["id"].as_str().unwrap();
+        if id.starts_with("live_") {
+            n_live += 1;
+            continue;
+        }
+        assert_eq!(n_live, 0, "replayed {id} after a live message");
+        n_replayed += 1;
+    }
+    assert_eq!((n_replayed, n_live), (PAGE * 2, LIVE));
 }

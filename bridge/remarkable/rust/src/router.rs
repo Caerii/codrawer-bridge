@@ -9,7 +9,13 @@
 //! - A client that joins mid-drawing gets the current page replayed (begin/pts/end per stroke).
 //! - Every client has its own bounded send queue; a client that falls behind is dropped (it
 //!   reconnects and gets the replay) instead of stalling the tablet's stream.
-//! - The router pings clients and drops ones that stop answering.
+//! - The router pings clients and drops ones that stop answering. Besides WebSocket pings it
+//!   sends `{"t":"ping"}`, which browsers can see, so the glasses app can detect a half-open
+//!   socket on its side. hello carries `"replay":true|false`.
+//! - A replay is built outside the session lock; live messages for that client are held until
+//!   its replay is queued, so a big page never freezes the stream for everyone else.
+//! - A pen source can join with `?replay=0` (the bridge does). When a client leaves mid-stroke
+//!   its open strokes are ended for everyone.
 //!
 //! Shared live editing: clients keep the session document as a Yjs CRDT and send
 //! `{"t":"doc_update","u":<base64>}`. The router never decodes them; it relays each one, keeps the
@@ -51,13 +57,17 @@ pub const WRITE_WAIT: Duration = Duration::from_secs(5);
 /// Points per replayed stroke_pts message.
 pub const REPLAY_PTS: usize = 256;
 pub const MAX_STROKES: usize = 4000;
-/// Page memory bound; the oldest strokes go first.
-pub const MAX_POINTS: usize = 400_000;
+/// Page memory bound (~90 B/point, ~14 MB); the oldest strokes go first.
+pub const MAX_POINTS: usize = 150_000;
+/// One stroke never holds more for replay (a pen resting on the glass); live relay is not capped.
+pub const MAX_STROKE_POINTS: usize = 20_000;
 pub const MAX_MESSAGE: usize = 1 << 20;
 /// doc_update log entries before asking a client for a snapshot.
 pub const DOC_COMPACT_AT: usize = 256;
 /// Updates per replayed doc_update message.
 pub const DOC_REPLAY_N: usize = 256;
+/// Re-ask another writer if the asked one never answers.
+pub const DOC_COMPACT_AFTER: Duration = Duration::from_secs(10);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_HEADER: usize = 64 << 10;
 
@@ -149,31 +159,42 @@ impl Router {
         };
         // Log IPv4 peers on the dual-stack socket as 1.2.3.4:port, not [::ffff:1.2.3.4]:port.
         let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
-        self.run_client(ws, id, addr.to_string()).await;
+        self.run_client(ws, id, addr.to_string(), req.replay).await;
     }
 
-    async fn run_client(self, ws: tokio_tungstenite::WebSocketStream<Prefixed>, id: String, addr: String) {
+    async fn run_client(self, ws: tokio_tungstenite::WebSocketStream<Prefixed>, id: String, addr: String, want_replay: bool) {
         let sess = self.session(&id);
         let cid = self.next_client.fetch_add(1, Ordering::Relaxed);
 
-        // Register and queue hello + replay under the session lock, so no live message can slip
-        // in between the replay and the first broadcast this client sees.
-        let (client, rx, n) = {
+        // Register under the lock with a snapshot of the page; broadcasts to this client are held
+        // (Member::held) until the replay built from the snapshot is queued, so ordering is exact
+        // without serializing the page while everyone else waits on the lock.
+        let client = Arc::new(Client { addr: addr.clone(), tx: Mutex::new(None) });
+        let (snap, n) = {
             let mut s = sess.lock().unwrap();
-            let replay = s.replay();
-            // Deliberate deviation from Go: the queue holds the whole replay on top of the live
-            // budget, so a late joiner on a busy page is not dropped as "stalled" before its
-            // writer has sent anything (Go queues the replay into the same 1024 slots).
-            let (tx, rx) = mpsc::channel(SEND_QUEUE + replay.len() + 1);
-            let client = Arc::new(Client { addr: addr.clone(), tx: Mutex::new(Some(tx)) });
-            client.queue(json_msg(&Hello { t: "hello", session: &id }));
-            for m in replay {
-                client.queue(m);
-            }
-            s.clients.insert(cid, client.clone());
-            (client, rx, s.clients.len())
+            let snap = want_replay.then(|| s.snapshot());
+            s.clients.insert(cid, Member { client: client.clone(), held: Some(Vec::new()) });
+            (snap, s.clients.len())
         };
-        (self.logf)(&format!("[router] {addr} joined {id} ({n} clients)"));
+        let replay = snap.map(|s| s.messages()).unwrap_or_default();
+        // The queue holds the whole replay plus the usual headroom: a big page must not count as a
+        // stalled client.
+        let (tx, rx) = mpsc::channel(SEND_QUEUE + replay.len() + 1);
+        *client.tx.lock().unwrap() = Some(tx);
+        client.queue(json_msg(&Hello { t: "hello", session: &id, replay: want_replay }));
+        let replayed = replay.len();
+        for m in replay {
+            client.queue(m);
+        }
+        {
+            let mut s = sess.lock().unwrap();
+            if let Some(held) = s.clients.get_mut(&cid).and_then(|m| m.held.take()) {
+                for m in held {
+                    client.queue(m);
+                }
+            }
+        }
+        (self.logf)(&format!("[router] {addr} joined {id} ({n} clients, replayed {replayed} messages)"));
 
         let (sink, stream) = ws.split();
         let (writer_done_tx, writer_done) = oneshot::channel::<()>();
@@ -186,6 +207,7 @@ impl Router {
             if s.compact_who == Some(cid) {
                 s.compact_who = None; // ask someone else next time
             }
+            s.end_strokes_of(cid);
             s.clients.len()
         };
         client.close();
@@ -224,6 +246,8 @@ fn dual_stack(port: u16) -> io::Result<TcpListener> {
 struct Head {
     path: String,
     upgrade: bool,
+    /// False when the query says `replay=0` (a pen source).
+    replay: bool,
 }
 
 async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -250,13 +274,24 @@ fn parse_head(head: &[u8]) -> Option<Head> {
     let mut lines = text.split("\r\n");
     let mut parts = lines.next()?.split(' ');
     let (_method, target) = (parts.next()?, parts.next()?);
-    let raw_path = target.split('?').next().unwrap_or("");
+    let (raw_path, query) = target.split_once('?').unwrap_or((target, ""));
     let path = percent_decode(raw_path)?;
     let upgrade = lines.any(|l| {
         l.split_once(':')
             .is_some_and(|(k, v)| k.trim().eq_ignore_ascii_case("upgrade") && v.trim().eq_ignore_ascii_case("websocket"))
     });
-    Some(Head { path, upgrade })
+    let replay = query_get(query, "replay").as_deref() != Some("0");
+    Some(Head { path, upgrade, replay })
+}
+
+/// The first value of `key` in a query string, decoded like Go's `url.Values.Get` (`+` is a
+/// space; pairs that fail to decode are skipped).
+fn query_get(query: &str, key: &str) -> Option<String> {
+    let dec = |s: &str| percent_decode(&s.replace('+', " "));
+    query.split('&').filter(|p| !p.is_empty()).find_map(|p| {
+        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        (dec(k)? == key).then(|| dec(v)).flatten()
+    })
 }
 
 fn percent_decode(s: &str) -> Option<String> {
@@ -340,6 +375,7 @@ struct Envelope<'a> {
 struct Hello<'a> {
     t: &'static str,
     session: &'a str,
+    replay: bool,
 }
 
 #[derive(Serialize)]
@@ -359,7 +395,7 @@ struct ReplayPts<'a> {
 #[derive(Serialize)]
 struct ReplayDoc<'a> {
     t: &'static str,
-    us: &'a [String],
+    us: &'a [&'a str],
 }
 
 #[derive(Serialize)]
@@ -376,47 +412,110 @@ fn json_msg<T: Serialize>(v: &T) -> Utf8Bytes {
 
 #[derive(Default)]
 struct Session {
-    clients: HashMap<u64, Arc<Client>>,
+    clients: HashMap<u64, Member>,
     /// The page: strokes since the last clear, in arrival order, for replay to late joiners.
     order: VecDeque<String>,
     strokes: HashMap<String, Stroke>,
     points: usize,
     /// Shared document: Yjs updates (base64) in arrival order; survives clear (it is not ink).
-    doc_log: Vec<String>,
+    doc_log: Vec<Arc<str>>,
     /// The client asked for a doc_state, if any.
     compact_who: Option<u64>,
     /// doc_log length when it was asked.
     compact_from: usize,
+    /// When it was asked.
+    compact_asked: Option<Instant>,
 }
+
+/// A client as the session sees it.
+struct Member {
+    client: Arc<Client>,
+    /// `Some` while the client's replay is being queued: broadcasts wait here, in order.
+    held: Option<Vec<Utf8Bytes>>,
+}
+
+/// Points per block: one replayed stroke_pts message.
+type Block = Arc<Vec<Box<RawValue>>>;
 
 struct Stroke {
     /// The stroke_begin message as received.
     begin: Utf8Bytes,
-    /// Every point, as received.
-    pts: Vec<Box<RawValue>>,
+    /// Every point as received (up to [`MAX_STROKE_POINTS`]), in blocks of [`REPLAY_PTS`]. A
+    /// snapshot shares the blocks; only a shared, still-filling last block is copied on write.
+    blocks: Vec<Block>,
+    n_pts: usize,
+    ended: bool,
+    /// Who is drawing it (ended for everyone if they leave mid-stroke).
+    owner: u64,
+}
+
+/// The page at one instant, cheap to take under the lock: blocks are shared, not copied.
+struct PageSnapshot {
+    strokes: Vec<StrokeSnap>,
+    doc: Vec<Arc<str>>,
+}
+
+struct StrokeSnap {
+    id: String,
+    begin: Utf8Bytes,
+    blocks: Vec<Block>,
     ended: bool,
 }
 
+impl PageSnapshot {
+    /// The page as the messages a client would have seen live.
+    fn messages(&self) -> Vec<Utf8Bytes> {
+        let mut out = Vec::new();
+        for st in &self.strokes {
+            out.push(st.begin.clone());
+            for b in &st.blocks {
+                out.push(json_msg(&ReplayPts { t: "stroke_pts", id: &st.id, pts: b }));
+            }
+            if st.ended {
+                out.push(json_msg(&ReplayEnd { t: "stroke_end", id: &st.id }));
+            }
+        }
+        for chunk in self.doc.chunks(DOC_REPLAY_N) {
+            let us: Vec<&str> = chunk.iter().map(|u| &**u).collect();
+            out.push(json_msg(&ReplayDoc { t: "doc_update", us: &us }));
+        }
+        out
+    }
+}
+
 impl Session {
-    fn record(&mut self, m: &Envelope<'_>, raw: &Utf8Bytes) {
+    fn record(&mut self, m: &Envelope<'_>, raw: &Utf8Bytes, from: u64) {
         if m.id.is_empty() {
             return;
         }
         match m.t.as_str() {
             "stroke_begin" => {
                 if let Some(old) = self.strokes.get(&m.id) {
-                    self.points -= old.pts.len();
+                    self.points -= old.n_pts;
                 } else {
                     self.order.push_back(m.id.clone());
                 }
-                self.strokes.insert(m.id.clone(), Stroke { begin: raw.clone(), pts: Vec::new(), ended: false });
+                let st = Stroke { begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
+                self.strokes.insert(m.id.clone(), st);
             }
             "stroke_pts" => {
                 // Points for a stroke that began before a clear or before we started are dropped.
                 let Some(st) = self.strokes.get_mut(&m.id) else { return };
                 let pts = m.pts.as_deref().unwrap_or_default();
-                st.pts.extend(pts.iter().map(|p| (*p).to_owned()));
-                self.points += pts.len();
+                // Still relayed live; only the replay copy is capped.
+                let add = &pts[..pts.len().min(MAX_STROKE_POINTS.saturating_sub(st.n_pts))];
+                for p in add {
+                    match st.blocks.last_mut() {
+                        Some(b) if b.len() < REPLAY_PTS => Arc::make_mut(b).push((*p).to_owned()),
+                        _ => {
+                            let mut b = Vec::with_capacity(REPLAY_PTS.min(add.len()).max(16));
+                            b.push((*p).to_owned());
+                            st.blocks.push(Arc::new(b));
+                        }
+                    }
+                }
+                st.n_pts += add.len();
+                self.points += add.len();
             }
             "stroke_end" => {
                 if let Some(st) = self.strokes.get_mut(&m.id) {
@@ -428,7 +527,7 @@ impl Session {
         while (self.order.len() > MAX_STROKES || self.points > MAX_POINTS) && self.order.len() > 1 {
             let oldest = self.order.pop_front().expect("non-empty");
             if let Some(st) = self.strokes.remove(&oldest) {
-                self.points -= st.pts.len();
+                self.points -= st.n_pts;
             }
         }
     }
@@ -439,31 +538,62 @@ impl Session {
         self.points = 0;
     }
 
-    /// The page as the messages a client would have seen live.
-    fn replay(&self) -> Vec<Utf8Bytes> {
-        let mut out = Vec::new();
-        for id in &self.order {
-            let Some(st) = self.strokes.get(id) else { continue };
-            out.push(st.begin.clone());
-            for chunk in st.pts.chunks(REPLAY_PTS) {
-                out.push(json_msg(&ReplayPts { t: "stroke_pts", id, pts: chunk }));
-            }
-            if st.ended {
-                out.push(json_msg(&ReplayEnd { t: "stroke_end", id }));
-            }
-        }
-        for chunk in self.doc_log.chunks(DOC_REPLAY_N) {
-            out.push(json_msg(&ReplayDoc { t: "doc_update", us: chunk }));
-        }
-        out
+    /// The page now, for a replay built after the lock is released.
+    fn snapshot(&self) -> PageSnapshot {
+        let strokes = self
+            .order
+            .iter()
+            .filter_map(|id| {
+                let st = self.strokes.get(id)?;
+                Some(StrokeSnap { id: id.clone(), begin: st.begin.clone(), blocks: st.blocks.clone(), ended: st.ended })
+            })
+            .collect();
+        PageSnapshot { strokes, doc: self.doc_log.clone() }
     }
 
-    fn broadcast(&self, raw: &Utf8Bytes, from: u64) {
-        for (id, c) in &self.clients {
-            if *id != from {
-                c.queue(raw.clone()); // Utf8Bytes is refcounted: one buffer for every client
+    fn broadcast(&mut self, raw: &Utf8Bytes, from: u64) {
+        for (id, m) in &mut self.clients {
+            if *id == from {
+                continue;
+            }
+            // Utf8Bytes is refcounted: one buffer for every client
+            match &mut m.held {
+                Some(held) => held.push(raw.clone()), // flushed once its replay is queued
+                None => m.client.queue(raw.clone()),
             }
         }
+    }
+
+    /// Strokes `cid` was drawing will never get their stroke_end: end them for everyone.
+    fn end_strokes_of(&mut self, cid: u64) {
+        let open: Vec<String> = self
+            .order
+            .iter()
+            .filter(|id| self.strokes.get(*id).is_some_and(|st| st.owner == cid && !st.ended))
+            .cloned()
+            .collect();
+        for id in open {
+            if let Some(st) = self.strokes.get_mut(&id) {
+                st.ended = true;
+            }
+            self.broadcast(&json_msg(&ReplayEnd { t: "stroke_end", id: &id }), cid);
+        }
+    }
+
+    /// Logs and relays one doc_update from `from`. Returns true when `from` should be asked for
+    /// a doc_state: the log is long and nobody was asked, or the asked client never answered.
+    fn doc_update(&mut self, u: Arc<str>, raw: &Utf8Bytes, from: u64, now: Instant) -> bool {
+        self.doc_log.push(u);
+        self.broadcast(raw, from);
+        let stale = self.compact_who.is_some() && self.compact_asked.is_some_and(|t| now.saturating_duration_since(t) > DOC_COMPACT_AFTER);
+        if self.doc_log.len() > DOC_COMPACT_AT && (self.compact_who.is_none() || stale) {
+            // ask the client that just wrote: it is alive and holds the whole document
+            self.compact_who = Some(from);
+            self.compact_from = self.doc_log.len();
+            self.compact_asked = Some(now);
+            return true;
+        }
+        false
     }
 }
 
@@ -512,7 +642,7 @@ async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: u64, client
         match m.t.as_str() {
             "stroke_begin" | "stroke_pts" | "stroke_end" => {
                 let mut s = sess.lock().unwrap();
-                s.record(&m, &raw);
+                s.record(&m, &raw, cid);
                 s.broadcast(&raw, cid);
             }
             "key" | "cursor" | "doc" => sess.lock().unwrap().broadcast(&raw, cid),
@@ -526,11 +656,7 @@ async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: u64, client
                     continue;
                 }
                 let mut s = sess.lock().unwrap();
-                s.doc_log.push(m.u);
-                s.broadcast(&raw, cid);
-                if s.doc_log.len() > DOC_COMPACT_AT && s.compact_who.is_none() {
-                    s.compact_who = Some(cid);
-                    s.compact_from = s.doc_log.len();
+                if s.doc_update(m.u.into(), &raw, cid, Instant::now()) {
                     client.queue(Utf8Bytes::from_static(r#"{"t":"doc_compact"}"#));
                 }
             }
@@ -539,7 +665,7 @@ async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: u64, client
                 if !m.u.is_empty() && s.compact_who == Some(cid) {
                     let from = s.compact_from.min(s.doc_log.len());
                     let mut log = Vec::with_capacity(1 + s.doc_log.len() - from);
-                    log.push(m.u);
+                    log.push(m.u.into());
                     log.extend(s.doc_log.drain(from..));
                     s.doc_log = log;
                     s.compact_who = None;
@@ -573,6 +699,11 @@ async fn write_loop(mut sink: WsSink, mut rx: mpsc::Receiver<Utf8Bytes>, _done: 
                 if !matches!(timeout(WRITE_WAIT, sink.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) {
                     return;
                 }
+                // browsers never surface protocol pings; this one lets the app see a live link
+                let ping_msg = Message::Text(Utf8Bytes::from_static(r#"{"t":"ping"}"#));
+                if !matches!(timeout(WRITE_WAIT, sink.send(ping_msg)).await, Ok(Ok(()))) {
+                    return;
+                }
             }
         }
     }
@@ -594,6 +725,86 @@ mod tests {
     }
 
     #[test]
+    fn replay_query_matches_go_values_get() {
+        let replay = |target: &str| parse_head(format!("GET {target} HTTP/1.1\r\n\r\n").as_bytes()).unwrap().replay;
+        assert!(replay("/ws/s1"));
+        assert!(!replay("/ws/s1?replay=0"));
+        assert!(!replay("/ws/s1?a=1&replay=%30"));
+        assert!(replay("/ws/s1?replay=1"));
+        assert!(replay("/ws/s1?replay="));
+        assert!(!replay("/ws/s1?replay=0&replay=1")); // the first value wins
+        assert!(replay("/ws/s1?replays=0"));
+    }
+
+    fn rec(s: &mut Session, msg: &str, from: u64) {
+        let m: Envelope = serde_json::from_str(msg).unwrap();
+        s.record(&m, &Utf8Bytes::from(msg.to_string()), from);
+    }
+
+    fn pts_msg(id: &str, n: usize) -> String {
+        format!(r#"{{"t":"stroke_pts","id":"{id}","pts":[{}]}}"#, vec!["[0.5,0.5,0.5,1]"; n].join(","))
+    }
+
+    #[test]
+    fn one_stroke_is_capped_for_replay() {
+        let mut s = Session::default();
+        rec(&mut s, r#"{"t":"stroke_begin","id":"u_1"}"#, 1);
+        for _ in 0..(MAX_STROKE_POINTS / 1000 + 5) {
+            rec(&mut s, &pts_msg("u_1", 1000), 1);
+        }
+        assert_eq!(s.points, MAX_STROKE_POINTS);
+        let st = &s.strokes["u_1"];
+        assert_eq!(st.n_pts, MAX_STROKE_POINTS);
+        assert_eq!(st.blocks.iter().map(|b| b.len()).sum::<usize>(), MAX_STROKE_POINTS);
+        assert!(st.blocks.iter().all(|b| b.len() <= REPLAY_PTS));
+    }
+
+    #[test]
+    fn snapshot_is_not_changed_by_later_points() {
+        let mut s = Session::default();
+        rec(&mut s, r#"{"t":"stroke_begin","id":"u_1"}"#, 1);
+        rec(&mut s, &pts_msg("u_1", 300), 1); // a full block and a partial one
+        let snap = s.snapshot();
+        rec(&mut s, &pts_msg("u_1", 10), 1);
+        rec(&mut s, r#"{"t":"stroke_end","id":"u_1"}"#, 1);
+        let msgs: Vec<serde_json::Value> = snap.messages().iter().map(|m| serde_json::from_str(m.as_str()).unwrap()).collect();
+        let n: Vec<usize> = msgs.iter().filter(|m| m["t"] == "stroke_pts").map(|m| m["pts"].as_array().unwrap().len()).collect();
+        assert_eq!(n, [256, 44]);
+        assert_eq!(msgs.len(), 3, "the snapshot was taken before stroke_end");
+        let now: usize = s.snapshot().strokes[0].blocks.iter().map(|b| b.len()).sum();
+        assert_eq!(now, 310);
+    }
+
+    #[test]
+    fn leaving_owner_ends_only_its_open_strokes() {
+        let mut s = Session::default();
+        rec(&mut s, r#"{"t":"stroke_begin","id":"a"}"#, 1);
+        rec(&mut s, r#"{"t":"stroke_begin","id":"b"}"#, 1);
+        rec(&mut s, r#"{"t":"stroke_end","id":"b"}"#, 1);
+        rec(&mut s, r#"{"t":"stroke_begin","id":"c"}"#, 2);
+        s.end_strokes_of(1);
+        assert!(s.strokes["a"].ended && s.strokes["b"].ended && !s.strokes["c"].ended);
+    }
+
+    #[test]
+    fn doc_compaction_re_asks_after_silence() {
+        let mut s = Session::default();
+        let raw = Utf8Bytes::from_static(r#"{"t":"doc_update","u":"A"}"#);
+        let t0 = Instant::now();
+        let mut asked = Vec::new();
+        for _ in 0..DOC_COMPACT_AT + 1 {
+            if s.doc_update("A".into(), &raw, 1, t0) {
+                asked.push(1);
+            }
+        }
+        assert_eq!(asked, [1]);
+        assert!(!s.doc_update("A".into(), &raw, 2, t0 + Duration::from_secs(5)), "asked again too soon");
+        assert!(s.doc_update("A".into(), &raw, 2, t0 + DOC_COMPACT_AFTER + Duration::from_secs(1)), "never re-asked");
+        assert_eq!(s.compact_who, Some(2));
+        assert_eq!(s.compact_from, s.doc_log.len());
+    }
+
+    #[test]
     fn page_memory_is_bounded() {
         let mut s = Session::default();
         let pts: Vec<String> = (0..1000).map(|_| "[0.5,0.5,0.5,1]".to_string()).collect();
@@ -602,10 +813,10 @@ mod tests {
             let id = format!("u_{i}");
             let begin = format!(r#"{{"t":"stroke_begin","id":"{id}"}}"#);
             let m: Envelope = serde_json::from_str(&begin).unwrap();
-            s.record(&m, &Utf8Bytes::from(begin.clone()));
+            s.record(&m, &Utf8Bytes::from(begin.clone()), 1);
             let p = format!(r#"{{"t":"stroke_pts","id":"{id}","pts":{pts_json}}}"#);
             let m: Envelope = serde_json::from_str(&p).unwrap();
-            s.record(&m, &Utf8Bytes::from(p.clone()));
+            s.record(&m, &Utf8Bytes::from(p.clone()), 1);
         }
         assert!(s.points <= MAX_POINTS);
         assert_eq!(s.order.len(), MAX_POINTS / 1000);

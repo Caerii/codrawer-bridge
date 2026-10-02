@@ -10,9 +10,9 @@
 //! - [`input`]: Linux input constants, `input_event` stream parser (linux_input.go)
 //! - [`keymap`]: US keymap, key names, key-message translation, text → keystrokes (keyboard.go, uinput.go)
 //! - [`devices`]: `/proc/bus/input/devices` parsing and keyboard selection (device_select.go, keyboard.go)
-//! - [`stroke`]: the pen stroke state machine (bridge.go `runOnce`)
+//! - [`pen`]: the pen stroke state machine, pure and portable (package pen, pen/pen.go)
 //! - [`ws_client`]: WebSocket client with ping/pong watchdog (ws_client.go)
-//! - [`bridge`]: the reconnect loop and the typer hookup (bridge.go)
+//! - [`bridge`]: the pen machine task, the outbox writer + reconnect loop, the typer hookup (bridge.go)
 //! - [`router`]: the stroke-only session router (router/router.go, serve.go)
 //! - `linux` (Linux only): evdev ioctls, device probing, pen/keyboard readers, uinput (linux_input.go,
 //!   device_select.go, keyboard.go, uinput.go)
@@ -22,8 +22,8 @@ pub mod devices;
 pub mod flags;
 pub mod input;
 pub mod keymap;
+pub mod pen;
 pub mod router;
-pub mod stroke;
 pub mod util;
 pub mod ws_client;
 
