@@ -342,3 +342,21 @@ func TestLiveMessagesDuringReplayKeepOrder(t *testing.T) {
 		t.Fatalf("replayed=%d live=%d", nReplayed, nLive)
 	}
 }
+
+func TestHelloCarriesHostInfo(t *testing.T) {
+	r := New()
+	r.Logf = func(string, ...any) {}
+	r.Info = map[string]string{"os": "6.1.0", "osChangedFrom": "6.0.105", "version": "v8"}
+	srv := httptest.NewServer(r.Handler())
+	t.Cleanup(srv.Close)
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/s1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := read(t, c)
+	tab, _ := m["tablet"].(map[string]any)
+	if tab["os"] != "6.1.0" || tab["osChangedFrom"] != "6.0.105" || tab["version"] != "v8" {
+		t.Fatalf("hello: %v", m)
+	}
+}

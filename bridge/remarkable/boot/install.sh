@@ -86,6 +86,16 @@ case "$MODE" in
       with_rootfs put_stub
       echo "codrawer stub installed"
     fi
+    # Vellum users: `vellum reenable` (and reManager's Reenable button) restores codrawer too.
+    if [ -d /home/root/.vellum ]; then
+      mkdir -p /home/root/.vellum/hooks/post-os-upgrade
+      {
+        echo '#!/bin/sh'
+        echo '# codrawer: re-add the boot stub after an OS update (install.sh is Vellum-aware)'
+        echo 'exec sh /home/root/codrawer/current/install.sh --if-needed'
+      } > /home/root/.vellum/hooks/post-os-upgrade/codrawer
+      chmod +x /home/root/.vellum/hooks/post-os-upgrade/codrawer
+    fi
     systemctl daemon-reload
     systemctl restart "$STUB"
     sh "$ROOT/current/boot.sh" doctor

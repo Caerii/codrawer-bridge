@@ -59,6 +59,9 @@ type Router struct {
 	sessions map[string]*session
 	upgrader websocket.Upgrader
 	Logf     func(format string, args ...any)
+	// Info describes the host (e.g. the tablet's OS and codrawer versions); sent in hello as
+	// "tablet" so clients can say "tablet updated" or show versions. Set before serving.
+	Info map[string]string
 }
 
 func New() *Router {
@@ -125,7 +128,11 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 	// The queue holds the whole replay plus the usual headroom: a big page must not count as a
 	// stalled client.
 	c.send = make(chan []byte, len(replay)+1+sendQueue)
-	c.queue(mustJSON(map[string]any{"t": "hello", "session": id, "replay": wantReplay}))
+	hello := map[string]any{"t": "hello", "session": id, "replay": wantReplay}
+	if len(r.Info) > 0 {
+		hello["tablet"] = r.Info
+	}
+	c.queue(mustJSON(hello))
 	for _, m := range replay {
 		c.queue(m)
 	}

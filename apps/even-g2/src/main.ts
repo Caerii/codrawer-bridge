@@ -295,6 +295,39 @@ async function keepAwake() {
 void keepAwake()
 document.addEventListener('visibilitychange', () => void keepAwake())
 
+// Tablet notices from the router's hello (boot.sh on the tablet: OS version, codrawer release,
+// the previous OS after an update, whether this OS is one codrawer was tested on).
+const banner = document.getElementById('banner') as HTMLDivElement
+function tabletNotice(t: Record<string, string>) {
+  let text = ''
+  let key = ''
+  if (t.osChangedFrom && t.os) {
+    text = `Tablet updated ${t.osChangedFrom} → ${t.os} · codrawer restored`
+    key = `os:${t.osChangedFrom}>${t.os}`
+  }
+  if (t.osTested === '0' && t.os) {
+    text = `${text ? text + ' · ' : ''}codrawer is not yet tested on OS ${t.os}; experimental features stay off`
+    key ||= `untested:${t.os}`
+  }
+  if (!text) return
+  try {
+    if (localStorage.getItem('codrawer:notice') === key) return // already acknowledged
+  } catch {
+    /* ignore */
+  }
+  ;(document.getElementById('bannerText') as HTMLSpanElement).textContent = text
+  banner.hidden = false
+  ;(document.getElementById('bannerOk') as HTMLButtonElement).onclick = () => {
+    banner.hidden = true
+    try {
+      localStorage.setItem('codrawer:notice', key)
+    } catch {
+      /* ignore */
+    }
+  }
+  console.log('[codrawer] tablet notice:', text, t)
+}
+
 function setConn(live: boolean) {
   connEl.classList.toggle('live', live)
   connEl.textContent = live ? 'live' : 'reconnecting'
@@ -840,6 +873,7 @@ function connect() {
     }
     switch (m.t) {
       case 'hello':
+        if (m.tablet && typeof m.tablet === 'object') tabletNotice(m.tablet)
         // A router that replays the page (the tablet's) is the source of truth: start from its
         // replay instead of merging it into whatever we had before the disconnect.
         if (m.replay) {
