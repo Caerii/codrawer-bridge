@@ -58,6 +58,9 @@ type Config struct {
 	DistanceThreshold int
 	FlushEvery        time.Duration // batch window after the first point of a stroke
 	MaxBatch          int           // flush early at this many points
+	// HoverEvery paces `cursor` messages while the pen hovers in range without touching
+	// (a pointer for viewers to follow); 0 disables them.
+	HoverEvery time.Duration
 }
 
 // Machine is the pen state machine. It is not safe for concurrent use.
@@ -86,6 +89,9 @@ type Machine struct {
 	lastX, lastY        float64
 	haveLast            bool
 	strokes, lostStroke int64
+	hovering            bool // a cursor was sent and no "gone" since
+	lastHover           time.Time
+	hoverX, hoverY      float64
 }
 
 func New(cfg Config, rng Ranges, emit func([]byte) bool) *Machine {
@@ -149,6 +155,46 @@ func norm(v, lo, hi int32) float64 {
 func appendFixed(b []byte, v float64, n int) []byte {
 	s := math.Pow(10, float64(n))
 	return strconv.AppendFloat(b, math.Round(v*s)/s, 'f', -1, 64)
+}
+
+// hover sends the pen's position while it is in range but not touching, paced by HoverEvery and
+// only when it moved, and one {"gone":true} when it leaves range. Cursor messages are ephemeral:
+// a refused one is simply dropped and never affects stroke delivery.
+func (m *Machine) hover(now time.Time, tsMS int64) {
+	if m.cfg.HoverEvery <= 0 {
+		return
+	}
+	inRange := m.toolPen || m.toolRubber
+	if !inRange {
+		if m.hovering {
+			m.hovering = false
+			m.Emit([]byte(`{"t":"cursor","who":"pen","gone":true}`))
+		}
+		return
+	}
+	if !m.hasX || !m.hasY || now.Sub(m.lastHover) < m.cfg.HoverEvery {
+		return
+	}
+	x := norm(m.x, m.rng.XMin, m.rng.XMax)
+	y := norm(m.y, m.rng.YMin, m.rng.YMax)
+	if m.hovering && math.Abs(x-m.hoverX) < 0.002 && math.Abs(y-m.hoverY) < 0.002 {
+		return // still: nothing new to show
+	}
+	m.lastHover, m.hoverX, m.hoverY, m.hovering = now, x, y, true
+	msg := []byte(`{"t":"cursor","who":"pen","x":`)
+	msg = appendFixed(msg, x, 4)
+	msg = append(msg, `,"y":`...)
+	msg = appendFixed(msg, y, 4)
+	msg = append(msg, `,"tool":`...)
+	if m.toolRubber {
+		msg = append(msg, `"eraser"`...)
+	} else {
+		msg = append(msg, `"pen"`...)
+	}
+	msg = append(msg, `,"ts":`...)
+	msg = strconv.AppendInt(msg, tsMS, 10)
+	msg = append(msg, '}')
+	m.Emit(msg)
 }
 
 // Handle consumes one event and emits whatever messages it completes.
@@ -249,7 +295,11 @@ func (m *Machine) report(tsMS int64) {
 		}
 		return
 	}
-	if !m.touching || !m.hasX || !m.hasY {
+	if !m.touching {
+		m.hover(now, tsMS)
+		return
+	}
+	if !m.hasX || !m.hasY {
 		return
 	}
 	x := norm(m.x, m.rng.XMin, m.rng.XMax)

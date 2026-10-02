@@ -38,7 +38,7 @@ import { runBench } from './bench'
 import { Editor } from './editor'
 import { CollabDoc } from './collab'
 import { runProbe } from './probe'
-import { Stage, type Theme } from './stage'
+import { Stage, type Theme, type View } from './stage'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -202,6 +202,34 @@ themeBtn.onclick = () => applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
 ;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = () => document.body.classList.toggle('debug')
 // tap the page to hide the bar (clean projection); tap again to bring it back
 ;(document.getElementById('stage') as HTMLCanvasElement).onclick = () => document.body.classList.toggle('chromeless')
+const viewBtn = document.getElementById('viewBtn') as HTMLButtonElement
+function applyView(v: View) {
+  stage.setView(v)
+  viewBtn.textContent = v === 'focus' ? 'Page' : 'Focus'
+  try {
+    localStorage.setItem('codrawer:stage', v)
+  } catch {
+    /* ignore */
+  }
+}
+applyView(cfg('stage', 'focus') === 'page' ? 'page' : 'focus')
+viewBtn.onclick = () => applyView(stage.view === 'focus' ? 'page' : 'focus')
+
+// Keep the phone screen on while this page is visible (presenting). The lock is released by
+// the browser whenever the page is hidden, so take it again on every return.
+async function keepAwake() {
+  try {
+    const nav = navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<unknown> } }
+    if (!nav.wakeLock || document.visibilityState !== 'visible') return
+    await nav.wakeLock.request('screen')
+    console.log('[codrawer] screen wake lock held')
+  } catch (e) {
+    console.warn('[codrawer] screen wake lock unavailable', String(e))
+  }
+}
+void keepAwake()
+document.addEventListener('visibilitychange', () => void keepAwake())
+
 function setConn(live: boolean) {
   connEl.classList.toggle('live', live)
   connEl.textContent = live ? 'live' : 'reconnecting'
@@ -759,12 +787,17 @@ function connect() {
       case 'ping':
         routerPings = true
         break
+      case 'cursor':
+        // the pen hovering over the tablet (bridge hover); a pointer on the phone screen
+        if (m.gone) stage.setPointer(null)
+        else if (typeof m.x === 'number' && typeof m.y === 'number') stage.setPointer(m.x, m.y, m.tool === 'eraser' ? 'eraser' : 'pen')
+        break
       case 'stroke_begin':
         // no frame yet: the first stroke_pts carries the first ink
         store.begin(m.id, 'user', m.brush || 'pen')
         strokeActive = true
         lastInkAt = performance.now()
-        stage.touch()
+        stage.setPointer(null) // the ink itself shows the pen now
         break
       case 'stroke_pts':
         store.points(m.id, m.pts || [], 'user')

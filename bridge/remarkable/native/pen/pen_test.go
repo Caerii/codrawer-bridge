@@ -16,7 +16,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	r := &rig{now: time.UnixMilli(1_790_000_000_000), ts: 1_790_000_000_000}
-	r.m = New(Config{Brush: "pen", TouchMode: "auto", PressureThreshold: 0.02, FlushEvery: 16 * time.Millisecond, MaxBatch: 64},
+	r.m = New(Config{Brush: "pen", TouchMode: "auto", PressureThreshold: 0.02, FlushEvery: 16 * time.Millisecond, MaxBatch: 64, HoverEvery: 33 * time.Millisecond},
 		Ranges{XMin: 0, XMax: 10000, YMin: 0, YMax: 10000, PMin: 0, PMax: 4096},
 		func(b []byte) bool {
 			if r.refuse {
@@ -159,5 +159,38 @@ func TestRubberEndIsEraser(t *testing.T) {
 	r.point(1000, 1000)
 	if r.out[0]["brush"] != "eraser" {
 		t.Fatalf("brush: %v", r.out[0])
+	}
+}
+
+func TestHoverSendsPacedCursorAndGone(t *testing.T) {
+	r := newRig(t)
+	r.ev(EvKey, BtnToolPen, 1) // in range, not touching
+	for i := range 10 {
+		r.ev(EvAbs, AbsX, 1000+int32(i)*100)
+		r.ev(EvAbs, AbsY, 2000)
+		r.syn()
+		r.advance(10) // 100 Hz of reports; cursor at most every 33 ms
+	}
+	n := len(r.out)
+	if n < 2 || n > 4 {
+		t.Fatalf("want ~3 paced cursors, got %d: %v", n, types(r.out))
+	}
+	for _, m := range r.out {
+		if m["t"] != "cursor" || m["who"] != "pen" || m["tool"] != "pen" {
+			t.Fatalf("cursor: %v", m)
+		}
+	}
+	// touching suppresses the cursor; the stroke flows as usual
+	r.point(3000, 3000)
+	if r.out[len(r.out)-2]["t"] != "stroke_begin" {
+		t.Fatalf("stroke after hover: %v", types(r.out))
+	}
+	r.up()
+	// leaving range sends one gone
+	r.ev(EvKey, BtnToolPen, 0)
+	r.syn()
+	last := r.out[len(r.out)-1]
+	if last["t"] != "cursor" || last["gone"] != true {
+		t.Fatalf("want gone, got %v", last)
 	}
 }

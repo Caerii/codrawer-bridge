@@ -38,6 +38,7 @@ type BridgeConfig struct {
 	NoGrab         bool
 
 	TouchMode         string
+	HoverHz           int // cursor messages per second while hovering (0: off)
 	PressureThreshold float64
 	DistanceThreshold int
 
@@ -225,6 +226,7 @@ func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, o
 		DistanceThreshold: cfg.DistanceThreshold,
 		FlushEvery:        time.Second / time.Duration(max(1, cfg.BatchHz)),
 		MaxBatch:          cfg.MaxBatchPoints,
+		HoverEvery:        hoverEvery(cfg.HoverHz),
 	}, rng, func(msg []byte) bool {
 		select {
 		case outC <- msg:
@@ -261,6 +263,13 @@ func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, o
 			fmt.Printf("[bridge] stats touching=%v strokes=%d skipped=%d outbox=%d\n", m.Touching(), m.Strokes(), m.LostStrokes(), len(outC))
 		}
 	}
+}
+
+func hoverEvery(hz int) time.Duration {
+	if hz <= 0 {
+		return 0
+	}
+	return time.Second / time.Duration(hz)
 }
 
 // holdAwake keeps the tablet out of autosleep for 3 s after pen activity, so the last stroke
