@@ -10,12 +10,15 @@
     "preview": "vite preview --host --port 5188",
     "sim": "evenhub-simulator http://localhost:5188",
     "typecheck": "tsc -p . --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "ehpk": "tsc -p . && vite build && evenhub pack app.json dist -o codrawer.ehpk"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.16"
+    "@evenrealities/even_hub_sdk": "^0.0.16",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   }

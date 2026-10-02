@@ -34,10 +34,17 @@ that the view follows, wrapped at the same width as the transcript. Plain keys e
 continues markdown list prefixes; arrows, Home/End, PageUp/Down, Delete, Tab; Ctrl+Left/Right by
 word; Ctrl+Home/End to the ends. `Ctrl+K` opens the command line over the document (any command,
 then back), `Ctrl+S` saves and shares it with the session (`doc` message), `Ctrl+E` leaves.
-A ring click in the editor saves; the ring scrolls by line. The document autosaves 2 s after
-the last edit to the WebView's storage and the Even bridge's storage, and is shared with the
-session so the terminal agent can Read it (`.codrawer/doc.md`); a `/term` sent from the editor
-tells the agent to read it first.
+A ring click in the editor saves; the ring scrolls by line.
+
+**Shared live editing.** The document is a Yjs CRDT (`src/collab.ts`): every keystroke reaches
+everyone else editing the session's document within ~40 ms (`doc_update`), concurrent edits
+merge without conflicts, and your cursor stays put while others type. The header shows
+`live`/`offline`; edits made offline merge on reconnect, and a client that joins late gets the
+document replayed by the router. The CRDT state autosaves to the WebView's and the Even bridge's
+storage. A save (`Ctrl+S`, ring click, autosave) also sends a plain-text `doc` copy, which the
+desktop router writes to `.codrawer/doc.md` so the terminal agent can Read it; a `/term` sent
+from the editor tells the agent to read it first. A plain-text `doc` from a participant without
+live editing folds in as an ordinary edit. Tests: `pnpm test`.
 
 ## Latency model and tunables
 

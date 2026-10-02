@@ -540,6 +540,10 @@ async def ws(session_id: str, ws: WebSocket):
         asyncio.create_task(agentic_loop(session_id, session))
 
     await ws.send_text(json.dumps({"t": T_HELLO, "session": session_id}, separators=(",", ":")))
+    for i in range(0, len(session.doc_updates), 256):
+        await ws.send_text(
+            json.dumps({"t": "doc_update", "us": session.doc_updates[i : i + 256]}, separators=(",", ":"))
+        )
 
     try:
         while True:
@@ -687,6 +691,15 @@ async def ws(session_id: str, ws: WebSocket):
                         _spawn(link.prompt(text, attachment))
                     else:
                         _spawn(link.answer(text))
+                continue
+
+            if t == "doc_update":
+                u = msg.get("u")
+                if isinstance(u, str) and u:
+                    session.doc_updates.append(u)
+                    await broadcast(session, msg, exclude=ws)
+                continue
+            if t in ("doc_state", "doc_compact"):
                 continue
 
             if t == T_DOC:

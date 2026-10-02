@@ -36,6 +36,7 @@ import {
 import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
 import { Editor } from './editor'
+import { CollabDoc } from './collab'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -174,29 +175,58 @@ let cmdOverlay = false // command line shown over the editor
 let docSavedText = ''
 let docChangedAt = 0
 let docSyncedAt = 0
+// Shared live editing (collab.ts): the editor's text is a Yjs CRDT synced through the router.
+const collab = new CollabDoc(editor, (msg) => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false
+  socket.send(JSON.stringify(msg))
+  return true
+})
+collab.onRemoteChange = () => {
+  textDirty = true
+  persistDoc()
+}
 try {
+  const state = localStorage.getItem('codrawer:ydoc')
   const saved = localStorage.getItem('codrawer:doc')
-  if (saved) {
+  if (state) collab.load(state)
+  else if (saved) {
+    // first run after the switch to live editing: adopt the plain-text document
     editor.setText(saved)
-    docSavedText = saved
+    collab.commitLocal()
   }
+  docSavedText = editor.text()
 } catch {
   /* ignore */
 }
 
-function saveDoc(reason: string) {
+/** Keep the CRDT state (and a plain-text copy) in local storage. */
+function persistDoc() {
   const text = editor.text()
-  docSavedText = text
-  editor.dirty = false
+  const state = collab.state()
   try {
     localStorage.setItem('codrawer:doc', text)
+    localStorage.setItem('codrawer:ydoc', state)
   } catch {
     /* ignore */
   }
   // the Even bridge's storage survives EHPK packaging where WebView localStorage may not
-  if (bridge) void bridge.setLocalStorage('doc', text).catch(() => {})
+  if (bridge) {
+    void bridge.setLocalStorage('doc', text).catch(() => {})
+    void bridge.setLocalStorage('ydoc', state).catch(() => {})
+  }
+}
+
+function saveDoc(reason: string) {
+  collab.commitLocal()
+  const text = editor.text()
+  docSavedText = text
+  editor.dirty = false
+  persistDoc()
+  // Edits already travel live as doc_update; this plain-text copy is for the desktop router,
+  // which writes it to .codrawer/doc.md for the terminal agent. crdt:true tells live-editing
+  // clients to ignore it (they have the same text already).
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ t: 'doc', text, cursor: { line: editor.row + 1, col: editor.col + 1 }, reason, ts: Date.now() }))
+    socket.send(JSON.stringify({ t: 'doc', text, crdt: true, cursor: { line: editor.row + 1, col: editor.col + 1 }, reason, ts: Date.now() }))
     docSyncedAt = performance.now()
   }
 }
@@ -249,7 +279,10 @@ function editorKey(key: string, ch: string, mods: { ctrl?: boolean; alt?: boolea
   else if (key === 'Escape') {
     notice = ''
   } else return false
-  if (editor.dirty) docChangedAt = performance.now()
+  if (editor.dirty) {
+    docChangedAt = performance.now()
+    collab.commitLocal() // live: every keystroke reaches the other editors within ~40 ms
+  }
   return true
 }
 let inputLine = ''
@@ -412,6 +445,7 @@ function commitLine(raw: string) {
       if (arg.toLowerCase() === 'new') {
         editor.setText('')
         editor.dirty = true
+        collab.commitLocal() // clears it for everyone editing the session document
         docChangedAt = performance.now()
         notice = 'new document'
       } else {
@@ -536,7 +570,7 @@ function renderText(): string {
     const total = 9
     const overlayRows = cmdOverlay ? 1 : 0
     const v = editor.view(total - 1 - overlayRows, COLS)
-    const state = editor.dirty ? 'unsaved' : docSyncedAt ? 'shared' : 'saved'
+    const state = connected ? 'live' : 'offline'
     const head = notice || `doc · Ln ${v.line}, Col ${v.col} · ${v.totalLines} lines · ${state}`
     const out = [head.slice(0, COLS), ...v.rows]
     while (out.length < total - overlayRows) out.push('')
@@ -603,6 +637,7 @@ function connect() {
   ws.onopen = () => {
     connected = true
     textDirty = true
+    collab.announce() // merge anything edited while offline; the router replays the rest
     console.log('[codrawer] connected', WS_URL)
   }
   ws.onclose = () => {
@@ -667,11 +702,20 @@ function connect() {
       case 'key':
         handleKey(m)
         break
+      case 'doc_update':
+        collab.applyRemote(Array.isArray(m.us) ? m.us : typeof m.u === 'string' ? [m.u] : [])
+        break
+      case 'doc_compact':
+        collab.answerCompact()
+        break
       case 'doc':
-        // another participant shared the document; adopt it unless we have unsaved edits
-        if (typeof m.text === 'string' && !editor.dirty) {
+        // A plain-text document from a participant without live editing (e.g. an agent):
+        // fold it in as an ordinary edit. Live-editing clients mark their copies crdt:true.
+        if (typeof m.text === 'string' && !m.crdt) {
+          collab.replaceWith(m.text)
           editor.setText(m.text)
           docSavedText = m.text
+          persistDoc()
           notice = 'document updated'
           textDirty = true
         }

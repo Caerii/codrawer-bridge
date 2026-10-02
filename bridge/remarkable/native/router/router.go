@@ -1,7 +1,7 @@
 // Package router is the stroke-only session router (docs/protocol.md), small enough to run on
 // the Paper Pro inside the bridge binary so the glasses app can connect to the tablet directly.
 //
-// Scope: hello, stroke_*, key, cursor, clear, doc. AI (prompt, ai_*) and the terminal
+// Scope: hello, stroke_*, key, cursor, clear, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
 // (term_prompt/term_answer) stay on the desktop Python router; here they are dropped, and a
 // term_* request gets a one-line `term` status so the client is not left waiting.
 //
@@ -11,6 +11,14 @@
 //   - Every client has its own bounded send queue; a client that falls behind is dropped (it
 //     reconnects and gets the replay) instead of stalling the tablet's stream.
 //   - The router pings clients and drops ones that stop answering (a phone that left Wi-Fi).
+//
+// Shared live editing: clients keep the session document as a Yjs CRDT and send
+// {"t":"doc_update","u":<base64>}. The router never decodes them; it relays each one, keeps the
+// log and replays it to joiners as {"t":"doc_update","us":[...]}. When the log grows past
+// docCompactAt it asks the client that just wrote for {"t":"doc_state","u":<full state>} and
+// replaces the log with that state plus everything that arrived after the request. Nothing is
+// lost: the client had received the whole log up to the request (same ordered queue), and
+// updates are idempotent, so overlap is harmless.
 package router
 
 import (
@@ -25,14 +33,16 @@ import (
 )
 
 const (
-	sendQueue  = 1024             // messages buffered per client before it counts as stalled
-	pingEvery  = 10 * time.Second // server → client keepalive
-	pongWait   = 30 * time.Second // drop a client silent for this long
-	writeWait  = 5 * time.Second
-	replayPts  = 256 // points per replayed stroke_pts message
-	maxStrokes = 4000
-	maxPoints  = 400_000 // page memory bound (~20 MB worst case); oldest strokes go first
-	maxMessage = 1 << 20
+	sendQueue    = 1024             // messages buffered per client before it counts as stalled
+	pingEvery    = 10 * time.Second // server → client keepalive
+	pongWait     = 30 * time.Second // drop a client silent for this long
+	writeWait    = 5 * time.Second
+	replayPts    = 256 // points per replayed stroke_pts message
+	maxStrokes   = 4000
+	maxPoints    = 400_000 // page memory bound (~20 MB worst case); oldest strokes go first
+	maxMessage   = 1 << 20
+	docCompactAt = 256 // doc_update log entries before asking a client for a snapshot
+	docReplayN   = 256 // updates per replayed doc_update message
 )
 
 // Router holds the sessions. The zero value is not usable; call New.
@@ -107,6 +117,9 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 
 	s.mu.Lock()
 	delete(s.clients, c)
+	if s.compactWho == c {
+		s.compactWho = nil // ask someone else next time
+	}
 	n = len(s.clients)
 	s.mu.Unlock()
 	c.close()
@@ -118,6 +131,7 @@ type envelope struct {
 	T   string            `json:"t"`
 	ID  string            `json:"id"`
 	Pts []json.RawMessage `json:"pts"`
+	U   string            `json:"u"`
 }
 
 func (r *Router) readLoop(s *session, c *client) {
@@ -154,6 +168,25 @@ func (r *Router) readLoop(s *session, c *client) {
 			s.resetLocked()
 			s.broadcastLocked(raw, c)
 			s.mu.Unlock()
+		case "doc_update":
+			if m.U == "" {
+				continue
+			}
+			s.mu.Lock()
+			s.docLog = append(s.docLog, m.U)
+			s.broadcastLocked(raw, c)
+			if len(s.docLog) > docCompactAt && s.compactWho == nil {
+				s.compactWho, s.compactFrom = c, len(s.docLog)
+				c.queue([]byte(`{"t":"doc_compact"}`))
+			}
+			s.mu.Unlock()
+		case "doc_state":
+			s.mu.Lock()
+			if m.U != "" && s.compactWho == c {
+				s.docLog = append([]string{m.U}, s.docLog[s.compactFrom:]...)
+				s.compactWho = nil
+			}
+			s.mu.Unlock()
 		case "term_prompt", "term_answer":
 			c.queue(mustJSON(map[string]string{
 				"t": "term", "kind": "status", "text": "no terminal on this router (tablet-local; stroke streaming only)",
@@ -173,6 +206,10 @@ type session struct {
 	order   []string
 	strokes map[string]*stroke
 	points  int
+	// shared document: Yjs updates (base64) in arrival order; survives clear (it is not ink)
+	docLog      []string
+	compactWho  *client // asked for a doc_state, or nil
+	compactFrom int     // docLog length when it was asked
 }
 
 type stroke struct {
@@ -241,6 +278,13 @@ func (s *session) replayLocked() [][]byte {
 		if st.ended {
 			out = append(out, mustJSON(map[string]string{"t": "stroke_end", "id": id}))
 		}
+	}
+	for i := 0; i < len(s.docLog); i += docReplayN {
+		j := min(i+docReplayN, len(s.docLog))
+		out = append(out, mustJSON(struct {
+			T  string   `json:"t"`
+			Us []string `json:"us"`
+		}{"doc_update", s.docLog[i:j]}))
 	}
 	return out
 }

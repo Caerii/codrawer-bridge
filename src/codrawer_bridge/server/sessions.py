@@ -39,6 +39,10 @@ class Session:
 
     # Shared document (ADR 001): latest text shared by any participant.
     doc_text: str = ""
+    # Shared live editing: Yjs updates (base64) relayed as `doc_update` and replayed to joiners.
+    # Unlike the Go router this log is not compacted (the desktop is the AI/term path, not the
+    # editing one); a long session just replays more small updates.
+    doc_updates: list[str] = field(default_factory=list)
 
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None

@@ -121,6 +121,17 @@ have no unsaved edits (a CRDT is deferred, see the SIG IDE-CRDT ladder).
 {"t":"doc","text":"# Notes\n- first line","cursor":{"line":2,"col":13},"reason":"auto|save|share|prompt"}
 ```
 
+### `doc_update` / `doc_state` / `doc_compact` (shared live editing)
+
+Clients keep the document as a [Yjs](https://yjs.dev) CRDT and send each batch of local edits as
+`{"t":"doc_update","u":"<base64 Yjs update>"}`. Routers relay it to every other client, keep the
+log, and replay it to a joiner right after `hello` as `{"t":"doc_update","us":["…","…"]}`.
+Updates are idempotent and commutative, so a client resends its full state on every connect.
+The Go router compacts: past 256 entries it sends `{"t":"doc_compact"}` to the client that just
+wrote, which answers `{"t":"doc_state","u":"<full state>"}`; the log becomes that state plus
+whatever arrived after the request. `clear` does not touch the document. Live-editing clients
+mark their plain-text `doc` copies `"crdt":true` and ignore such copies from others.
+
 ### `term_prompt` / `term_answer` (client → server) and `term` (server → clients)
 
 The router can attach an [even-terminal](https://www.npmjs.com/package/@evenrealities/even-terminal)

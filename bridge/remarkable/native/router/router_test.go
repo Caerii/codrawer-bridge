@@ -46,6 +46,7 @@ func read(t *testing.T, c *websocket.Conn) map[string]any {
 }
 
 // expectQuiet asserts nothing arrives within d (e.g. a message must not echo to its sender).
+// A read timeout is permanent in gorilla/websocket: call it last on a connection.
 func expectQuiet(t *testing.T, c *websocket.Conn, d time.Duration) {
 	t.Helper()
 	_ = c.SetReadDeadline(time.Now().Add(d))
@@ -156,4 +157,61 @@ func TestTermGetsStatusAndAIIsDropped(t *testing.T) {
 		t.Fatalf("term status: %v", m)
 	}
 	expectQuiet(t, tablet, 150*time.Millisecond)
+}
+
+func TestDocUpdatesRelayReplayAndCompact(t *testing.T) {
+	srv := newServer(t)
+	a := dial(t, srv, "s1")
+	b := dial(t, srv, "s1")
+
+	// Relay to the others, not back to the sender.
+	send(t, a, `{"t":"doc_update","u":"AAA="}`)
+	if m := read(t, b); m["t"] != "doc_update" || m["u"] != "AAA=" {
+		t.Fatalf("relay: %v", m)
+	}
+
+	// Grow the log past docCompactAt: the writer is asked for a snapshot exactly once.
+	for range docCompactAt {
+		send(t, a, `{"t":"doc_update","u":"BBB="}`)
+		read(t, b)
+	}
+	if m := read(t, a); m["t"] != "doc_compact" {
+		t.Fatalf("want doc_compact, got %v", m)
+	}
+	send(t, b, `{"t":"doc_update","u":"LATE"}`) // arrives after the request; must survive
+	if m := read(t, a); m["u"] != "LATE" {
+		t.Fatalf("late relay: %v", m)
+	}
+	send(t, a, `{"t":"doc_state","u":"SNAP"}`)
+	send(t, a, `{"t":"doc_update","u":"AFTER"}`)
+	if m := read(t, b); m["u"] != "AFTER" {
+		t.Fatalf("after relay: %v", m)
+	}
+
+	// A joiner gets the compacted log: snapshot, then what came after the request.
+	c := dial(t, srv, "s1")
+	m := read(t, c)
+	us, _ := m["us"].([]any)
+	got := []string{}
+	for _, u := range us {
+		got = append(got, u.(string))
+	}
+	if m["t"] != "doc_update" || strings.Join(got, ",") != "SNAP,LATE,AFTER" {
+		t.Fatalf("replay after compaction: %v", m)
+	}
+	expectQuiet(t, a, 100*time.Millisecond) // never echoed its own updates, asked only once
+}
+
+func TestDocSurvivesClear(t *testing.T) {
+	srv := newServer(t)
+	a := dial(t, srv, "s1")
+	b := dial(t, srv, "s1")
+	send(t, a, `{"t":"doc_update","u":"AAA="}`)
+	read(t, b)
+	send(t, a, `{"t":"clear"}`)
+	read(t, b)
+	c := dial(t, srv, "s1")
+	if m := read(t, c); m["t"] != "doc_update" {
+		t.Fatalf("doc lost on clear: %v", m)
+	}
 }
