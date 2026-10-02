@@ -1,18 +1,39 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="paper">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>codrawer on G2</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>codrawer</title>
     <style>
-      html, body { margin: 0; background: #000; color: #7ee787; font: 12px ui-monospace, monospace; }
-      #wrap { padding: 8px; }
-      canvas { image-rendering: pixelated; border: 1px solid #234; display: block; }
-      #status { margin-top: 6px; white-space: pre-wrap; }
+      :root[data-theme='paper'] { --bg: #e4e1d8; --bar: rgba(246,244,238,0.92); --fg: #1d1d1b; --muted: #77746c; --line: rgba(0,0,0,0.12); --live: #2f9e44; --off: #c2410c; }
+      :root[data-theme='dark'] { --bg: #060806; --bar: rgba(16,20,16,0.92); --fg: #d8f5dc; --muted: #6f8f74; --line: rgba(126,231,135,0.18); --live: #7ee787; --off: #f59e0b; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px -apple-system, system-ui, sans-serif; }
+      body { display: flex; flex-direction: column; overflow: hidden; }
+      #bar { display: flex; align-items: center; gap: 10px; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); padding-top: max(8px, env(safe-area-inset-top)); background: var(--bar); border-bottom: 1px solid var(--line); transition: margin-top 0.25s; }
+      body.chromeless #bar { margin-top: -80px; }
+      #title { font-weight: 600; letter-spacing: 0.02em; }
+      #conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+      #conn::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+      #conn.live::before { background: var(--live); }
+      #bar .spacer { flex: 1; }
+      #bar button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
+      #stage { flex: 1; width: 100%; min-height: 0; display: block; touch-action: manipulation; }
+      #debug { display: none; padding: 8px 12px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, monospace; }
+      body.debug #debug { display: block; }
+      #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); background: #000; }
+      #status { margin-top: 6px; white-space: pre-wrap; color: var(--muted); }
     </style>
   </head>
   <body>
-    <div id="wrap">
+    <div id="bar">
+      <span id="title">codrawer</span>
+      <span id="conn">connecting</span>
+      <span class="spacer"></span>
+      <button id="themeBtn" type="button">Dark</button>
+      <button id="debugBtn" type="button">Glasses</button>
+    </div>
+    <canvas id="stage"></canvas>
+    <div id="debug">
       <div style="display:flex;gap:12px;align-items:flex-start">
         <canvas id="preview" width="288" height="144"></canvas>
         <canvas id="loupe" width="128" height="64"></canvas>

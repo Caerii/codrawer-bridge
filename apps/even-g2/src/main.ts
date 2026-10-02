@@ -38,6 +38,7 @@ import { runBench } from './bench'
 import { Editor } from './editor'
 import { CollabDoc } from './collab'
 import { runProbe } from './probe'
+import { Stage, type Theme } from './stage'
 
 // ── config ──────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
@@ -178,6 +179,33 @@ fit(preview, IMG_W, IMG_H)
 fit(loupePreview, LOUPE_W, LOUPE_H)
 const ctx = preview.getContext('2d', { willReadFrequently: true })!
 const lctx = loupePreview.getContext('2d', { willReadFrequently: true })!
+
+// ── phone screen (stage.ts) ─────────────────────────────────────────────────
+// The whole page at full resolution, live, on paper or dark: what you look at (or project).
+// The glasses previews above stay in a "Glasses" panel for diagnostics.
+const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement, store, opts.pageAspect)
+stage.showAi = opts.showAi !== false
+const themeBtn = document.getElementById('themeBtn') as HTMLButtonElement
+const connEl = document.getElementById('conn') as HTMLSpanElement
+function applyTheme(t: Theme) {
+  stage.setTheme(t)
+  document.documentElement.dataset.theme = t
+  themeBtn.textContent = t === 'paper' ? 'Dark' : 'Paper'
+  try {
+    localStorage.setItem('codrawer:theme', t)
+  } catch {
+    /* ignore */
+  }
+}
+applyTheme(cfg('theme', 'paper') === 'dark' ? 'dark' : 'paper')
+themeBtn.onclick = () => applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
+;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = () => document.body.classList.toggle('debug')
+// tap the page to hide the bar (clean projection); tap again to bring it back
+;(document.getElementById('stage') as HTMLCanvasElement).onclick = () => document.body.classList.toggle('chromeless')
+function setConn(live: boolean) {
+  connEl.classList.toggle('live', live)
+  connEl.textContent = live ? 'live' : 'reconnecting'
+}
 
 let intent = ''
 let connected = false
@@ -691,6 +719,7 @@ function connect() {
   ws.onopen = () => {
     connected = true
     retryMs = 800
+    setConn(true)
     lastHeardAt = performance.now()
     routerPings = false
     textDirty = true
@@ -700,8 +729,10 @@ function connect() {
   ws.onclose = () => {
     if (socket !== ws) return
     connected = false
+    setConn(false)
     strokeActive = false // a stroke cut off by the disconnect must not hold text updates
     store.endOpen() // and never gets its stroke_end
+    stage.touch()
     textDirty = true
     setTimeout(connect, retryMs)
     retryMs = Math.min(5000, retryMs * 1.6)
@@ -720,6 +751,7 @@ function connect() {
         // replay instead of merging it into whatever we had before the disconnect.
         if (m.replay) {
           store.clear()
+          stage.invalidate()
           canvasDirty = true
           strokeEnded = true
         }
@@ -732,15 +764,18 @@ function connect() {
         store.begin(m.id, 'user', m.brush || 'pen')
         strokeActive = true
         lastInkAt = performance.now()
+        stage.touch()
         break
       case 'stroke_pts':
         store.points(m.id, m.pts || [], 'user')
+        stage.touch()
         lastInkAt = performance.now()
         loupeDirty = true
         canvasDirty = true
         break
       case 'stroke_end':
         store.end(m.id)
+        stage.touch()
         strokeActive = false
         lastInkAt = performance.now()
         canvasDirty = true // the loupe already shows the last points
@@ -752,6 +787,7 @@ function connect() {
         break
       case 'ai_stroke_pts':
         store.points(m.id, m.pts || [], 'ai')
+        stage.touch()
         if (opts.showAi !== false) {
           loupeDirty = true
           canvasDirty = true
@@ -768,6 +804,7 @@ function connect() {
       case 'clear':
         // another client started a new drawing
         store.clear()
+        stage.invalidate()
         intent = ''
         loupeDirty = true
         canvasDirty = true
@@ -928,13 +965,17 @@ function applyAction(action: string) {
   if (action === 'new-drawing') {
     // wipe locally and tell the session so every client starts fresh
     store.clear()
+    stage.invalidate()
     intent = ''
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: 'clear', ts: Date.now() }))
   } else if (action === 'clear-ai') {
     store.clear('ai')
+    stage.invalidate()
     intent = ''
   } else if (action === 'toggle-ai') {
     opts.showAi = !opts.showAi
+    stage.showAi = opts.showAi
+    stage.invalidate()
     try {
       localStorage.setItem('codrawer:ai', opts.showAi ? '1' : '0')
     } catch {
@@ -1194,6 +1235,7 @@ let wasTyping = false
 let sendCanvasPending = false // the preview changed since the glasses last got the canvas
 function tick() {
   if (store.prune()) {
+    stage.invalidate()
     canvasDirty = true
     strokeEnded = true
   }
