@@ -215,3 +215,25 @@ func TestDocSurvivesClear(t *testing.T) {
 		t.Fatalf("doc lost on clear: %v", m)
 	}
 }
+
+func TestBigPageReplayDoesNotDropJoiner(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	watcher := dial(t, srv, "s1")
+	const strokes = 600 // 1800 replay messages, well past sendQueue
+	for i := range strokes {
+		id := "u_" + string(rune('a'+i%26)) + strings.Repeat("x", i/26)
+		send(t, tablet, `{"t":"stroke_begin","id":"`+id+`"}`)
+		send(t, tablet, `{"t":"stroke_pts","id":"`+id+`","pts":[[0.5,0.5,0.5,1]]}`)
+		send(t, tablet, `{"t":"stroke_end","id":"`+id+`"}`)
+	}
+	for range strokes * 3 {
+		read(t, watcher)
+	}
+	late := dial(t, srv, "s1")
+	for i := range strokes * 3 {
+		if m := read(t, late); m["t"] == nil {
+			t.Fatalf("replay message %d malformed", i)
+		}
+	}
+}

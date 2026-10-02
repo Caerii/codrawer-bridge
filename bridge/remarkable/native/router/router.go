@@ -99,12 +99,14 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 		return // Upgrade already wrote the error response
 	}
 	s := r.session(id)
-	c := &client{conn: conn, send: make(chan []byte, sendQueue), addr: req.RemoteAddr}
 	// Register and queue hello + replay under the session lock, so no live message can slip
-	// in between the replay and the first broadcast this client sees.
+	// in between the replay and the first broadcast this client sees. The queue holds the
+	// whole replay plus the usual headroom: a big page must not count as a stalled client.
 	s.mu.Lock()
+	replay := s.replayLocked()
+	c := &client{conn: conn, send: make(chan []byte, len(replay)+1+sendQueue), addr: req.RemoteAddr}
 	c.queue(mustJSON(map[string]string{"t": "hello", "session": id}))
-	for _, m := range s.replayLocked() {
+	for _, m := range replay {
 		c.queue(m)
 	}
 	s.clients[c] = true
