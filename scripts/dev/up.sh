@@ -56,9 +56,16 @@ fi
 # 5. tablet (optional; it must be awake)
 if [ "$WANT_TABLET" = 1 ]; then
   if timeout 8 ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET" "true" 2>/dev/null; then
-    # The bridge and Bluetooth run as boot services (bridge/remarkable/boot/); point the bridge
-    # at this machine and restart it.
-    timeout 40 ssh -o BatchMode=yes "root@$TABLET" "sed -i 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:$ROUTER_PORT/ws/session1#' /home/root/codrawer/bridge.env; \
+    # The bridge and Bluetooth run as boot services (bridge/remarkable/boot/). By default the
+    # bridge hosts the router itself; CODRAWER_TABLET_UPLINK=1 points it at this machine's router
+    # instead (AI, /term).
+    if [ "${CODRAWER_TABLET_UPLINK:-0}" = 1 ]; then
+      ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:$ROUTER_PORT/ws/session1#' -e 's#^SERVE_ADDR=#\#SERVE_ADDR=#' /home/root/codrawer/bridge.env;"
+    else
+      ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://127.0.0.1:8577/ws/session1#' -e 's#^\#SERVE_ADDR=#SERVE_ADDR=#' /home/root/codrawer/bridge.env; \
+        grep -q '^SERVE_ADDR=' /home/root/codrawer/bridge.env || echo SERVE_ADDR=:8577 >> /home/root/codrawer/bridge.env;"
+    fi
+    timeout 40 ssh -o BatchMode=yes "root@$TABLET" "$ENV_EDIT \
       systemctl start codrawer-bluetooth; systemctl restart codrawer-bridge; sleep 4; \
       journalctl -u codrawer-bridge -n 3 --no-pager"
     echo "[up] tablet bridge restarted"

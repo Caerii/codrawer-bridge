@@ -2,6 +2,17 @@
 
 This builds a single binary that runs on the Paper Pro **without Python** and streams strokes to the desktop server over WebSocket.
 
+## Router on the tablet (`-serve`)
+
+`-serve :8577` also runs the stroke router (`router/`) in the same process, so the glasses app
+connects to the tablet directly and the desktop is not needed for streaming. The bridge then
+streams into it over loopback (`-ws ws://127.0.0.1:8577/ws/session1`); the boot service does this
+by default (`../boot/bridge.env.example`). It relays `stroke_*`, `key`, `cursor`, `clear`, `doc`,
+replays the current page to a client that joins mid-drawing, and gives each client its own bounded
+queue (a stalled phone is dropped and reconnects, instead of slowing the tablet). AI and `/term`
+stay on the desktop Python router. `-router-only` runs just the router (e.g. on a desktop).
+Tests run anywhere: `go test ./router/`.
+
 ## Build (desktop)
 
 From repo root (Linux/ARM64 target for Paper Pro):

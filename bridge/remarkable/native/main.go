@@ -42,6 +42,8 @@ func main() {
 		KeyboardGrab:       getenvBoolDefault("KEYBOARD_GRAB", false),
 		TypeReplies:        getenvBoolDefault("TYPE_REPLIES", true),
 		TypeCharMs:         getenvIntDefault("TYPE_CHAR_MS", 12),
+		ServeAddr:          os.Getenv("SERVE_ADDR"),
+		RouterOnly:         getenvBoolDefault("ROUTER_ONLY", false),
 	}
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
@@ -64,7 +66,20 @@ func main() {
 	flag.BoolVar(&cfg.KeyboardGrab, "keyboard-grab", cfg.KeyboardGrab, "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)")
 	flag.BoolVar(&cfg.TypeReplies, "type-replies", cfg.TypeReplies, "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)")
 	flag.IntVar(&cfg.TypeCharMs, "type-char-ms", cfg.TypeCharMs, "Milliseconds between typed characters")
+	flag.StringVar(&cfg.ServeAddr, "serve", cfg.ServeAddr, "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>")
+	flag.BoolVar(&cfg.RouterOnly, "router-only", cfg.RouterOnly, "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)")
 	flag.Parse()
+
+	if cfg.ServeAddr != "" {
+		go serveRouter(cfg.ServeAddr)
+	}
+	if cfg.RouterOnly {
+		if cfg.ServeAddr == "" {
+			fmt.Fprintln(os.Stderr, "fatal: -router-only needs -serve")
+			os.Exit(1)
+		}
+		select {}
+	}
 
 	if err := RunBridgeForever(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)

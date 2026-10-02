@@ -57,6 +57,11 @@ type BridgeConfig struct {
 	// field through a virtual keyboard (uinput). TypeCharMs paces the keystrokes.
 	TypeReplies bool
 	TypeCharMs  int
+
+	// ServeAddr runs the stroke router (package router) in this process, so the glasses app
+	// can connect to the tablet directly. RouterOnly skips the pen and keyboard.
+	ServeAddr  string
+	RouterOnly bool
 }
 
 // termMsg is the subset of a `term` broadcast the typer cares about.

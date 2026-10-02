@@ -43,6 +43,10 @@ hub.evenrealities.com with the same account, then force-quitting the app) → Sc
 Tablet (`192.168.50.156` on Wi-Fi, `10.11.99.1` on USB, ssh key installed; it sleeps within
 ~2 minutes and drops SSH — wake it first):
 
+The tablet hosts the stroke router itself (`-serve :8577` in the bridge; the glasses app's packaged
+default is `ws://192.168.50.156:8577/ws/session1`); the desktop router is only needed for AI and
+`/term` (`CODRAWER_TABLET_UPLINK=1 scripts/dev/up.sh --tablet` points the tablet back at it).
+The tablet autosleeps and drops Wi-Fi when idle, so the phone reconnects once you wake it.
 The pen bridge and Bluetooth + keyboard keeper start at boot (`codrawer-bridge.service`,
 `codrawer-bluetooth.service`, from `bridge/remarkable/boot/`; settings in
 `/home/root/codrawer/bridge.env`). Re-run `/home/root/codrawer/install.sh` after a reMarkable OS update.

@@ -18,6 +18,14 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
 - `layer="user"`: user ink (from Paper Pro).
 - `layer="ai"`: AI ghost ink (server→clients). **AI never overwrites user ink**.
 
+## Routers
+
+Two implementations speak this protocol: the desktop Python router (`src/codrawer_bridge/server`,
+everything below) and the stroke-only Go router inside the tablet bridge
+(`bridge/remarkable/native/router`, `-serve`), which drops `prompt`/`ai_*`, answers `term_*`
+with a `term` status, and **replays the current page** (`stroke_begin`/`stroke_pts`/`stroke_end`
+since the last `clear`) to a client right after its `hello`.
+
 ## Message types
 
 ### `hello` (server → client)
