@@ -6,6 +6,8 @@
  * never overwrites user ink. Rendering is client-side, as the protocol requires.
  */
 
+import { zlibSync } from 'fflate'
+
 export type Layer = 'user' | 'ai'
 
 export interface Stroke {
@@ -337,6 +339,70 @@ export function packGray4(gray8: Uint8Array): Uint8Array {
     const a = gray8[i] >> 4
     const b = i + 1 < gray8.length ? gray8[i + 1] >> 4 : 0
     out[i >> 1] = (a << 4) | b
+  }
+  return out
+}
+
+// ── 1-bit PNG ────────────────────────────────────────────────────────────────
+// The phone path costs ~70 ms + ~120 ms/KB per image update (ADR 006), so bytes matter. The
+// browser's PNG encoder writes 8-bit RGBA with default compression; ink frames are black/white,
+// so a 1-bit grayscale PNG at max deflate is several times smaller. The host decodes PNG and
+// converts to Gray4 itself (fmt=png1 to opt in until it is verified on every host version).
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+function crc32(bytes: Uint8Array, start: number, end: number): number {
+  let c = 0xffffffff
+  for (let i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function chunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.length)
+  const v = new DataView(out.buffer)
+  v.setUint32(0, data.length)
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i)
+  out.set(data, 8)
+  v.setUint32(8 + data.length, crc32(out, 4, 8 + data.length))
+  return out
+}
+
+/** Canvas → 1-bit grayscale PNG bytes (white where the pixel is at or above `threshold`). */
+export function toPng1Bytes(ctx: CanvasRenderingContext2D, width: number, height: number, threshold = 96): Uint8Array {
+  const img = ctx.getImageData(0, 0, width, height).data
+  const stride = Math.ceil(width / 8)
+  const raw = new Uint8Array((stride + 1) * height) // each row: filter byte 0, then packed bits
+  for (let y = 0; y < height; y++) {
+    const row = y * (stride + 1) + 1
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      if ((img[i] + img[i + 1] + img[i + 2]) / 3 >= threshold) raw[row + (x >> 3)] |= 0x80 >> (x & 7)
+    }
+  }
+  const ihdr = new Uint8Array(13)
+  const v = new DataView(ihdr.buffer)
+  v.setUint32(0, width)
+  v.setUint32(4, height)
+  ihdr[8] = 1 // bit depth
+  ihdr[9] = 0 // grayscale
+  const parts = [
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlibSync(raw, { level: 9 })),
+    chunk('IEND', new Uint8Array(0)),
+  ]
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) {
+    out.set(p, o)
+    o += p.length
   }
   return out
 }

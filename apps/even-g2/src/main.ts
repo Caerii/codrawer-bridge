@@ -33,7 +33,7 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
+import { packGray4, rasterize, StrokeStore, toBase64, toGray8, toPng1Bytes, toPngBase64, toPngBytes, type Highlight, type RasterOptions, type ViewMode } from './strokes'
 import { runBench } from './bench'
 import { Editor } from './editor'
 import { CollabDoc } from './collab'
@@ -88,7 +88,10 @@ const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 // png: base64 PNG string (the documented encoded-image path; tiny JSON, the host
 // converts to Gray4). gray8 / gray4: raw pixel bytes as number[] (?enc=b64 as a
 // base64 string of the raw bytes, which the phone host rejected on 2026-09-26).
-const FMT: 'png' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' ? v : 'png'))(cfg('fmt', 'png'))
+const FMT: 'png' | 'png1' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' || v === 'png1' ? v : 'png'))(cfg('fmt', 'png'))
+// Image updates allowed on the wire at once (default 1: the host's behaviour with overlapping
+// updates is unverified; ?inflight=2 to measure whether it pipelines them).
+const INFLIGHT = Math.max(1, Math.min(4, Number(cfg('inflight', '1')) || 1))
 const BINARIZE = cfg('binarize', '1') !== '0'
 const SHOW_AI = cfg('ai', '0') !== '0'
 // `?enc=b64` sends imageData as a base64 string across the WebView bridge. The
@@ -886,7 +889,7 @@ async function setPageMode(b: EvenAppBridge | null, mode: PageMode) {
     return
   }
   // never rebuild the page under an image update that is still on the wire
-  while (draining) await new Promise((r) => setTimeout(r, 10))
+  while (draining || inFlight) await new Promise((r) => setTimeout(r, 10))
   lastFrame.loupe = lastFrame.canvas = null // the rebuild blanks the containers
   const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode)))
   console.log('[codrawer] page mode', mode, ok ? 'ok' : 'rebuild failed')
@@ -1017,6 +1020,10 @@ let draining = false
 
 type Frame = Uint8Array | string
 function encode(c: CanvasRenderingContext2D, w: number, h: number): Frame {
+  if (FMT === 'png1') {
+    const bytes = toPng1Bytes(c, w, h, 96)
+    return ENC === 'b64' ? toBase64(bytes) : bytes
+  }
   if (FMT === 'png') {
     if (BINARIZE) {
       // snap to black/white in place so the PNG is a 1-bit-like image with long runs
@@ -1065,6 +1072,25 @@ function readySlot(): Slot | null {
   return null
 }
 
+// Per-slot send stats for the phone log (every 5 s while sending): fps, ms per send, bytes.
+const stats: Record<Slot, { n: number; ms: number; bytes: number }> = {
+  loupe: { n: 0, ms: 0, bytes: 0 },
+  canvas: { n: 0, ms: 0, bytes: 0 },
+}
+let statsAt = performance.now()
+function logStats() {
+  const now = performance.now()
+  if (now - statsAt < 5000) return
+  const secs = (now - statsAt) / 1000
+  const parts = (['loupe', 'canvas'] as Slot[])
+    .filter((k) => stats[k].n)
+    .map((k) => `${k} ${(stats[k].n / secs).toFixed(1)} fps ${Math.round(stats[k].ms / stats[k].n)} ms ${Math.round(stats[k].bytes / stats[k].n)} B`)
+  if (parts.length) console.log(`[codrawer] perf ${parts.join(' | ')} (fmt=${FMT} inflight=${INFLIGHT})`)
+  for (const k of ['loupe', 'canvas'] as Slot[]) stats[k] = { n: 0, ms: 0, bytes: 0 }
+  statsAt = now
+}
+
+let inFlight = 0
 async function drain(b: EvenAppBridge) {
   if (draining) return
   if (pageMode !== 'canvas') {
@@ -1076,33 +1102,47 @@ async function drain(b: EvenAppBridge) {
   draining = true
   try {
     while (pending.loupe || pending.canvas) {
-      let slot = readySlot()
+      const slot = inFlight < INFLIGHT ? readySlot() : null
       if (!slot) {
-        await new Promise((r) => setTimeout(r, 15))
+        await new Promise((r) => setTimeout(r, inFlight ? 5 : 15))
         continue
       }
       const frame = pending[slot]!
       pending[slot] = null
-      const t0 = performance.now()
       lastFrame[slot] = frame
-      try {
-        const r = await b.updateImageRawData(
-          new ImageRawDataUpdate({ containerID: containerOf[slot].id, containerName: containerOf[slot].name, imageData: frame }),
-        )
-        lastImageResult = String(r)
-        if (r !== ImageRawDataUpdateResult.success) console.warn('[codrawer] image update', slot, r)
-      } catch (e) {
-        lastImageResult = 'error'
-        lastFrame[slot] = null // unknown what the glasses show; never skip the next frame
-        console.error('[codrawer] image update threw', slot, e)
-      } finally {
-        rt[slot] = performance.now() - t0
-        lastPushAt[slot] = t0
-        sent[slot]++
-      }
+      const sending = send(b, slot, frame)
+      if (INFLIGHT === 1) await sending
     }
+    while (inFlight) await new Promise((r) => setTimeout(r, 5))
   } finally {
     draining = false
+  }
+}
+
+async function send(b: EvenAppBridge, slot: Slot, frame: Frame) {
+  inFlight++
+  const t0 = performance.now()
+  lastPushAt[slot] = t0
+  try {
+    const r = await b.updateImageRawData(
+      new ImageRawDataUpdate({ containerID: containerOf[slot].id, containerName: containerOf[slot].name, imageData: frame }),
+    )
+    lastImageResult = String(r)
+    if (r !== ImageRawDataUpdateResult.success) console.warn('[codrawer] image update', slot, r)
+  } catch (e) {
+    lastImageResult = 'error'
+    lastFrame[slot] = null // unknown what the glasses show; never skip the next frame
+    console.error('[codrawer] image update threw', slot, e)
+  } finally {
+    const ms = performance.now() - t0
+    // With several in flight the round trip no longer paces the slot; minMs still does.
+    rt[slot] = INFLIGHT === 1 ? ms : 0
+    sent[slot]++
+    stats[slot].n++
+    stats[slot].ms += ms
+    stats[slot].bytes += typeof frame === 'string' ? frame.length : frame.length
+    inFlight--
+    logStats()
   }
 }
 
