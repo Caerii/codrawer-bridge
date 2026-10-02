@@ -351,3 +351,18 @@ After the next OS update, record:
 - whether `authorized_keys` and SSH over Wi-Fi still work;
 - what `install.sh --status` reports;
 - if pre-staging was armed, whether the stub came up by itself.
+
+## Verified on the tablet (2026-10-02, read-only)
+
+- `/etc/os-release`: `IMG_VERSION="3.29.0.149"` (the reMarkable release — what compat.conf lists),
+  `VERSION_ID=6.0.105` (Codex). `/usr/share/remarkable/update.conf` does not exist on this build.
+- `rootdev` and `swupdate -g` → `/dev/mmcblk0p3`; `/sys/devices/platform/lpgpr/root_part=b`,
+  `swu_status=0` (no update staged); also present: `roota_errcnt`, `rootb_errcnt`, `swu_applied`,
+  `swu_recovery`. Partitions: p2/p3 the 4 GiB A/B roots, p5 the encrypted home.
+- `rm-apply-ota.service` (`DefaultDependencies=no`, `Before=reboot.target`, WantedBy reboot)
+  runs `/usr/sbin/rm-apply-ota.sh`: the slot switch happens on a graceful reboot, so the
+  pre-staging window (update written, not yet rebooted) exists.
+- `/etc/dropbear` is a bind of `/home/root/.dropbear`; its `dropbear_ed25519_host_key` is dated
+  Apr 2025, i.e. it survived the Sep 28 update (6.0.100 → 6.0.105): **the host key persists**.
+- `authorized_keys` is `/home/root/.ssh/authorized_keys`; `/run/systemd/system` exists (empty);
+  `/usr/bin/wget` exists (boot.sh health check); no Vellum (`/home/root/.vellum` absent).

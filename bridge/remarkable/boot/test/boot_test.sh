@@ -45,7 +45,7 @@ chmod +x /usr/local/bin/sleep
 
 R=/home/root/codrawer
 mkdir -p $R/releases
-printf 'VERSION_ID=6.0.105\n' > /etc/os-release
+printf 'VERSION_ID=6.0.105\nIMG_VERSION="3.29.0.149"\n' > /etc/os-release
 /work/tool keygen /tmp/key /tmp/pub
 cp /tmp/pub $R/release.pub
 printf 'SERVE_ADDR=\n' > $R/bridge.env
@@ -69,7 +69,7 @@ mkrel() { # mkrel <version> <bad?>
 mkrel v1
 sh $R/releases/v1/boot.sh activate v1 > /tmp/out 2>&1 || { cat /tmp/out; fail "activate v1"; }
 [ "$(readlink $R/current)" = $R/releases/v1 ] || fail "current is v1"
-grep -q 'CODRAWER_OS_TESTED=1' /run/codrawer/env || fail "6.0.105 is tested"
+grep -q 'CODRAWER_OS_TESTED=1' /run/codrawer/env || fail "3.29.0.149 is tested"
 [ -f /run/systemd/system/codrawer-bridge.service ] || fail "units copied into /run"
 pass "first activation"
 
@@ -96,11 +96,11 @@ grep -q 'rolling back' /tmp/out || { cat /tmp/out; fail "rollback message"; }
 pass "unhealthy release rolls back"
 
 # 5. an OS update is detected at the next start, and gates fragile features
-printf 'VERSION_ID=6.1.0\n' > /etc/os-release
+printf 'VERSION_ID=6.1.0\nIMG_VERSION="3.30.0.10"\n' > /etc/os-release
 sh $R/current/boot.sh start > /dev/null
-grep -q '^6.0.105 6.1.0 ' $R/state/os_changed || fail "os_changed recorded"
+grep -q '^3.29.0.149 3.30.0.10 ' $R/state/os_changed || fail "os_changed recorded"
 grep -q 'CODRAWER_OS_TESTED=0' /run/codrawer/env || fail "untested OS gated"
-grep -q 'CODRAWER_OS_CHANGED=6.0.105' /run/codrawer/env || fail "previous OS exported"
+grep -q 'CODRAWER_OS_CHANGED=3.29.0.149' /run/codrawer/env || fail "previous OS exported"
 sh $R/current/boot.sh ack-os
 [ ! -f $R/state/os_changed ] || fail "ack-os clears it"
 pass "OS update detected and gated"
