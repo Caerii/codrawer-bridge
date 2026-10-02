@@ -85,12 +85,15 @@ const LOUPE_ID = 3
 const RENDER_INTERVAL_MS = 50
 const LOUPE_MIN_MS = Number(cfg('frame_ms', '60')) || 60
 const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
+const CANVAS_LULL_MS = Number(cfg('lull_ms', '600')) || 600
 // png: base64 PNG string (the documented encoded-image path; tiny JSON, the host
 // converts to Gray4). gray8 / gray4: raw pixel bytes as number[] (?enc=b64 as a
 // base64 string of the raw bytes, which the phone host rejected on 2026-09-26).
-const FMT: 'png' | 'png1' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' || v === 'png1' ? v : 'png'))(cfg('fmt', 'png'))
-// Image updates allowed on the wire at once (default 1: the host's behaviour with overlapping
-// updates is unverified; ?inflight=2 to measure whether it pipelines them).
+// png1 (1-bit PNG) is ~4x smaller than the browser's PNG; measured on the device it does not
+// lower the ~190 ms per-call floor but keeps the canvas send short (2026-10-02).
+const FMT: 'png' | 'png1' | 'gray8' | 'gray4' = ((v) => (v === 'gray8' || v === 'gray4' || v === 'png' ? v : 'png1'))(cfg('fmt', 'png1'))
+// Image updates allowed on the wire at once. Keep 1: the phone host answers sendFailed to
+// overlapping updates (measured with inflight=2, 2026-10-02).
 const INFLIGHT = Math.max(1, Math.min(4, Number(cfg('inflight', '1')) || 1))
 const BINARIZE = cfg('binarize', '1') !== '0'
 const SHOW_AI = cfg('ai', '0') !== '0'
@@ -1204,7 +1207,11 @@ function tick() {
     rasterize(ctx, store, opts)
     sendCanvasPending = true
   }
-  const canvasDue = strokeEnded || (!HAS_LOUPE && now - lastPushAt.canvas >= CANVAS_MIN_MS)
+  // With a loupe, wait for a lull in the writing, not every stroke_end: in handwriting every
+  // letter ends a stroke, and each ~400 ms canvas send would hold the loupe off the link.
+  const canvasDue = HAS_LOUPE
+    ? strokeEnded && !strokeActive && now - lastInkAt >= CANVAS_LULL_MS
+    : strokeEnded || now - lastPushAt.canvas >= CANVAS_MIN_MS
   if (sendCanvasPending && canvasDue) {
     sendCanvasPending = false
     strokeEnded = false

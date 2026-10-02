@@ -58,7 +58,9 @@ WebView bridge as base64 (2x faster than the SDK's default number array even in 
 | --- | --- | --- |
 | `img=WxH` | `288x144` | canvas container size (max 288x144) |
 | `loupe=WxH` / `loupe=0` | `128x64` | loupe size, or disable it |
-| `fmt=gray8` / `fmt=gray4` | `png` | raw pixels instead of PNG (gray4: packed 4-bit, half of gray8) |
+| `fmt=png` / `gray8` / `gray4` | `png1` | browser PNG, or raw pixels instead of the 1-bit PNG (~4x smaller than `png`) |
+| `lull_ms` | `600` | with a loupe, the canvas refreshes after this long without ink (not at every stroke_end) |
+| `inflight=N` | `1` | overlapping image updates; the phone host answers `sendFailed`, keep 1 |
 | `enc=b64` | `array` | base64 string imageData (the phone host rejects it; simulator/bench only) |
 | `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors (with a loupe the canvas refreshes at `stroke_end`) |
 | `ai=1` | `0` | show the AI ghost layer |
