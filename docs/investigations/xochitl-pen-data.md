@@ -170,3 +170,29 @@ scratch dir and parse them with `uv run --with rmscene`. Record: (a) the delay f
 against the bridge's normalised points for the same strokes. If (a) is under about 2 s, build the
 `.rm` watcher in the Go bridge with go-rmscene. If not, the `.rm` path is for reconciling on page
 turn only, and live tool and colour need a different source.
+
+## Measured on the device (2026-10-02, Codex 6.0.105)
+
+Read-only: a loop on the tablet recorded changes to the open notebook's files while the user
+drew ~90 strokes; the router's `stroke_begin`/`stroke_end` (tablet kernel clock) were logged on
+the desktop for the same window.
+
+- Data lives in `/home/root/.local/share/remarkable/xochitl/<doc>/<page>.rm` (+ `<doc>.content`,
+  `<doc>.metadata`), as documented.
+- **A page's `.rm` is written when the user pauses or leaves the page, not per stroke.** Last
+  stroke at …66.3 s → `.rm` written at …76 (~10 s idle). On the second page 45 strokes over 83 s
+  produced no write until …89, ~6.5 s after the last stroke, the same second the notebook's
+  `.content` changed (page turn). No writes were seen during continuous drawing.
+- **Page turns surface within ~1–2 s** in `<doc>.content` (written at …97/98; the first stroke on
+  the new page came at …99).
+- The written page held exactly the 45 strokes the bridge streamed for it: tool 21 (Calligraphy,
+  matching `extraMetadata.LastPen`), colour 0 (black), thickness_scale 2.0; x −586…606 (centred),
+  y 143…1673; per-point width 8…42 (the nib's direction-dependent width), speed, direction and
+  pressure present. rmscene 0.x warned of unread newer-format data (to inspect).
+- `extraMetadata` carries `LastPen`, `Last<Tool>Color`, `Last<Tool>Size`, `LastActiveTool`.
+
+Conclusion: the `.rm` is too slow to replace strokes live, but is an exact, complete
+reconciliation source a few seconds after each pause and on every page turn; `.content` gives
+page turns promptly. Recommended: live evdev preview → on each `.rm` write, replace the page's
+strokes with the file's (tool, colour, per-point width; deletions = erase/undo); on a `.content`
+page change, switch the session to that page.
