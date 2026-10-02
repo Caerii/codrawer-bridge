@@ -63,6 +63,27 @@ A participant has an id, a display name, a colour (assigned on join, editable) a
 
 A tablet user's own strokes keep the ink they chose on the tablet.
 
+### Real time and simultaneity (requirements)
+
+Many people draw at once and it must feel immediate:
+
+- **Any number of open strokes at a time**, keyed by `(author, id)`; nothing in a client or router
+  may assume "the current stroke". Today's single-pen assumptions to remove: the app's
+  `strokeActive` flag (→ a set of open strokes), the loupe and follow view tracking "the last
+  point from anyone" (→ follow the local participant, or a chosen one). Multi-touch on a phone
+  or iPad is several simultaneous strokes from one participant.
+- **Local ink never waits for the network**: a device draws its own strokes the instant they
+  happen; the network only carries them to others.
+- **Remote ink streams at pen rate**: ~16 ms batches (as the tablet bridge does); on the LAN the
+  tablet-hosted router adds milliseconds. Clients play remote points through a small jitter
+  buffer (about one batch) so remote strokes draw smoothly instead of in network-sized jumps.
+  Hover pointers show where others are about to draw.
+- **Remote peers**: WebSocket/TCP stalls all motion behind one lost packet; for live motion over
+  the internet use a loss-tolerant channel (WebRTC data channel, unordered), while committed
+  strokes go through the reliable CRDT so nothing is lost.
+- **On the reMarkable page**: true simultaneity needs the in-app (XOVI) write path; a virtual pen
+  can only draw while the user's own pen is out of range, so it queues.
+
 ### 3. Sources reconcile into the model
 
 - **reMarkable**: evdev stream (live, ~16 ms) → provisional strokes; on each `.rm` write the
