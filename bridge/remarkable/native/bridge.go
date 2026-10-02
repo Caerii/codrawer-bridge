@@ -239,7 +239,7 @@ func penReaderForever(path string, cfg BridgeConfig, evC chan<- rawEvent, ready 
 // typerForever owns the virtual keyboard and types whatever arrives on in.
 func typerForever(in <-chan string, perChar time.Duration, debug bool) {
 	for {
-		kb, err := OpenVirtualKeyboard("codrawer virtual keyboard")
+		kb, err := OpenVirtualKeyboard(virtualKeyboardName)
 		if err != nil {
 			fmt.Printf("[typer] virtual keyboard unavailable (%v); retrying in 10s\n", err)
 			time.Sleep(10 * time.Second)

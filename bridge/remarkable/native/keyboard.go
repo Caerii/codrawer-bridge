@@ -91,8 +91,14 @@ var namedKeys = map[uint16]string{
 	158: "BrowserBack", 172: "BrowserHome", 224: "BrightnessDown", 225: "BrightnessUp",
 }
 
+// virtualKeyboardName is the uinput device the typer creates (-type-replies). Auto-detect
+// must skip it: at boot it exists before any Bluetooth keyboard connects, and reading it
+// would both hide the real keyboard and echo typed replies back as keystrokes.
+const virtualKeyboardName = "codrawer virtual keyboard"
+
 // findKeyboardDevice picks the event node of a keyboard: a device with a
-// "kbd" handler that is not the tablet's own power key. An explicit path wins.
+// "kbd" handler that is not the tablet's own power key or our virtual keyboard.
+// An explicit path wins.
 func findKeyboardDevice(explicit string) (string, error) {
 	if explicit != "" && explicit != "auto" {
 		return explicit, nil
@@ -113,7 +119,8 @@ func findKeyboardDevice(explicit string) (string, error) {
 			continue
 		}
 		lname := strings.ToLower(d.name)
-		if strings.Contains(lname, "powerkey") || strings.Contains(lname, "power button") {
+		if strings.Contains(lname, "powerkey") || strings.Contains(lname, "power button") ||
+			lname == virtualKeyboardName {
 			continue
 		}
 		path := filepath.Join("/dev/input", event)
