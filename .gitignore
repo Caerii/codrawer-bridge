@@ -68,3 +68,7 @@ Thumbs.db
 
 # terminal turn attachments (written by the router)
 .codrawer/
+
+# Even Hub packages (apps/even-g2: pnpm ehpk)
+*.ehpk
+.vite/

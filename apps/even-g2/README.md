@@ -124,7 +124,14 @@ curl 'http://127.0.0.1:9898/api/console?since_id=0'
 
 ## Device
 
-`app.json` whitelists `http://localhost:8577` / `ws://localhost:8577`; add your LAN origin for
-the phone. `pnpm build` then `evenhub pack app.json dist -o codrawer.ehpk`, or sideload with
-`evenhub qr --url http://<lan-ip>:5188` after `VITE_HMR_HOST=<lan-ip> pnpm dev`.
+Two ways onto the glasses:
+
+- **Package** — `pnpm ehpk` builds `codrawer.ehpk`; drag it onto the Even Hub developer portal
+  ("Drag and drop .ehpk file to create a project") to install it as a prototype app. The package has
+  no dev server to share a host with, so the router address is baked in at build time:
+  `ws://192.168.50.2:8577/ws/session1` by default, or `VITE_CODRAWER_WS=ws://<ip>:8577/ws/<session> pnpm ehpk`.
+  Its origin must be in `app.json`'s network whitelist. `edition` in `app.json` is the manifest
+  schema (`202601`), not a date: `evenhub pack` rejects anything else.
+- **Sideload** — `VITE_HMR_HOST=<lan-ip> pnpm dev`, then `evenhub qr --url http://<lan-ip>:5188`;
+  the router is assumed on the same host as the dev server.
 See `docs/even-g2-testing.md`.

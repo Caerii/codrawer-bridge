@@ -9,7 +9,8 @@
     "build": "tsc -p . && vite build",
     "preview": "vite preview --host --port 5188",
     "sim": "evenhub-simulator http://localhost:5188",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "tsc -p . --noEmit",
+    "ehpk": "tsc -p . && vite build && evenhub pack app.json dist -o codrawer.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16"

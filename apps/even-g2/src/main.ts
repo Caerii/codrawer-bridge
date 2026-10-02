@@ -63,7 +63,11 @@ function size(key: string, fallback: string, maxW: number, maxH: number): [numbe
   const h = m ? Math.min(maxH, Math.max(20, Number(m[2]))) : Math.min(maxH, Number(fallback.split('x')[1]))
   return [w, h]
 }
-const defaultWs = `ws://${location.hostname || 'localhost'}:8577/ws/session1`
+// Dev server (simulator, QR sideload): the router runs on the same host. Packaged .ehpk: the
+// address baked in at build time (vite.config.ts), since the package has no meaningful host.
+const defaultWs = import.meta.env.DEV
+  ? `ws://${location.hostname || 'localhost'}:8577/ws/session1`
+  : __CODRAWER_WS__
 const WS_URL = cfg('ws', defaultWs)
 
 // ── display geometry (G2: 576x288; image containers max 288x144) ────────────

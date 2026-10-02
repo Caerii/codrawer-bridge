@@ -1,6 +1,6 @@
 {
   "package_id": "group.superintelligent.codrawer",
-  "edition": "202609",
+  "edition": "202601",
   "name": "Codrawer",
   "version": "0.1.0",
   "min_app_version": "2.2.10",
