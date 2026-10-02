@@ -196,3 +196,28 @@ reconciliation source a few seconds after each pause and on every page turn; `.c
 page turns promptly. Recommended: live evdev preview → on each `.rm` write, replace the page's
 strokes with the file's (tool, colour, per-point width; deletions = erase/undo); on a `.content`
 page change, switch the session to that page.
+
+## Real time: xochitl's display buffer (measured 2026-10-02)
+
+The `.rm` file is a save; the live, exact rendering is xochitl's display buffer in its own memory.
+
+- No `/dev/fb0`; display is DRM (`/dev/dri/card0`). xochitl (`--system`, pid ~332) has two
+  anonymous mappings of ~14.1 MB (`ffff9026d000` 14,102,528 B and `ffff96c6a000` 14,114,816 B):
+  1632 px stride (6528 B) × 2160 rows, BGRA, = the 1620×2160 screen with row padding — front and
+  back buffers.
+- `goMarkableStream` v0.17.2 (already in /home/root; its unit lived in the volatile /etc so it is
+  not running) reads this via `/proc/<pid>/maps` + `/proc/<pid>/mem`, read-only, and supports the
+  Paper Pro (BGRA, no flip, RLE unsupported). Run with `RK_HTTPS=false RLE_COMPRESSION=false`,
+  basic auth admin/password, `GET :2001/stream` = length-prefixed raw frames (8 zero bytes, 4-byte
+  LE length 0x00d72ff2, then pixels). Over Wi-Fi ~2 MB/s → ~7 s per full frame: unusable live as
+  is, but a captured frame showed the page exactly as on screen — calligraphy, cyan marker, grey
+  shading, toolbar with the selected tool — i.e. pixel-exact, real-time ink.
+
+Design: the bridge reads, locally and read-only, only the screen rectangle around each batch of
+new points from the active buffer (e.g. 200×200 px = 160 KB, milliseconds), compresses it (mostly
+white → a few KB) and sends `{"t":"tile",…}` to clients, which paste tiles over their copy of the
+page (one full compressed frame on join). The glasses loupe crops from the same pixels. The
+vector stream stays for geometry (hover, loupe camera, agent attachments, AI layer); `.rm` stays
+the per-stroke record (tool, colour). Open: picking the active buffer of the two (follow
+goMarkableStream's Paper Pro code), cropping UI, buffer discovery after OS updates (by size, fall
+back to vectors), CPU cost per tile.
