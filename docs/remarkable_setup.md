@@ -159,20 +159,21 @@ ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<D
 ### Start it at boot
 
 On Codex (Paper Pro) `/etc` is an overlay on tmpfs, so copying a unit into `/etc/systemd/system`
-and `systemctl enable` both vanish at the next reboot. `bridge/remarkable/boot/install.sh` puts the
-units into the read-only rootfs underneath instead, along with Bluetooth + the keyboard keeper
-(see `docs/remarkable_bluetooth.md`):
+and `systemctl enable` both vanish at the next reboot. codrawer keeps everything in
+`/home/root/codrawer` as signed releases and puts a single stub unit into the read-only rootfs
+underneath, which starts the current release at boot (with Bluetooth + the keyboard keeper; see
+`docs/investigations/durable-install.md` and `docs/remarkable_bluetooth.md`):
 
 ```bash
-ssh root@<PAPER_PRO_IP> mkdir -p /home/root/codrawer
-scp bridge/remarkable/boot/* root@<PAPER_PRO_IP>:/home/root/codrawer/
-ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/install.sh      # --remove to undo
+CODRAWER_TABLET=<PAPER_PRO_IP> scripts/dev/deploy-tablet.sh    # build, sign, upload, activate
 ssh root@<PAPER_PRO_IP> vi /home/root/codrawer/bridge.env       # DESKTOP_WS etc., then:
 ssh root@<PAPER_PRO_IP> systemctl restart codrawer-bridge
-ssh root@<PAPER_PRO_IP> journalctl -u codrawer-bridge -f
+ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/current/boot.sh doctor
+ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/current/install.sh --remove   # uninstall the stub
 ```
 
-Re-run `install.sh` after a reMarkable OS update (it swaps the root partition).
+After a reMarkable OS update (it swaps the root partition), re-run `deploy-tablet.sh` or keep
+`scripts/dev/tablet-guard.sh` running; both re-add the stub.
 
 ## 5) Configure the server URL
 

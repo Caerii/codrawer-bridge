@@ -26,21 +26,22 @@ bluetoothctl --timeout 10 scan on
 `/etc` on Codex is an overlay whose upper dir is tmpfs (`/var/volatile/etc`): anything written there
 at runtime (`/etc/modules-load.d/…`, `systemctl enable`) is gone after a reboot. What does persist:
 the read-only rootfs underneath, and `/home` (reMarkable already bind-mounts `/var/lib/bluetooth`
-there, so pairings survive). `bridge/remarkable/boot/install.sh` writes one unit,
-`codrawer-bluetooth.service` (and the pen bridge's `codrawer-bridge.service`), into the rootfs (remount rw, bind `/` to reach under the overlay)
-and keeps the logic in `/home/root/codrawer/`:
+there, so pairings survive). codrawer's only rootfs file is the stub `codrawer-boot.service`; at
+boot it runs `/home/root/codrawer/current/boot.sh`, which puts `codrawer-bluetooth.service` and
+`codrawer-bridge.service` into `/run/systemd/system` and starts them (layout, signed releases and
+repair after OS updates: `docs/investigations/durable-install.md`):
 
 ```sh
-ssh root@<tablet> mkdir -p /home/root/codrawer
-scp bridge/remarkable/boot/* root@<tablet>:/home/root/codrawer/
-ssh root@<tablet> sh /home/root/codrawer/install.sh      # --remove to undo
-journalctl -u codrawer-bluetooth -f
+scripts/dev/deploy-tablet.sh                                   # from the desktop
+ssh root@<tablet> sh /home/root/codrawer/current/boot.sh doctor
+ssh root@<tablet> journalctl -u codrawer-bluetooth -f
 ```
 
 At boot `bt-up.sh` holds a wake lock, loads `btnxpuart`, starts `bluetoothd`, retries the driver
 if `hci0` does not come up, then execs `keyboard-keeper.sh` (reconnects every paired device).
-Verified across a reboot 2026-10-02 on Codex 6.0.105. **An OS update swaps the root partition:
-re-run `install.sh` afterwards** (the files in `/home` and the pairing survive).
+Verified across reboots 2026-10-02 on Codex 6.0.105 (reMarkable 3.29.0.149). **An OS update swaps
+the root partition and drops the stub**: `tablet-guard.sh`, `deploy-tablet.sh` or the repair key
+re-add it (the files in `/home` and the pairing survive).
 
 - **Never bring the chip up while the tablet sleeps.** Codex autosleeps (`/sys/power/autosleep` =
   `mem`, deep suspend every ~1 s with the screen off, SSH still answering). A suspend during the

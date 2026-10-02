@@ -47,16 +47,22 @@ The tablet hosts the stroke router itself (`-serve :8577` in the bridge; the gla
 default is `ws://192.168.50.156:8577/ws/session1`); the desktop router is only needed for AI and
 `/term` (`CODRAWER_TABLET_UPLINK=1 scripts/dev/up.sh --tablet` points the tablet back at it).
 The tablet autosleeps and drops Wi-Fi when idle, so the phone reconnects once you wake it.
-The pen bridge and Bluetooth + keyboard keeper start at boot (`codrawer-bridge.service`,
-`codrawer-bluetooth.service`, from `bridge/remarkable/boot/`; settings in
-`/home/root/codrawer/bridge.env`). Re-run `/home/root/codrawer/install.sh` after a reMarkable OS update.
+Everything codrawer runs on the tablet lives in `/home/root/codrawer` (signed releases under
+`releases/`, `current`/`previous` symlinks, `bridge.env`, `release.pub`); the only root-partition
+file is the stub `codrawer-boot.service`, which starts `current/boot.sh` at boot (verified across
+a cold reboot 2026-10-02). See `docs/investigations/durable-install.md`.
 
 ```bash
-ssh root@192.168.50.156 "systemctl restart codrawer-bridge; journalctl -u codrawer-bridge -f"
+scripts/dev/deploy-tablet.sh            # build, sign, upload, activate (60 s health check, auto-rollback)
+ssh root@192.168.50.156 sh /home/root/codrawer/current/boot.sh doctor     # status
+ssh root@192.168.50.156 sh /home/root/codrawer/current/boot.sh rollback   # previous release
+ssh root@192.168.50.156 "journalctl -u codrawer-bridge -f"
 ```
 
-Rebuild + deploy the bridge and boot files: `scripts/dev/deploy-tablet.sh` (waits for the tablet to
-wake, re-installs the units only if they changed, health-checks the router; keeps `.prev`).
+After a reMarkable OS update the stub is gone (only `/home` survives): `scripts/dev/tablet-guard.sh`
+re-adds it automatically when running, or run `deploy-tablet.sh`, or a phone shortcut with the key
+from `scripts/dev/make-repair-key.sh`. Signing key: `~/.codrawer/release.key` (never commit it).
+To ship a release that runs on a new OS version, add its `IMG_VERSION` to `boot/compat.conf`.
 
 ## Facts that cost hours (do not rediscover)
 
@@ -75,7 +81,10 @@ wake, re-installs the units only if they changed, health-checks the router; keep
 - **The bridge must select on socket errors, not only after a pen read** (fixed; keep it that way).
 - **Git Bash converts `/hw` arguments into `C:/Program Files/Git/hw`**: set `MSYS_NO_PATHCONV=1`
   for the harness scripts. Python heredocs in Bash mangle backslashes — put patch scripts in files.
-- **Tablet `/etc` is tmpfs-backed** (overlay on `/var/volatile`): runtime edits vanish on reboot.
+- **Tablet `/etc` is tmpfs-backed** (overlay on `/var/volatile`): runtime edits vanish on reboot,
+  and files written *under* the mounted overlay (rootfs) are not visible until the next boot —
+  write both (install.sh does). Reboot over SSH with `systemctl --no-block reboot`: a backgrounded
+  `reboot` dies with the session.
   Persist via the rootfs (see `bridge/remarkable/boot/install.sh`) or `/home`. Never load the
   Bluetooth driver while the tablet autosleeps: the chip wedges until reboot (hold a wake lock).
 - **Windows Swift-Pairs any keyboard in pairing mode**; turn the PC's Bluetooth off before pairing
