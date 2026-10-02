@@ -150,6 +150,7 @@ let canvasDirty = true
 let loupeDirty = true
 let strokeEnded = false
 let strokeActive = false
+let lastInkAt = 0 // performance.now() of the last stroke message; text waits for a lull
 let lastImageResult = ''
 const rt = { loupe: 0, canvas: 0 }
 const sent = { loupe: 0, canvas: 0 }
@@ -631,22 +632,45 @@ function renderText(): string {
 
 // ── websocket (codrawer protocol) ───────────────────────────────────────────
 let socket: WebSocket | null = null
+// Reconnect with capped backoff. Liveness: a router that sends app-level pings (the tablet's Go
+// router) must be heard from every PING_DEAD_MS, otherwise the socket is presumed dead (a phone
+// that changed networks keeps a half-open socket and would show "live" forever). Routers that
+// never ping (the desktop Python router) are not timed out.
+const PING_DEAD_MS = 25_000
+let retryMs = 800
+let lastHeardAt = 0
+let routerPings = false
+
 function connect() {
-  const ws = new WebSocket(WS_URL)
+  let ws: WebSocket
+  try {
+    ws = new WebSocket(WS_URL)
+  } catch (e) {
+    console.error('[codrawer] bad router URL', WS_URL, e)
+    setTimeout(connect, (retryMs = Math.min(5000, retryMs * 1.6)))
+    return
+  }
   socket = ws
   ws.onopen = () => {
     connected = true
+    retryMs = 800
+    lastHeardAt = performance.now()
+    routerPings = false
     textDirty = true
     collab.announce() // merge anything edited while offline; the router replays the rest
     console.log('[codrawer] connected', WS_URL)
   }
   ws.onclose = () => {
+    if (socket !== ws) return
     connected = false
     strokeActive = false // a stroke cut off by the disconnect must not hold text updates
+    store.endOpen() // and never gets its stroke_end
     textDirty = true
-    setTimeout(connect, 800)
+    setTimeout(connect, retryMs)
+    retryMs = Math.min(5000, retryMs * 1.6)
   }
   ws.onmessage = (ev) => {
+    lastHeardAt = performance.now()
     let m: any
     try {
       m = JSON.parse(String(ev.data))
@@ -654,21 +678,35 @@ function connect() {
       return
     }
     switch (m.t) {
+      case 'hello':
+        // A router that replays the page (the tablet's) is the source of truth: start from its
+        // replay instead of merging it into whatever we had before the disconnect.
+        if (m.replay) {
+          store.clear()
+          canvasDirty = true
+          strokeEnded = true
+        }
+        break
+      case 'ping':
+        routerPings = true
+        break
       case 'stroke_begin':
+        // no frame yet: the first stroke_pts carries the first ink
         store.begin(m.id, 'user', m.brush || 'pen')
         strokeActive = true
-        loupeDirty = true
+        lastInkAt = performance.now()
         break
       case 'stroke_pts':
         store.points(m.id, m.pts || [], 'user')
+        lastInkAt = performance.now()
         loupeDirty = true
         canvasDirty = true
         break
       case 'stroke_end':
         store.end(m.id)
         strokeActive = false
-        loupeDirty = true
-        canvasDirty = true
+        lastInkAt = performance.now()
+        canvasDirty = true // the loupe already shows the last points
         strokeEnded = true
         textDirty = true
         break
@@ -825,6 +863,9 @@ async function setPageMode(b: EvenAppBridge | null, mode: PageMode) {
     textDirty = true
     return
   }
+  // never rebuild the page under an image update that is still on the wire
+  while (draining) await new Promise((r) => setTimeout(r, 10))
+  lastFrame.loupe = lastFrame.canvas = null // the rebuild blanks the containers
   const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode)))
   console.log('[codrawer] page mode', mode, ok ? 'ok' : 'rebuild failed')
   lastTextSent = '' // the rebuild carried fresh content; resend on next change
@@ -942,7 +983,8 @@ async function initGlasses(b: EvenAppBridge): Promise<boolean> {
 // measured round trip so a slow link degrades to a lower rate, never to lag.
 type Slot = 'loupe' | 'canvas'
 const pending: Record<Slot, Frame | null> = { loupe: null, canvas: null }
-const lastPushAt: Record<Slot, number> = { loupe: 0, canvas: 0 }
+const lastPushAt: Record<Slot, number> = { loupe: 0, canvas: 0 } // when the last send started
+const lastFrame: Record<Slot, Frame | null> = { loupe: null, canvas: null } // last frame sent
 const minMs: Record<Slot, number> = { loupe: LOUPE_MIN_MS, canvas: CANVAS_MIN_MS }
 const containerOf: Record<Slot, { id: number; name: string }> = {
   loupe: { id: LOUPE_ID, name: 'loupe' },
@@ -972,10 +1014,30 @@ function encode(c: CanvasRenderingContext2D, w: number, h: number): Frame {
   return ENC === 'b64' ? toBase64(bytes) : bytes
 }
 
+function sameFrame(a: Frame | null, b: Frame): boolean {
+  if (a === null || typeof a !== typeof b) return false
+  if (typeof a === 'string') return a === b
+  const x = a as Uint8Array
+  const y = b as Uint8Array
+  if (x.length !== y.length) return false
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false
+  return true
+}
+
+/** Queue a frame unless it is identical to what the container already shows. */
+function offer(slot: Slot, frame: Frame, b: EvenAppBridge) {
+  if (sameFrame(lastFrame[slot], frame)) return
+  pending[slot] = frame
+  void drain(b)
+}
+
+// A slot may send again once its previous send has completed and minMs has passed since that
+// send started: awaiting the call already serializes on the link, so waiting the measured round
+// trip again after completion would halve the frame rate.
 function readySlot(): Slot | null {
   const now = performance.now()
   for (const s of ['loupe', 'canvas'] as Slot[]) {
-    if (pending[s] && now - lastPushAt[s] >= Math.max(minMs[s], rt[s])) return s
+    if (pending[s] && now - lastPushAt[s] >= Math.max(minMs[s], rt[s])) return s // rt: the send has completed
   }
   return null
 }
@@ -999,6 +1061,7 @@ async function drain(b: EvenAppBridge) {
       const frame = pending[slot]!
       pending[slot] = null
       const t0 = performance.now()
+      lastFrame[slot] = frame
       try {
         const r = await b.updateImageRawData(
           new ImageRawDataUpdate({ containerID: containerOf[slot].id, containerName: containerOf[slot].name, imageData: frame }),
@@ -1007,14 +1070,13 @@ async function drain(b: EvenAppBridge) {
         if (r !== ImageRawDataUpdateResult.success) console.warn('[codrawer] image update', slot, r)
       } catch (e) {
         lastImageResult = 'error'
+        lastFrame[slot] = null // unknown what the glasses show; never skip the next frame
         console.error('[codrawer] image update threw', slot, e)
       } finally {
         rt[slot] = performance.now() - t0
-        lastPushAt[slot] = performance.now()
+        lastPushAt[slot] = t0
         sent[slot]++
-        textDirty = true
       }
-      slot = null
     }
   } finally {
     draining = false
@@ -1026,16 +1088,19 @@ async function drain(b: EvenAppBridge) {
 let textChain: Promise<void> = Promise.resolve()
 let lastTextSent = ''
 let lastTextAt = 0
-function pushText(b: EvenAppBridge, content: string) {
-  if (content === lastTextSent) return
-  // A text update is a ~83 ms host call that competes with ink frames, so hold
-  // it while a stroke is in progress and never send more than one every 2 s,
-  // except while typing, where the line must follow the keys (~150 ms floor).
+const INK_LULL_MS = 700
+/** Send the text container if due. False = deferred (call again later), true = sent or unchanged. */
+function pushText(b: EvenAppBridge, content: string): boolean {
+  if (content === lastTextSent) return true
+  // A text update is a ~83 ms host call that competes with ink frames, so hold it while ink
+  // is flowing (including the gaps between handwritten letters) and never send more than one
+  // every 2 s, except while typing, where the line must follow the keys (~150 ms floor).
   // The very first line (replacing "connecting…") always goes out.
   if (lastTextSent !== '') {
-    const typing = performance.now() - typingAt < 1500
-    if (!typing && strokeActive) return
-    if (performance.now() - lastTextAt < (typing ? 150 : 2000)) return
+    const now = performance.now()
+    const typing = now - typingAt < 1500
+    if (!typing && (strokeActive || now - lastInkAt < INK_LULL_MS)) return false
+    if (now - lastTextAt < (typing ? 150 : 2000)) return false
   }
   lastTextSent = content
   lastTextAt = performance.now()
@@ -1046,39 +1111,45 @@ function pushText(b: EvenAppBridge, content: string) {
       console.error('[codrawer] text update threw', e)
     }
   })
+  return true
 }
 
 // ── render loop ─────────────────────────────────────────────────────────────
+let wasTyping = false
 function tick() {
-  store.prune()
+  if (store.prune()) {
+    canvasDirty = true
+    strokeEnded = true
+  }
   const now = performance.now()
+  if (connected && routerPings && now - lastHeardAt > PING_DEAD_MS) {
+    console.warn('[codrawer] router silent for', Math.round(now - lastHeardAt), 'ms; reconnecting')
+    routerPings = false
+    socket?.close() // onclose reconnects
+  }
   if (HAS_LOUPE && loupeDirty) {
     loupeDirty = false
     rasterize(lctx, store, loupeOpts())
-    if (bridge) {
-      pending.loupe = encode(lctx, LOUPE_W, LOUPE_H)
-      void drain(bridge)
-    }
+    if (bridge) offer('loupe', encode(lctx, LOUPE_W, LOUPE_H), bridge)
   }
-  // The canvas is expensive: refresh at stroke_end, or at most every CANVAS_MIN_MS
-  // during a long stroke. With no loupe it is the only view, so refresh eagerly.
-  const canvasDue = strokeEnded || !HAS_LOUPE || now - lastPushAt.canvas >= CANVAS_MIN_MS
+  // The canvas is a big send: with a loupe showing live ink it waits for stroke_end, so it
+  // never holds the link during a stroke. With no loupe it is the only view: refresh at most
+  // every CANVAS_MIN_MS while drawing.
+  const canvasDue = strokeEnded || (!HAS_LOUPE && now - lastPushAt.canvas >= CANVAS_MIN_MS)
   if (canvasDirty && canvasDue) {
     canvasDirty = false
     strokeEnded = false
     rasterize(ctx, store, opts)
-    if (bridge) {
-      pending.canvas = encode(ctx, IMG_W, IMG_H)
-      void drain(bridge)
-    }
+    if (bridge) offer('canvas', encode(ctx, IMG_W, IMG_H), bridge)
   }
+  const typingNow = isTyping()
+  if (wasTyping && !typingNow) textDirty = true // the typing view expired: back to status
+  wasTyping = typingNow
   if (textDirty) {
     textDirty = false
     const line = renderText()
     statusEl.textContent = line
-    if (bridge) pushText(bridge, line)
-  } else if (isTyping() && inputLine === '' && performance.now() - typingAt > 15000) {
-    textDirty = true // typing view expires back to the status view
+    if (bridge && !pushText(bridge, line)) textDirty = true // deferred: retry next tick
   }
   // autosave the document 2 s after the last edit
   if (editor.dirty && docChangedAt && performance.now() - docChangedAt > 2000) {

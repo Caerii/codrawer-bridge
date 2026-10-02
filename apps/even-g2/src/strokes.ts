@@ -15,6 +15,8 @@ export interface Stroke {
   pts: number[][] // [x, y, p] (t dropped)
   done: boolean
   endedAt: number
+  /** bounding box in page coords [x0, y0, x1, y1], for culling in follow mode */
+  box: [number, number, number, number]
 }
 
 export type ViewMode = 'follow' | 'full'
@@ -33,24 +35,32 @@ export interface RasterOptions {
   showAi?: boolean
 }
 
-const RETENTION_MS = 5 * 60 * 1000
-const MAX_STROKES = 400
+// Memory and raster cost scale with points, so the page is bounded by points (oldest finished
+// strokes go first), not by age: a long drawing keeps its beginning.
+const MAX_STROKES = 3000
+const MAX_POINTS = 120_000
 
 export class StrokeStore {
   private strokes = new Map<string, Stroke>()
   private order: string[] = []
+  private nPoints = 0
+  /** last user pen position (follow mode tracks the user, never the AI) */
   lastPoint: [number, number] | null = null
-  dirty = true
 
   begin(id: string, layer: Layer, brush = 'pen') {
-    const s: Stroke = { id, layer, brush, pts: [], done: false, endedAt: 0 }
-    this.strokes.set(id, s)
-    this.order.push(id)
-    if (this.order.length > MAX_STROKES) {
-      const drop = this.order.shift()
-      if (drop) this.strokes.delete(drop)
+    const old = this.strokes.get(id)
+    if (old) {
+      // Seen before (a router replaying the page after a reconnect): restart it in place.
+      this.nPoints -= old.pts.length
+      old.layer = layer
+      old.brush = brush
+      old.pts = []
+      old.done = false
+      old.box = [1, 1, 0, 0]
+      return
     }
-    this.dirty = true
+    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0] })
+    this.order.push(id)
   }
 
   points(id: string, pts: number[][], layerHint: Layer) {
@@ -59,12 +69,19 @@ export class StrokeStore {
       this.begin(id, layerHint)
       s = this.strokes.get(id)!
     }
+    const b = s.box
     for (const p of pts) {
       if (!Array.isArray(p) || p.length < 2) continue
-      s.pts.push([p[0], p[1], p.length >= 3 ? p[2] : 0.6])
-      this.lastPoint = [p[0], p[1]]
+      const x = p[0]
+      const y = p[1]
+      s.pts.push([x, y, p.length >= 3 ? p[2] : 0.6])
+      this.nPoints++
+      if (x < b[0]) b[0] = x
+      if (y < b[1]) b[1] = y
+      if (x > b[2]) b[2] = x
+      if (y > b[3]) b[3] = y
+      if (s.layer === 'user') this.lastPoint = [x, y]
     }
-    this.dirty = true
   }
 
   end(id: string) {
@@ -73,7 +90,11 @@ export class StrokeStore {
       s.done = true
       s.endedAt = Date.now()
     }
-    this.dirty = true
+  }
+
+  /** Close every open stroke (the connection dropped mid-stroke; no stroke_end will come). */
+  endOpen() {
+    for (const s of this.strokes.values()) if (!s.done) this.end(s.id)
   }
 
   /** Drop every stroke, or only one layer's. */
@@ -81,35 +102,40 @@ export class StrokeStore {
     if (!layer) {
       this.strokes.clear()
       this.order = []
+      this.nPoints = 0
       this.lastPoint = null
     } else {
-      for (const id of [...this.order]) {
-        if (this.strokes.get(id)?.layer === layer) {
+      for (const id of this.order) {
+        const s = this.strokes.get(id)
+        if (s?.layer === layer) {
+          this.nPoints -= s.pts.length
           this.strokes.delete(id)
-          this.order = this.order.filter((x) => x !== id)
         }
       }
+      this.order = this.order.filter((id) => this.strokes.has(id))
     }
-    this.dirty = true
   }
 
-  prune(now = Date.now()) {
-    for (const id of [...this.order]) {
-      const s = this.strokes.get(id)
-      if (s && s.done && now - s.endedAt > RETENTION_MS) {
-        this.strokes.delete(id)
-        this.order = this.order.filter((x) => x !== id)
-        this.dirty = true
-      }
+  /** Drop the oldest finished strokes while over budget. True when something was dropped. */
+  prune(): boolean {
+    let dropped = 0
+    while ((this.order.length - dropped > MAX_STROKES || this.nPoints > MAX_POINTS) && dropped < this.order.length) {
+      const s = this.strokes.get(this.order[dropped])
+      if (!s || !s.done) break // never drop a stroke that is still being drawn
+      this.nPoints -= s.pts.length
+      this.strokes.delete(s.id)
+      dropped++
     }
+    if (dropped) this.order = this.order.slice(dropped)
+    return dropped > 0
   }
 
   all(): Stroke[] {
     return this.order.map((id) => this.strokes.get(id)!).filter(Boolean)
   }
 
-  get size() {
-    return this.order.length
+  get pointCount() {
+    return this.nPoints
   }
 
   counts(): { user: number; ai: number } {
@@ -140,6 +166,16 @@ function inkBounds(strokes: Stroke[]): [number, number, number, number] | null {
     }
   }
   return any ? [x0, y0, x1, y1] : null
+}
+
+/** The follow window in page coords [x0, y0, x1, y1], or null when there is no pen yet. */
+function followWindow(o: RasterOptions, store: StrokeStore): [number, number, number, number] | null {
+  const last = store.lastPoint
+  if (!last) return null
+  const winW = o.window
+  const winH = (o.window * o.height) / o.width / o.pageAspect
+  const pad = 0.02 // wide lines reach slightly past their points
+  return [last[0] - winW / 2 - pad, last[1] - winH / 2 - pad, last[0] + winW / 2 + pad, last[1] + winH / 2 + pad]
 }
 
 /** Map normalized page coords into pixel coords for the chosen view. */
@@ -180,9 +216,11 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
   ctx.fillRect(0, 0, o.width, o.height)
   const map = makeMapper(o, store)
   const follow = o.mode === 'follow'
+  const win = follow ? followWindow(o, store) : null
   for (const s of store.all()) {
     if (s.pts.length < 2) continue
     if (s.layer === 'ai' && o.showAi === false) continue
+    if (win && (s.box[2] < win[0] || s.box[0] > win[2] || s.box[3] < win[1] || s.box[1] > win[3])) continue
     // Emphasis must survive a 1-bit render (the simulator thresholds grey to
     // full green), so the de-emphasised layer is dashed as well as dimmer.
     const emphasised = o.highlight === 'all' || o.highlight === s.layer
@@ -194,18 +232,31 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     if (s.brush === 'eraser' && s.layer === 'user') {
       ctx.strokeStyle = '#000'
     }
+    // Canvas applies one lineWidth per path, so pressure needs a path per run of points with
+    // the same (quantized) width. The floor keeps thin lines solid after binarization.
+    const widthOf = (p: number) => {
+      const w = follow ? 1 + 2.5 * p : 1.3 + 1.2 * p
+      return Math.round((s.brush === 'eraser' ? w * 6 : w) * 2) / 2
+    }
+    let [px, py] = map(s.pts[0][0], s.pts[0][1])
+    let width = widthOf(s.pts[0][2])
+    ctx.lineWidth = width
     ctx.beginPath()
-    let started = false
-    for (const p of s.pts) {
-      const [px, py] = map(p[0], p[1])
-      const w = follow ? 1 + 2.5 * p[2] : 0.5 + 1.2 * p[2]
-      ctx.lineWidth = s.brush === 'eraser' ? w * 6 : w
-      if (!started) {
+    ctx.moveTo(px, py)
+    for (let i = 1; i < s.pts.length; i++) {
+      const p = s.pts[i]
+      const [qx, qy] = map(p[0], p[1])
+      const w = widthOf(p[2])
+      if (w !== width) {
+        ctx.stroke()
+        width = w
+        ctx.lineWidth = w
+        ctx.beginPath()
         ctx.moveTo(px, py)
-        started = true
-      } else {
-        ctx.lineTo(px, py)
       }
+      ctx.lineTo(qx, qy)
+      px = qx
+      py = qy
     }
     ctx.stroke()
   }
