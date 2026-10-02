@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -221,19 +222,123 @@ func TestBigPageReplayDoesNotDropJoiner(t *testing.T) {
 	tablet := dial(t, srv, "s1")
 	watcher := dial(t, srv, "s1")
 	const strokes = 600 // 1800 replay messages, well past sendQueue
+	// The watcher drains while the tablet sends (a live client keeps up); it also tells us when
+	// the router has processed everything.
+	drained := make(chan error, 1)
+	go func() {
+		for range strokes * 3 {
+			if _, _, err := watcher.ReadMessage(); err != nil {
+				drained <- err
+				return
+			}
+		}
+		drained <- nil
+	}()
 	for i := range strokes {
 		id := "u_" + string(rune('a'+i%26)) + strings.Repeat("x", i/26)
 		send(t, tablet, `{"t":"stroke_begin","id":"`+id+`"}`)
 		send(t, tablet, `{"t":"stroke_pts","id":"`+id+`","pts":[[0.5,0.5,0.5,1]]}`)
 		send(t, tablet, `{"t":"stroke_end","id":"`+id+`"}`)
 	}
-	for range strokes * 3 {
-		read(t, watcher)
+	if err := <-drained; err != nil {
+		t.Fatalf("watcher: %v", err)
 	}
 	late := dial(t, srv, "s1")
 	for i := range strokes * 3 {
 		if m := read(t, late); m["t"] == nil {
 			t.Fatalf("replay message %d malformed", i)
 		}
+	}
+}
+
+func TestHelloSaysReplayAndSourceCanSkipIt(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	watcher := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"stroke_begin","id":"u_1"}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_1"}`)
+	read(t, watcher)
+	read(t, watcher)
+
+	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/s1"
+	src, _, err := websocket.DefaultDialer.Dial(base+"?replay=0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if m := read(t, src); m["t"] != "hello" || m["replay"] != false {
+		t.Fatalf("hello for a source: %v", m)
+	}
+
+	v, _, err := websocket.DefaultDialer.Dial(base, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if m := read(t, v); m["replay"] != true {
+		t.Fatalf("hello for a viewer: %v", m)
+	}
+	if m := read(t, v); m["t"] != "stroke_begin" {
+		t.Fatalf("viewer replay: %v", m)
+	}
+	expectQuiet(t, src, 150*time.Millisecond) // the pen source got no page replay
+}
+
+func TestLeavingMidStrokeEndsItForEveryone(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	glasses := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"stroke_begin","id":"u_1"}`)
+	read(t, glasses)
+	_ = tablet.Close() // the bridge's socket dies mid-stroke
+	if m := read(t, glasses); m["t"] != "stroke_end" || m["id"] != "u_1" {
+		t.Fatalf("want synthetic stroke_end, got %v", m)
+	}
+	late := dial(t, srv, "s1")
+	read(t, late) // stroke_begin
+	if m := read(t, late); m["t"] != "stroke_end" {
+		t.Fatalf("replayed stroke still open: %v", m)
+	}
+}
+
+func TestLiveMessagesDuringReplayKeepOrder(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	watcher := dial(t, srv, "s1")
+	const page = 400
+	for i := range page {
+		id := fmt.Sprintf("u_%d", i)
+		send(t, tablet, `{"t":"stroke_begin","id":"`+id+`"}`)
+		send(t, tablet, `{"t":"stroke_end","id":"`+id+`"}`)
+	}
+	for range page * 2 {
+		read(t, watcher)
+	}
+	// Join while the tablet keeps drawing: nothing replayed may arrive after a live message.
+	const live = 50
+	done := make(chan struct{})
+	go func() {
+		for i := range live {
+			_ = tablet.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"t":"stroke_begin","id":"live_%d"}`, i)))
+		}
+		close(done)
+	}()
+	late := dial(t, srv, "s1")
+	<-done
+	nLive, nReplayed := 0, 0
+	for range page*2 + live {
+		m := read(t, late)
+		id := m["id"].(string)
+		if strings.HasPrefix(id, "live_") {
+			nLive++
+			continue
+		}
+		if nLive > 0 {
+			t.Fatalf("replayed %s after a live message", id)
+		}
+		nReplayed++
+	}
+	if nReplayed != page*2 || nLive != live {
+		t.Fatalf("replayed=%d live=%d", nReplayed, nLive)
 	}
 }

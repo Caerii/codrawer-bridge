@@ -11,6 +11,12 @@
 //   - Every client has its own bounded send queue; a client that falls behind is dropped (it
 //     reconnects and gets the replay) instead of stalling the tablet's stream.
 //   - The router pings clients and drops ones that stop answering (a phone that left Wi-Fi).
+//     Besides WebSocket pings it sends {"t":"ping"}, which browsers can see, so the glasses app
+//     can detect a half-open socket on its side. hello carries "replay":true.
+//   - A replay is built outside the session lock; live messages for that client are held
+//     until its replay is queued, so a big page never freezes the stream for everyone else.
+//   - A pen source can join with ?replay=0 (the bridge does). When a client leaves mid-stroke
+//     its open strokes are ended for everyone.
 //
 // Shared live editing: clients keep the session document as a Yjs CRDT and send
 // {"t":"doc_update","u":<base64>}. The router never decodes them; it relays each one, keeps the
@@ -33,16 +39,18 @@ import (
 )
 
 const (
-	sendQueue    = 1024             // messages buffered per client before it counts as stalled
-	pingEvery    = 10 * time.Second // server → client keepalive
-	pongWait     = 30 * time.Second // drop a client silent for this long
-	writeWait    = 5 * time.Second
-	replayPts    = 256 // points per replayed stroke_pts message
-	maxStrokes   = 4000
-	maxPoints    = 400_000 // page memory bound (~20 MB worst case); oldest strokes go first
-	maxMessage   = 1 << 20
-	docCompactAt = 256 // doc_update log entries before asking a client for a snapshot
-	docReplayN   = 256 // updates per replayed doc_update message
+	sendQueue       = 1024             // messages buffered per client before it counts as stalled
+	pingEvery       = 10 * time.Second // server → client keepalive
+	pongWait        = 30 * time.Second // drop a client silent for this long
+	writeWait       = 5 * time.Second
+	replayPts       = 256 // points per replayed stroke_pts message
+	maxStrokes      = 4000
+	maxPoints       = 150_000 // page memory bound (~90 B/point, ~14 MB); oldest strokes go first
+	maxStrokePoints = 20_000  // one stroke never holds more (a pen resting on the glass)
+	maxMessage      = 1 << 20
+	docCompactAt    = 256              // doc_update log entries before asking a client for a snapshot
+	docReplayN      = 256              // updates per replayed doc_update message
+	docCompactAfter = 10 * time.Second // re-ask another writer if the asked one never answers
 )
 
 // Router holds the sessions. The zero value is not usable; call New.
@@ -99,20 +107,35 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 		return // Upgrade already wrote the error response
 	}
 	s := r.session(id)
-	// Register and queue hello + replay under the session lock, so no live message can slip
-	// in between the replay and the first broadcast this client sees. The queue holds the
-	// whole replay plus the usual headroom: a big page must not count as a stalled client.
+	wantReplay := req.URL.Query().Get("replay") != "0"
+	// Register under the lock with a snapshot of the page; broadcasts to this client are held
+	// (c.held) until the replay built from the snapshot is queued, so ordering is exact
+	// without marshalling the page while everyone else waits on the lock.
+	c := &client{conn: conn, addr: req.RemoteAddr, replaying: true}
 	s.mu.Lock()
-	replay := s.replayLocked()
-	c := &client{conn: conn, send: make(chan []byte, len(replay)+1+sendQueue), addr: req.RemoteAddr}
-	c.queue(mustJSON(map[string]string{"t": "hello", "session": id}))
-	for _, m := range replay {
-		c.queue(m)
+	var snap pageSnapshot
+	if wantReplay {
+		snap = s.snapshotLocked()
 	}
 	s.clients[c] = true
 	n := len(s.clients)
 	s.mu.Unlock()
-	r.Logf("[router] %s joined %s (%d clients)", c.addr, id, n)
+
+	replay := snap.messages()
+	// The queue holds the whole replay plus the usual headroom: a big page must not count as a
+	// stalled client.
+	c.send = make(chan []byte, len(replay)+1+sendQueue)
+	c.queue(mustJSON(map[string]any{"t": "hello", "session": id, "replay": wantReplay}))
+	for _, m := range replay {
+		c.queue(m)
+	}
+	s.mu.Lock()
+	for _, m := range c.held {
+		c.queue(m)
+	}
+	c.held, c.replaying = nil, false
+	s.mu.Unlock()
+	r.Logf("[router] %s joined %s (%d clients, replayed %d messages)", c.addr, id, n, len(replay))
 
 	go c.writeLoop()
 	r.readLoop(s, c)
@@ -121,6 +144,13 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 	delete(s.clients, c)
 	if s.compactWho == c {
 		s.compactWho = nil // ask someone else next time
+	}
+	// Strokes this client was drawing will never get their stroke_end: end them for everyone.
+	for id, st := range s.strokes {
+		if st.owner == c && !st.ended {
+			st.ended = true
+			s.broadcastLocked(mustJSON(map[string]string{"t": "stroke_end", "id": id}), c)
+		}
 	}
 	n = len(s.clients)
 	s.mu.Unlock()
@@ -158,7 +188,7 @@ func (r *Router) readLoop(s *session, c *client) {
 		switch m.T {
 		case "stroke_begin", "stroke_pts", "stroke_end":
 			s.mu.Lock()
-			s.recordLocked(m, raw)
+			s.recordLocked(m, raw, c)
 			s.broadcastLocked(raw, c)
 			s.mu.Unlock()
 		case "key", "cursor", "doc":
@@ -177,8 +207,10 @@ func (r *Router) readLoop(s *session, c *client) {
 			s.mu.Lock()
 			s.docLog = append(s.docLog, m.U)
 			s.broadcastLocked(raw, c)
-			if len(s.docLog) > docCompactAt && s.compactWho == nil {
-				s.compactWho, s.compactFrom = c, len(s.docLog)
+			stale := s.compactWho != nil && time.Since(s.compactAsked) > docCompactAfter
+			if len(s.docLog) > docCompactAt && (s.compactWho == nil || stale) {
+				// ask the client that just wrote: it is alive and holds the whole document
+				s.compactWho, s.compactFrom, s.compactAsked = c, len(s.docLog), time.Now()
 				c.queue([]byte(`{"t":"doc_compact"}`))
 			}
 			s.mu.Unlock()
@@ -209,18 +241,20 @@ type session struct {
 	strokes map[string]*stroke
 	points  int
 	// shared document: Yjs updates (base64) in arrival order; survives clear (it is not ink)
-	docLog      []string
-	compactWho  *client // asked for a doc_state, or nil
-	compactFrom int     // docLog length when it was asked
+	docLog       []string
+	compactWho   *client   // asked for a doc_state, or nil
+	compactFrom  int       // docLog length when it was asked
+	compactAsked time.Time // when it was asked
 }
 
 type stroke struct {
 	begin []byte            // the stroke_begin message as received
 	pts   []json.RawMessage // every point, as received
 	ended bool
+	owner *client // who is drawing it (ended for everyone if they leave mid-stroke)
 }
 
-func (s *session) recordLocked(m envelope, raw []byte) {
+func (s *session) recordLocked(m envelope, raw []byte, from *client) {
 	if m.ID == "" {
 		return
 	}
@@ -231,14 +265,18 @@ func (s *session) recordLocked(m envelope, raw []byte) {
 		} else {
 			s.order = append(s.order, m.ID)
 		}
-		s.strokes[m.ID] = &stroke{begin: append([]byte(nil), raw...)}
+		s.strokes[m.ID] = &stroke{begin: append([]byte(nil), raw...), owner: from}
 	case "stroke_pts":
 		st := s.strokes[m.ID]
 		if st == nil {
 			return // points for a stroke that began before a clear or before we started
 		}
-		st.pts = append(st.pts, m.Pts...)
-		s.points += len(m.Pts)
+		add := m.Pts
+		if room := maxStrokePoints - len(st.pts); len(add) > room {
+			add = add[:max(0, room)] // still relayed live; only the replay copy is capped
+		}
+		st.pts = append(st.pts, add...)
+		s.points += len(add)
 	case "stroke_end":
 		if st := s.strokes[m.ID]; st != nil {
 			st.ended = true
@@ -260,14 +298,35 @@ func (s *session) resetLocked() {
 	s.points = 0
 }
 
-// replayLocked renders the page as the messages a client would have seen live.
-func (s *session) replayLocked() [][]byte {
-	var out [][]byte
+// pageSnapshot is the page at one instant. It only copies slice headers: point slices are
+// append-only and a re-begun stroke gets a new struct, so the elements it covers never change
+// after the lock is released.
+type pageSnapshot struct {
+	strokes []strokeSnap
+	doc     []string
+}
+
+type strokeSnap struct {
+	id    string
+	begin []byte
+	pts   []json.RawMessage
+	ended bool
+}
+
+func (s *session) snapshotLocked() pageSnapshot {
+	snap := pageSnapshot{doc: s.docLog[:len(s.docLog):len(s.docLog)]}
 	for _, id := range s.order {
-		st := s.strokes[id]
-		if st == nil {
-			continue
+		if st := s.strokes[id]; st != nil {
+			snap.strokes = append(snap.strokes, strokeSnap{id, st.begin, st.pts[:len(st.pts):len(st.pts)], st.ended})
 		}
+	}
+	return snap
+}
+
+// messages renders the snapshot as the messages a client would have seen live.
+func (snap pageSnapshot) messages() [][]byte {
+	var out [][]byte
+	for _, st := range snap.strokes {
 		out = append(out, st.begin)
 		for i := 0; i < len(st.pts); i += replayPts {
 			j := min(i+replayPts, len(st.pts))
@@ -275,18 +334,18 @@ func (s *session) replayLocked() [][]byte {
 				T   string            `json:"t"`
 				ID  string            `json:"id"`
 				Pts []json.RawMessage `json:"pts"`
-			}{"stroke_pts", id, st.pts[i:j]}))
+			}{"stroke_pts", st.id, st.pts[i:j]}))
 		}
 		if st.ended {
-			out = append(out, mustJSON(map[string]string{"t": "stroke_end", "id": id}))
+			out = append(out, mustJSON(map[string]string{"t": "stroke_end", "id": st.id}))
 		}
 	}
-	for i := 0; i < len(s.docLog); i += docReplayN {
-		j := min(i+docReplayN, len(s.docLog))
+	for i := 0; i < len(snap.doc); i += docReplayN {
+		j := min(i+docReplayN, len(snap.doc))
 		out = append(out, mustJSON(struct {
 			T  string   `json:"t"`
 			Us []string `json:"us"`
-		}{"doc_update", s.docLog[i:j]}))
+		}{"doc_update", snap.doc[i:j]}))
 	}
 	return out
 }
@@ -294,9 +353,14 @@ func (s *session) replayLocked() [][]byte {
 func (s *session) broadcastLocked(raw []byte, from *client) {
 	msg := append([]byte(nil), raw...)
 	for c := range s.clients {
-		if c != from {
-			c.queue(msg)
+		if c == from {
+			continue
 		}
+		if c.replaying {
+			c.held = append(c.held, msg) // guarded by s.mu; flushed once its replay is queued
+			continue
+		}
+		c.queue(msg)
 	}
 }
 
@@ -309,6 +373,9 @@ type client struct {
 	once     sync.Once
 	mu       sync.Mutex
 	isClosed bool
+	// replaying/held are guarded by the session's mutex, not c.mu
+	replaying bool
+	held      [][]byte
 }
 
 // queue never blocks: a client whose queue is full is closed (it will reconnect and replay).
@@ -356,6 +423,10 @@ func (c *client) writeLoop() {
 		case <-ping.C:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+			// browsers never surface protocol pings; this one lets the app see a live link
+			if err := c.conn.WriteMessage(websocket.TextMessage, []byte(`{"t":"ping"}`)); err != nil {
 				return
 			}
 		}
