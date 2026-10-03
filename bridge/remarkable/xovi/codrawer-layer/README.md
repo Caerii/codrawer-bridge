@@ -1,5 +1,9 @@
 # codrawer-layer (XOVI probe)
 
+> **Status (2026-10-03): built, not yet run on the device. Probe 0 and Probe 1 have not been
+> executed.** The tablet went to sleep (off Wi-Fi) before XOVI was installed, so nothing is installed
+> on it. The command table below describes what the extension does once it is installed.
+
 A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
 open page, on its own layer named `codrawer: test`, through xochitl's own commit path
 (`SceneController.addDrawingLine` + `SceneTileManager.renderLineToTiles`). It is Probe 0 and
@@ -11,7 +15,7 @@ tile manager and viewport, and calls their meta-methods by name on the GUI threa
 our points by filling its documented fields; `main.cpp` explains the layout and the run-time
 checks that refuse to build a `Line` if this xochitl differs.
 
-Tested on: reMarkable 3.29.0.149 / Codex 6.0.105, xochitl Qt 6.10.3, XOVI v0.3.3
+Target (not yet run on it): reMarkable 3.29.0.149 / Codex 6.0.105, xochitl Qt 6.10.3, XOVI v0.3.3
 (`xovi.so` sha256 `d4df820c…6ffd446`, from rm-xovi-extensions `v19-23052026`/`pre-v20-08092026`).
 
 ## Build
