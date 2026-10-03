@@ -14,12 +14,38 @@ export interface Stroke {
   id: string
   layer: Layer
   brush: string
-  pts: number[][] // [x, y, p] (t dropped)
+  /** [x, y, p] (t dropped); strokes from the tablet's saved page carry [x, y, p, w] */
+  pts: number[][]
   done: boolean
   endedAt: number
   /** bounding box in page coords [x0, y0, x1, y1], for culling in follow mode */
   box: [number, number, number, number]
+  /** stroke_begin's ts (ms, the tablet's clock), for rebasing on a page snapshot */
+  ts?: number
+  /** from the tablet's saved page (`page` message): exact tool, colour and size */
+  fromPage?: boolean
+  /** ADR 008 tool name (fineliner, ballpoint, …, highlighter, shader, eraser, erase_area) */
+  tool?: string
+  /** CSS colour "#rrggbbaa" */
+  color?: string
+  /** the tool's thickness setting */
+  size?: number
 }
+
+/** A `page` message (docs/protocol.md): the tablet's saved page, authoritative up to `rev`. */
+export interface PageMessage {
+  t: 'page'
+  doc: string
+  page: string
+  title?: string
+  rev: number
+  strokes: { id: string; tool?: string; color?: number; rgba?: string; size?: number; pts: number[][] }[]
+}
+
+/** Tools that leave no ink of their own (their effect is already in the saved page). */
+export const ERASER_TOOLS = new Set(['eraser', 'erase_area'])
+/** Translucent tools. */
+export const WASH_TOOLS = new Set(['highlighter', 'shader'])
 
 export type ViewMode = 'follow' | 'full'
 export type Highlight = 'all' | 'user' | 'ai'
@@ -52,8 +78,10 @@ export class StrokeStore {
   private nPoints = 0
   /** last user pen position (follow mode tracks the user, never the AI) */
   lastPoint: [number, number] | null = null
+  /** the tablet page the snapshot strokes belong to (null: no `page` message yet) */
+  page: { doc: string; page: string; title?: string; rev: number } | null = null
 
-  begin(id: string, layer: Layer, brush = 'pen') {
+  begin(id: string, layer: Layer, brush = 'pen', ts?: number) {
     const old = this.strokes.get(id)
     if (old) {
       // Seen before (a router replaying the page after a reconnect): restart it in place.
@@ -63,10 +91,70 @@ export class StrokeStore {
       old.pts = []
       old.done = false
       old.box = [1, 1, 0, 0]
+      old.ts = ts
       return
     }
-    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0] })
+    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts })
     this.order.push(id)
+  }
+
+  /**
+   * Make the tablet's saved page the base. The snapshot holds every stroke saved up to `rev`
+   * (erased ones are absent), so earlier snapshot strokes go, live user strokes go unless they
+   * began after `rev` (drawn since the save, in no file yet), and the snapshot's strokes come
+   * first, then the kept live ones. On a different page (or document) the AI layer goes too:
+   * it was drawn over the other page. Returns whether the page changed.
+   */
+  applyPage(m: PageMessage): boolean {
+    const changed = !this.page || this.page.doc !== m.doc || this.page.page !== m.page
+    const rev = Number(m.rev) || 0
+    const keep: string[] = []
+    for (const id of this.order) {
+      const s = this.strokes.get(id)
+      if (!s) continue
+      const keepIt = s.layer === 'ai' ? !changed : !s.fromPage && s.ts !== undefined && s.ts > rev
+      if (keepIt) keep.push(id)
+      else {
+        this.nPoints -= s.pts.length
+        this.strokes.delete(id)
+      }
+    }
+    const fresh: string[] = []
+    for (const r of Array.isArray(m.strokes) ? m.strokes : []) {
+      if (!r || typeof r.id !== 'string' || !Array.isArray(r.pts)) continue
+      const id = 'rm:' + r.id // never collides with live ids
+      const s: Stroke = {
+        id,
+        layer: 'user',
+        brush: ERASER_TOOLS.has(r.tool ?? '') ? 'eraser' : 'pen',
+        pts: [],
+        done: true,
+        endedAt: 0,
+        box: [1, 1, 0, 0],
+        fromPage: true,
+        tool: r.tool,
+        color: typeof r.rgba === 'string' ? r.rgba : undefined,
+        size: typeof r.size === 'number' ? r.size : undefined,
+      }
+      const b = s.box
+      for (const p of r.pts) {
+        if (!Array.isArray(p) || p.length < 2) continue
+        const [x, y] = p
+        s.pts.push(p.length >= 4 ? [x, y, p[2], p[3]] : [x, y, p.length >= 3 ? p[2] : 0.6])
+        if (x < b[0]) b[0] = x
+        if (y < b[1]) b[1] = y
+        if (x > b[2]) b[2] = x
+        if (y > b[3]) b[3] = y
+      }
+      this.nPoints += s.pts.length
+      this.strokes.delete(id) // a duplicate id inside one snapshot: the last wins
+      this.strokes.set(id, s)
+      fresh.push(id)
+    }
+    this.order = [...new Set(fresh), ...keep]
+    this.page = { doc: m.doc, page: m.page, title: m.title, rev }
+    if (changed) this.lastPoint = null
+    return changed
   }
 
   points(id: string, pts: number[][], layerHint: Layer) {
@@ -110,6 +198,7 @@ export class StrokeStore {
       this.order = []
       this.nPoints = 0
       this.lastPoint = null
+      this.page = null
     } else {
       for (const id of this.order) {
         const s = this.strokes.get(id)
@@ -163,6 +252,7 @@ function inkBounds(strokes: Stroke[]): [number, number, number, number] | null {
   let y1 = 0
   let any = false
   for (const s of strokes) {
+    if (s.tool && ERASER_TOOLS.has(s.tool)) continue
     for (const p of s.pts) {
       any = true
       if (p[0] < x0) x0 = p[0]
@@ -227,12 +317,17 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     if (s.pts.length < 2) continue
     if (s.layer === 'ai' && o.showAi === false) continue
     if (win && (s.box[2] < win[0] || s.box[0] > win[2] || s.box[3] < win[1] || s.box[1] > win[3])) continue
+    // the saved page's eraser strokes leave no ink: their effect is already in the page
+    if (s.fromPage && s.tool && ERASER_TOOLS.has(s.tool)) continue
     // Emphasis must survive a 1-bit render (the simulator thresholds grey to
     // full green), so the de-emphasised layer is dashed as well as dimmer.
-    const emphasised = o.highlight === 'all' || o.highlight === s.layer
+    // Highlighter and shader washes are faint and dashed: the HUD has no translucency, and a
+    // solid band would hide the writing under it.
+    const wash = s.tool !== undefined && WASH_TOOLS.has(s.tool)
+    const emphasised = (o.highlight === 'all' || o.highlight === s.layer) && !wash
     const lum = emphasised ? 255 : 110
     ctx.strokeStyle = `rgb(${lum},${lum},${lum})`
-    ctx.setLineDash(emphasised ? [] : [2, 3])
+    ctx.setLineDash(wash ? [1, 4] : emphasised ? [] : [2, 3])
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (s.brush === 'eraser' && s.layer === 'user') {

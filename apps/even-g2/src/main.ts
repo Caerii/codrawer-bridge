@@ -1005,7 +1005,7 @@ function connect() {
         break
       case 'stroke_begin':
         // no frame yet: the first stroke_pts carries the first ink
-        store.begin(m.id, 'user', m.brush || 'pen')
+        store.begin(m.id, 'user', m.brush || 'pen', typeof m.ts === 'number' ? m.ts : undefined)
         strokeActive = true
         lastInkAt = performance.now()
         stage.setPointer(null) // the ink itself shows the pen now
@@ -1043,6 +1043,20 @@ function connect() {
         break
       case 'ai_intent':
         intent = String(m.plan || '').slice(0, 120)
+        textDirty = true
+        break
+      case 'page':
+        // The tablet's saved page (the bridge's page watcher): exact tools, colours and widths,
+        // erases and undos applied. It replaces our copy of the page; ink drawn since the save
+        // stays. A different page or document clears the view and shows that page.
+        if (store.applyPage(m)) {
+          intent = ''
+          stage.setPointer(null)
+        }
+        stage.invalidate()
+        loupeDirty = true
+        canvasDirty = true
+        strokeEnded = true
         textDirty = true
         break
       case 'clear':

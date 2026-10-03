@@ -122,3 +122,73 @@ test('loupe widens to keep the recent writing in view, within limits', async () 
   const page: [number, number, number, number] = [0, 0, 1, 1]
   assert.ok(Math.abs(settle(new LoupeCamera(0.5, 0.75), page) - base * 2.5) < 1e-3, 'capped at 2.5x the base')
 })
+
+// ── page snapshots (the tablet's saved page) ────────────────────────────────
+
+const pageMsg = (page: string, rev: number, ids: string[], doc = 'd') => ({
+  t: 'page' as const,
+  doc,
+  page,
+  rev,
+  strokes: ids.map((id) => ({ id, tool: 'calligraphy', color: 0, rgba: '#000000ff', size: 2, pts: [[0.1, 0.2, 0.5, 0.004], [0.3, 0.4, 0.6, 0.005]] })),
+})
+
+const live = (s: StrokeStore, id: string, ts: number, layer: 'user' | 'ai' = 'user') => {
+  s.begin(id, layer, 'pen', ts)
+  s.points(id, [pt(0.5, 0.5), pt(0.6, 0.6)], layer)
+  s.end(id)
+}
+
+test('a page snapshot replaces saved ink and keeps strokes drawn after its rev', () => {
+  const s = new StrokeStore()
+  live(s, 'u_old', 1000) // saved in the file (or erased since): the snapshot decides
+  live(s, 'u_new', 3000) // drawn after the save: not in any file yet
+  live(s, 'u_nots', 0)
+  s.begin('u_nots2', 'user') // no timestamp at all: cannot be placed after the save
+  assert.equal(s.applyPage(pageMsg('p1', 2000, ['1:5', '1:6'])), true, 'first page counts as a change')
+  assert.deepEqual(s.all().map((x) => x.id), ['rm:1:5', 'rm:1:6', 'u_new'])
+  const rm = s.all()[0]
+  assert.equal(rm.fromPage, true)
+  assert.equal(rm.tool, 'calligraphy')
+  assert.equal(rm.color, '#000000ff')
+  assert.equal(rm.size, 2)
+  assert.equal(rm.done, true)
+  assert.deepEqual(rm.pts[1], [0.3, 0.4, 0.6, 0.005], 'per-point width kept')
+  assert.deepEqual(rm.box, [0.1, 0.2, 0.3, 0.4])
+  assert.equal(s.pointCount, 6)
+  assert.deepEqual(s.page, { doc: 'd', page: 'p1', title: undefined, rev: 2000 })
+})
+
+test('a rewrite of the same page drops erased strokes and keeps the AI layer', () => {
+  const s = new StrokeStore()
+  s.applyPage(pageMsg('p1', 2000, ['1:5', '1:6']))
+  live(s, 'ai_1', 0, 'ai')
+  live(s, 'u_a', 2500)
+  // the user erased 1:6 and paused: xochitl saves the page including u_a (now 1:7)
+  assert.equal(s.applyPage(pageMsg('p1', 4000, ['1:5', '1:7'])), false)
+  assert.deepEqual(s.all().map((x) => x.id), ['rm:1:5', 'rm:1:7', 'ai_1'])
+  assert.equal(s.pointCount, 6)
+})
+
+test('a page turn clears the view, AI included, and shows the new page', () => {
+  const s = new StrokeStore()
+  s.applyPage(pageMsg('p1', 2000, ['1:5']))
+  live(s, 'ai_1', 0, 'ai')
+  live(s, 'u_before_turn', 2500)
+  live(s, 'u_on_p2', 5100) // drawn on the new page right after the turn
+  assert.ok(s.lastPoint)
+  assert.equal(s.applyPage(pageMsg('p2', 5000, [])), true)
+  assert.deepEqual(s.all().map((x) => x.id), ['u_on_p2'])
+  assert.equal(s.lastPoint, null)
+  assert.equal(s.applyPage(pageMsg('p2', 5000, [], 'other-doc')), true, 'another document is a change')
+})
+
+test('clear forgets the page; malformed snapshot entries are ignored', () => {
+  const s = new StrokeStore()
+  s.applyPage({ t: 'page', doc: 'd', page: 'p', rev: 1, strokes: [{ id: '1:1', pts: [[0.1, 0.1], 'x' as any, [0.2]] }, null as any, { id: 5 as any, pts: [] }] })
+  assert.deepEqual(s.all().map((x) => x.id), ['rm:1:1'])
+  assert.deepEqual(s.all()[0].pts, [[0.1, 0.1, 0.6]])
+  s.clear()
+  assert.equal(s.page, null)
+  assert.equal(s.all().length, 0)
+})

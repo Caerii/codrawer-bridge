@@ -19,6 +19,15 @@
  *   is then the background (paper or video), one blit, and the strokes still being drawn.
  */
 import type { Stroke, StrokeStore } from './strokes'
+import { ERASER_TOOLS, WASH_TOOLS } from './strokes'
+
+/** "#rrggbbaa" or "#rrggbb" → [r, g, b, a] (0..255); black when missing or malformed. */
+export function parseRgba(c: string | undefined): [number, number, number, number] {
+  const m = typeof c === 'string' ? /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(c) : null
+  if (!m) return [0, 0, 0, 255]
+  const v = parseInt(m[1], 16)
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255, m[2] ? parseInt(m[2], 16) : 255]
+}
 
 export type Theme = 'paper' | 'dark'
 export type View = 'page' | 'focus' | 'follow'
@@ -197,9 +206,64 @@ export class Stage {
     }
   }
 
+  /**
+   * A stroke from the tablet's saved page, drawn as the tablet draws it: its colour, its
+   * per-point width from the file, translucency for highlighter and shader, a lighter pencil.
+   * Eraser strokes paint nothing (their effect is already in the page).
+   */
+  private paintPageStroke(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
+    const tool = s.tool ?? 'pen'
+    if (ERASER_TOOLS.has(tool)) return
+    const t = THEMES[this.theme]
+    const { s: scale, X, Y } = this.xf(cam)
+    const pagePx = scale * this.pageAspect // device pixels per page width
+    const rgba = parseRgba(s.color)
+    const wash = WASH_TOOLS.has(tool)
+    // black ink follows the theme (near-black on paper, the dark theme's ink); colours stay
+    const isBlack = rgba[0] < 24 && rgba[1] < 24 && rgba[2] < 24
+    let color = isBlack ? t.ink : `rgb(${rgba[0]},${rgba[1]},${rgba[2]})`
+    if (this.backdrop && !wash) color = '#ffffff'
+    let alpha = 1
+    if (tool === 'highlighter') alpha = 0.35 // stored opaque, drawn translucent by xochitl
+    else if (tool === 'shader') alpha = Math.max(0.08, rgba[3] / 255)
+    else if (tool === 'pencil') alpha = 0.8
+    else if (tool === 'mechanical_pencil') alpha = 0.7
+    const fallback = (p: number) => pagePx * ((1.4 + 4.2 * p) / 1620)
+    const width = (pt: number[]) => (pt.length >= 4 && pt[3] > 0 ? Math.max(0.6, pt[3] * pagePx) : fallback(pt[2]))
+    ctx.save()
+    try {
+      ctx.strokeStyle = ctx.fillStyle = color
+      ctx.lineJoin = 'round'
+      ctx.lineCap = tool === 'highlighter' ? 'square' : 'round'
+      if (this.backdrop && !wash) {
+        ctx.shadowColor = 'rgba(0,0,0,0.75)'
+        ctx.shadowBlur = Math.max(2, (pagePx / 1620) * 6)
+      }
+      if (wash || alpha < 1) {
+        // one path at one width, so overlapping segments do not darken the wash
+        ctx.globalAlpha = alpha
+        if (tool === 'highlighter') ctx.globalCompositeOperation = 'multiply'
+        const pts = s.pts
+        let wsum = 0
+        for (const p of pts) wsum += width(p)
+        ctx.lineWidth = wsum / Math.max(1, pts.length)
+        ctx.beginPath()
+        ctx.moveTo(X(pts[0][0]), Y(pts[0][1]))
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]))
+        if (pts.length === 1) ctx.lineTo(X(pts[0][0]) + 0.01, Y(pts[0][1]))
+        ctx.stroke()
+        return
+      }
+      this.paintPath(ctx, s.pts, width, X, Y)
+    } finally {
+      ctx.restore()
+    }
+  }
+
   private paintStroke(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
     if (s.pts.length === 0) return
     if (s.layer === 'ai' && !this.showAi) return
+    if (s.fromPage) return this.paintPageStroke(ctx, s, cam)
     const t = THEMES[this.theme]
     const { s: scale, X, Y } = this.xf(cam)
     // ~0.5 mm fineliner at full pressure on the 1620-px-wide page, scaled to the view
@@ -221,7 +285,7 @@ export class Stage {
     const pts = s.pts
     const width = (p: number) => (eraser ? base * 24 : base * (this.backdrop ? 2 : 1.4) + base * 4.2 * p)
     try {
-      this.paintPath(ctx, pts, width, X, Y)
+      this.paintPath(ctx, pts, (pt) => width(pt[2]), X, Y)
     } finally {
       ctx.globalCompositeOperation = 'source-over'
       ctx.shadowBlur = 0
@@ -229,10 +293,10 @@ export class Stage {
     }
   }
 
-  private paintPath(ctx: CanvasRenderingContext2D, pts: number[][], width: (p: number) => number, X: (n: number) => number, Y: (n: number) => number) {
+  private paintPath(ctx: CanvasRenderingContext2D, pts: number[][], width: (pt: number[]) => number, X: (n: number) => number, Y: (n: number) => number) {
     if (pts.length === 1) {
       ctx.beginPath()
-      ctx.arc(X(pts[0][0]), Y(pts[0][1]), width(pts[0][2]) / 2, 0, Math.PI * 2)
+      ctx.arc(X(pts[0][0]), Y(pts[0][1]), width(pts[0]) / 2, 0, Math.PI * 2)
       ctx.fill()
       return
     }
@@ -240,7 +304,7 @@ export class Stage {
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1]
       const b = pts[i]
-      ctx.lineWidth = width((a[2] + b[2]) / 2)
+      ctx.lineWidth = (width(a) + width(b)) / 2
       ctx.beginPath()
       const ax = X(a[0])
       const ay = Y(a[1])
@@ -258,7 +322,7 @@ export class Stage {
     }
     const z = pts[pts.length - 2]
     const b = pts[pts.length - 1]
-    ctx.lineWidth = width(b[2])
+    ctx.lineWidth = width(b)
     ctx.beginPath()
     ctx.moveTo((X(z[0]) + X(b[0])) / 2, (Y(z[1]) + Y(b[1])) / 2)
     ctx.lineTo(X(b[0]), Y(b[1]))
