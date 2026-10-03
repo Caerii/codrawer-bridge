@@ -1,9 +1,16 @@
 //! One session's state, always used under the session's mutex.
 //!
 //! A session holds its members (connected clients and whether their replay is still being
-//! queued), the replayable page (strokes since the last `clear`, bounded in memory) and the
-//! shared document's update log. [`Session::snapshot`] copies what a joiner needs cheaply under
-//! the lock; [`PageSnapshot::messages`] turns it into replay messages after the lock is released.
+//! queued), the replayable page and the shared document's update log. [`Session::snapshot`]
+//! copies what a joiner needs cheaply under the lock; [`PageSnapshot::messages`] turns it into
+//! replay messages after the lock is released.
+//!
+//! The replayable page has two parts. Its **base** is the tablet's latest saved page, a `page`
+//! snapshot from the bridge's page watcher (docs/protocol.md, `page`; ADR 008): xochitl's own
+//! file, so erases, undo and exact tools are already applied. On top of it is the **live log**:
+//! strokes relayed since, which no saved file holds yet. A new `page` covers every stroke that
+//! began up to its `rev`, so those strokes leave the log ([`Session::set_page`]); a joiner is
+//! replayed the base first, then the log. `clear` drops both.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -20,7 +27,10 @@ use super::{DOC_COMPACT_AFTER, DOC_COMPACT_AT, DOC_REPLAY_N, MAX_POINTS, MAX_STR
 #[derive(Default)]
 pub(super) struct Session {
     pub(super) clients: HashMap<u64, Member>,
-    /// The page: strokes since the last clear, in arrival order, for replay to late joiners.
+    /// The page's base: the latest `page` message as received (`None` before one, or after a
+    /// `clear`). Shared, never modified once stored.
+    pub(super) page: Option<Utf8Bytes>,
+    /// The live log: strokes since the base (or the last clear), in arrival order.
     pub(super) order: VecDeque<String>,
     pub(super) strokes: HashMap<String, Stroke>,
     pub(super) points: usize,
@@ -46,6 +56,8 @@ pub(super) type Block = Arc<Vec<Box<RawValue>>>;
 
 /// A recorded stroke: everything needed to replay it as the messages it arrived as.
 pub(super) struct Stroke {
+    /// The stroke_begin's `ts` (Unix ms; 0 when it had none, so a `page` always covers it).
+    pub(super) ts: i64,
     /// The stroke_begin message as received.
     pub(super) begin: Utf8Bytes,
     /// Every point as received (up to [`MAX_STROKE_POINTS`]), in blocks of [`REPLAY_PTS`]. A
@@ -61,6 +73,8 @@ pub(super) struct Stroke {
 
 /// The page at one instant, cheap to take under the lock: blocks are shared, not copied.
 pub(super) struct PageSnapshot {
+    /// The base (`page` message), replayed first.
+    pub(super) page: Option<Utf8Bytes>,
     pub(super) strokes: Vec<StrokeSnap>,
     pub(super) doc: Vec<Arc<str>>,
 }
@@ -77,6 +91,9 @@ impl PageSnapshot {
     /// The page as the messages a client would have seen live.
     pub(super) fn messages(&self) -> Vec<Utf8Bytes> {
         let mut out = Vec::new();
+        if let Some(page) = &self.page {
+            out.push(page.clone()); // the base first, then the ink drawn since
+        }
         for st in &self.strokes {
             out.push(st.begin.clone());
             for b in &st.blocks {
@@ -108,7 +125,7 @@ impl Session {
             return;
         }
         match m.t.as_str() {
-            "stroke_begin" => self.begin_stroke(&m.id, raw, from),
+            "stroke_begin" => self.begin_stroke(&m.id, m.ts.unwrap_or(0), raw, from),
             "stroke_pts" => self.append_points(&m.id, m.pts.as_deref().unwrap_or_default()),
             "stroke_end" => {
                 if let Some(st) = self.strokes.get_mut(&m.id) {
@@ -120,14 +137,14 @@ impl Session {
         self.drop_oldest_over_bounds();
     }
 
-    /// Starts (or restarts, replacing its points) the stroke `id`.
-    fn begin_stroke(&mut self, id: &str, raw: &Utf8Bytes, from: u64) {
+    /// Starts (or restarts, replacing its points) the stroke `id`, begun at `ts` (Unix ms).
+    fn begin_stroke(&mut self, id: &str, ts: i64, raw: &Utf8Bytes, from: u64) {
         if let Some(old) = self.strokes.get(id) {
             self.points -= old.n_pts;
         } else {
             self.order.push_back(id.to_string());
         }
-        let st = Stroke { begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
+        let st = Stroke { ts, begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
         self.strokes.insert(id.to_string(), st);
     }
 
@@ -161,11 +178,36 @@ impl Session {
         }
     }
 
-    /// Forgets every recorded stroke (a `clear`).
-    pub(super) fn reset(&mut self) {
+    /// A `clear`: forgets the base and every recorded stroke. The shared document stays.
+    pub(super) fn clear(&mut self) {
+        self.page = None;
         self.order.clear();
         self.strokes.clear();
         self.points = 0;
+    }
+
+    // ── the page's base ────────────────────────────────────────────────────
+
+    /// Makes a `page` snapshot the page's new base. The snapshot already holds every stroke the
+    /// tablet saved up to `rev` (erased ones are simply absent), so the live log keeps only
+    /// strokes that began after `rev`: ink drawn since the save, not in any file yet. A page
+    /// turn works the same way: the watcher's `rev` is then the time of the turn, so ink from
+    /// the previous page leaves the log too.
+    pub(super) fn set_page(&mut self, rev: i64, raw: &Utf8Bytes) {
+        self.page = Some(raw.clone());
+        let mut kept = VecDeque::with_capacity(self.order.len());
+        for id in self.order.drain(..) {
+            let covered = match self.strokes.get(&id) {
+                Some(st) => st.ts <= rev,
+                None => true,
+            };
+            if !covered {
+                kept.push_back(id);
+            } else if let Some(st) = self.strokes.remove(&id) {
+                self.points -= st.n_pts;
+            }
+        }
+        self.order = kept;
     }
 
     /// The page now, for a replay built after the lock is released.
@@ -178,7 +220,7 @@ impl Session {
                 Some(StrokeSnap { id: id.clone(), begin: st.begin.clone(), blocks: st.blocks.clone(), ended: st.ended })
             })
             .collect();
-        PageSnapshot { strokes, doc: self.doc_log.clone() }
+        PageSnapshot { page: self.page.clone(), strokes, doc: self.doc_log.clone() }
     }
 
     /// Queues `raw` for every member but `from`; a member whose replay is still being queued
@@ -319,5 +361,33 @@ mod tests {
         assert!(s.points <= MAX_POINTS);
         assert_eq!(s.order.len(), MAX_POINTS / 1000);
         assert_eq!(s.order.front().unwrap(), "u_5");
+    }
+
+    #[test]
+    fn a_page_keeps_only_strokes_begun_after_its_rev() {
+        let mut s = Session::default();
+        rec(&mut s, r#"{"t":"stroke_begin","id":"old","ts":1000}"#, 1);
+        rec(&mut s, &pts_msg("old", 10), 1);
+        rec(&mut s, r#"{"t":"stroke_begin","id":"at_rev","ts":2000}"#, 1);
+        rec(&mut s, r#"{"t":"stroke_begin","id":"no_ts"}"#, 1);
+        rec(&mut s, r#"{"t":"stroke_begin","id":"new","ts":3000}"#, 1);
+        rec(&mut s, &pts_msg("new", 4), 1);
+        s.set_page(2000, &Utf8Bytes::from_static(r#"{"t":"page","rev":2000}"#));
+        assert_eq!(s.order, ["new"]);
+        assert_eq!(s.points, 4, "the dropped strokes' points were not released");
+
+        let msgs = s.snapshot().messages();
+        assert_eq!(msgs[0].as_str(), r#"{"t":"page","rev":2000}"#, "the base is replayed first");
+        assert_eq!(msgs.len(), 3, "page, then new's begin and points");
+
+        s.clear();
+        assert!(s.page.is_none() && s.order.is_empty() && s.points == 0);
+        assert!(s.snapshot().messages().is_empty());
+    }
+
+    #[test]
+    fn a_fractional_ts_fails_the_envelope_like_go() {
+        assert!(serde_json::from_str::<Envelope>(r#"{"t":"stroke_begin","id":"a","ts":1.5}"#).is_err());
+        assert!(serde_json::from_str::<Envelope>(r#"{"t":"stroke_begin","id":"a","ts":null}"#).is_ok());
     }
 }

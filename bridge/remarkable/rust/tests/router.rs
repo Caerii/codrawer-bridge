@@ -422,3 +422,78 @@ async fn pairing_code_required_off_machine() {
     let m = read(&mut lc).await;
     assert_eq!(m["t"], "hello", "loopback: {m}");
 }
+
+// ── the tablet's saved page as the page's base (Go 4ccd516) ─────────────────
+
+#[tokio::test]
+async fn page_snapshot_is_the_new_base() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut viewer = dial(&srv, "s1").await;
+
+    // u_old: drawn before the save (in the file, or erased); u_new: drawn after it
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_old","ts":1000}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_pts","id":"u_old","pts":[[0.1,0.1,0.5,1000]]}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_old","ts":1100}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_new","ts":3000}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_new","ts":3100}"#).await;
+    let page = r#"{"t":"page","doc":"d","page":"p1","rev":2000,"strokes":[{"id":"1:5","tool":"fineliner","pts":[[0.1,0.1,0.5,0.002]]}]}"#;
+    send(&mut tablet, page).await;
+    for _ in 0..5 {
+        read(&mut viewer).await;
+    }
+    let m = read(&mut viewer).await;
+    assert!(m["t"] == "page" && m["page"] == "p1", "page not relayed: {m}");
+
+    let mut late = dial(&srv, "s1").await;
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        let m = read(&mut late).await;
+        got.push(format!("{}:{}", m["t"].as_str().unwrap(), m["id"].as_str().unwrap_or("")));
+    }
+    assert_eq!(got.join(" "), "page: stroke_begin:u_new stroke_end:u_new", "replay");
+
+    // a page turn replaces the base; ink from before the turn is gone from the replay
+    send(&mut tablet, r#"{"t":"page","doc":"d","page":"p2","rev":4000,"strokes":[]}"#).await;
+    read(&mut viewer).await;
+    let mut late2 = dial(&srv, "s1").await;
+    let m = read(&mut late2).await;
+    assert!(m["t"] == "page" && m["page"] == "p2", "turn: {m}");
+    expect_quiet(&mut late2, Duration::from_millis(150)).await;
+
+    // a pen source (?replay=0) gets no page either
+    let mut src = dial_path(&srv, "/ws/s1?replay=0").await;
+    let m = read(&mut src).await;
+    assert_eq!(m["t"], "hello", "hello: {m}");
+    expect_quiet(&mut src, Duration::from_millis(150)).await;
+}
+
+#[tokio::test]
+async fn clear_drops_the_page() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut viewer = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"page","doc":"d","page":"p1","rev":5,"strokes":[]}"#).await;
+    read(&mut viewer).await;
+    send(&mut viewer, r#"{"t":"clear","ts":6}"#).await;
+    read(&mut tablet).await;
+    let mut late = dial(&srv, "s1").await;
+    expect_quiet(&mut late, Duration::from_millis(150)).await;
+}
+
+#[tokio::test]
+async fn big_page_message_is_accepted() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut viewer = dial(&srv, "s1").await;
+    let pts = "[0.12345,0.12345,0.5,0.0025],".repeat(60_000); // ~1.7 MB, past the old 1 MB limit
+    let page = format!(r#"{{"t":"page","doc":"d","page":"p","rev":1,"strokes":[{{"id":"1:1","pts":[{pts}[0,0,0,0]]}}]}}"#);
+    send(&mut tablet, &page).await;
+    let msg = tokio::time::timeout(Duration::from_secs(5), viewer.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let Message::Text(raw) = msg else { panic!("not text: {msg:?}") };
+    assert!(raw.len() >= 1 << 20, "big page: {} bytes", raw.len());
+}

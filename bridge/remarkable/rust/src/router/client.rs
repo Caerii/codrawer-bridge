@@ -79,7 +79,13 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
             "key" | "cursor" | "doc" => sess.lock().unwrap().broadcast(&raw, cid),
             "clear" => {
                 let mut s = sess.lock().unwrap();
-                s.reset();
+                s.clear();
+                s.broadcast(&raw, cid);
+            }
+            "page" => {
+                // The tablet's saved page becomes the base, then goes to everyone else.
+                let mut s = sess.lock().unwrap();
+                s.set_page(m.rev.unwrap_or(0), &raw);
                 s.broadcast(&raw, cid);
             }
             "doc_update" => {

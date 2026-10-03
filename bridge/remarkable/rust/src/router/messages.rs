@@ -21,6 +21,14 @@ pub(super) struct Envelope<'a> {
     pub(super) pts: Option<Vec<&'a RawValue>>,
     #[serde(default)]
     pub(super) u: String,
+    /// `stroke_begin`: when the stroke started (Unix ms, the drawing device's clock).
+    /// A non-integer value fails the whole parse and the message is dropped, as in Go.
+    #[serde(default)]
+    pub(super) ts: Option<i64>,
+    /// `page`: the snapshot holds everything drawn up to this time (Unix ms, the tablet's
+    /// clock, the same clock as the tablet's `stroke_begin.ts`).
+    #[serde(default)]
+    pub(super) rev: Option<i64>,
 }
 
 /// `hello`, the first message on every connection.

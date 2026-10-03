@@ -1,7 +1,7 @@
 //! The stroke-only session router (router/router.go + serve.go), small enough to run on the
 //! Paper Pro inside the bridge binary so the glasses app can connect to the tablet directly.
 //!
-//! Scope: hello, stroke_*, key, cursor, clear, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
+//! Scope: hello, stroke_*, key, cursor, clear, page, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
 //! (term_prompt/term_answer) stay on the desktop Python router; here they are dropped, and a
 //! term_* request gets a one-line `term` status so the client is not left waiting.
 //!
@@ -14,6 +14,9 @@
 //!   socket on its side. hello carries `"replay":true|false`.
 //! - A replay is built outside the session lock; live messages for that client are held until
 //!   its replay is queued, so a big page never freezes the stream for everyone else.
+//! - The tablet's saved page (`{"t":"page"}`, the bridge's page watcher) is the page's base: the
+//!   router keeps the latest, drops live strokes that began up to its `rev` (they are in it, or
+//!   were erased), and replays it before the live strokes recorded after it (see [`session`]).
 //! - A pen source can join with `?replay=0` (the bridge does). When a client leaves mid-stroke
 //!   its open strokes are ended for everyone.
 //!
@@ -94,7 +97,8 @@ pub const MAX_STROKES: usize = 4000;
 pub const MAX_POINTS: usize = 150_000;
 /// One stroke never holds more for replay (a pen resting on the glass); live relay is not capped.
 pub const MAX_STROKE_POINTS: usize = 20_000;
-pub const MAX_MESSAGE: usize = 1 << 20;
+/// Largest message accepted: a `page` snapshot of a dense page is a few MB (Go: 16 MB too).
+pub const MAX_MESSAGE: usize = 16 << 20;
 /// doc_update log entries before asking a client for a snapshot.
 pub const DOC_COMPACT_AT: usize = 256;
 /// Updates per replayed doc_update message.
