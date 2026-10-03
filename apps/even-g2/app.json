@@ -1,0 +1,30 @@
+{
+  "package_id": "group.superintelligent.codrawer",
+  "edition": "202601",
+  "name": "Codrawer",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Connects to the codrawer-bridge session router to mirror the live ink canvas.",
+      "whitelist": [
+        "http://localhost:8577",
+        "ws://localhost:8577",
+        "http://192.168.50.2:8577",
+        "ws://192.168.50.2:8577",
+        "http://192.168.50.156:8577",
+        "ws://192.168.50.156:8577"
+      ]
+    },
+    {
+      "name": "camera",
+      "desc": "Shows the camera behind your ink so you can draw over the world."
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}

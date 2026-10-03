@@ -30,6 +30,24 @@ class Session:
     recent_prompts: list[str] = field(default_factory=list)
     recent_ai_plans: list[str] = field(default_factory=list)
 
+    # Page + turn ink (ADR 001/002): every finished user stroke on the page
+    # (bounded) and the subset drawn since the last submitted line. Each item:
+    # {"id", "brush", "color", "pts": [[x,y,p],...]} with pts sampled to <=256.
+    page_strokes: list[dict[str, object]] = field(default_factory=list)
+    turn_strokes: list[dict[str, object]] = field(default_factory=list)
+    turn_seq: int = 0
+
+    # Shared document (ADR 001): latest text shared by any participant.
+    doc_text: str = ""
+    # Shared live editing: Yjs updates (base64) relayed as `doc_update` and replayed to joiners.
+    # Unlike the Go router this log is not compacted (the desktop is the AI/term path, not the
+    # editing one); a long session just replays more small updates.
+    doc_updates: list[str] = field(default_factory=list)
+
+    # The tablet's latest saved page (`page` message from the bridge's page watcher), raw JSON,
+    # replayed to joiners right after hello. This router keeps no live-stroke log to rebase.
+    page_msg: str | None = None
+
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None
 
@@ -55,8 +73,12 @@ async def get_session(session_id: str) -> Session:
 
 
 async def broadcast(session: Session, msg: dict, exclude: WebSocket | None = None) -> None:
+    await broadcast_raw(session, json.dumps(msg, separators=(",", ":"), ensure_ascii=False), exclude)
+
+
+async def broadcast_raw(session: Session, data: str, exclude: WebSocket | None = None) -> None:
+    """Send an already encoded message (e.g. a large `page` snapshot, relayed as received)."""
     dead: list[WebSocket] = []
-    data = json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
     for ws in list(session.clients):
         if exclude is ws:
             continue

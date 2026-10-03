@@ -156,15 +156,24 @@ ssh root@<PAPER_PRO_IP> "chmod +x /home/root/codrawer_bridge_native.new && mv -f
 ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<DESKTOP_IP>:8000/ws/session1 -touch-mode auto"
 ```
 
-### Run it as a systemd service (optional)
+### Start it at boot
+
+On Codex (Paper Pro) `/etc` is an overlay on tmpfs, so copying a unit into `/etc/systemd/system`
+and `systemctl enable` both vanish at the next reboot. codrawer keeps everything in
+`/home/root/codrawer` as signed releases and puts a single stub unit into the read-only rootfs
+underneath, which starts the current release at boot (with Bluetooth + the keyboard keeper; see
+`docs/investigations/durable-install.md` and `docs/remarkable_bluetooth.md`):
 
 ```bash
-scp bridge/remarkable/systemd/codrawer-bridge-native.service root@<PAPER_PRO_IP>:/etc/systemd/system/codrawer-bridge.service
-ssh root@<PAPER_PRO_IP> systemctl daemon-reload
-ssh root@<PAPER_PRO_IP> systemctl enable codrawer-bridge
+CODRAWER_TABLET=<PAPER_PRO_IP> scripts/dev/deploy-tablet.sh    # build, sign, upload, activate
+ssh root@<PAPER_PRO_IP> vi /home/root/codrawer/bridge.env       # DESKTOP_WS etc., then:
 ssh root@<PAPER_PRO_IP> systemctl restart codrawer-bridge
-ssh root@<PAPER_PRO_IP> journalctl -u codrawer-bridge -f
+ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/current/boot.sh doctor
+ssh root@<PAPER_PRO_IP> sh /home/root/codrawer/current/install.sh --remove   # uninstall the stub
 ```
+
+After a reMarkable OS update (it swaps the root partition), re-run `deploy-tablet.sh` or keep
+`scripts/dev/tablet-guard.sh` running; both re-add the stub.
 
 ## 5) Configure the server URL
 
@@ -190,7 +199,8 @@ You should see reconnect logs if the network is flaky. When you start drawing, t
 
 ## 7) Optional: systemd service
 
-Copy unit + enable:
+For the native bridge use `bridge/remarkable/boot/install.sh` (section 4) instead: on the Paper Pro a
+unit copied into `/etc` does not survive a reboot. For the Python bridge, copy unit + enable:
 
 ```bash
 scp bridge/remarkable/systemd/codrawer-bridge.service root@<PAPER_PRO_IP>:/etc/systemd/system/codrawer-bridge.service

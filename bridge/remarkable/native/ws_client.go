@@ -1,13 +1,18 @@
 package main
 
-// WebSocket client with:
-// - TCP keepalive on the dialer
-// - aggressive ping ticker
-// - pong watchdog (read deadline)
-// - background reader to process control frames (required!)
+// The WebSocket client to the router.
 //
-// The bridge doesn't need to consume server messages; it only needs
-// to keep the connection healthy and write stroke messages.
+// The tablet's link is the least reliable part of the system: Wi-Fi drops when the tablet
+// sleeps, and a half-open TCP connection can look healthy for minutes. So the client keeps the
+// connection under constant watch: TCP keepalive on the dialer, a ping every -ping-seconds (2 s),
+// and a read deadline that only a pong extends, so a silent router is detected
+// within -pong-timeout-seconds (8 s). Any failure is reported once on Err(), which the outbox
+// writer selects on; the bridge must notice socket errors even while the pen is idle, not only
+// after the next pen read (CLAUDE.md, "Facts that cost hours").
+//
+// A background reader is required even though the bridge mostly writes: gorilla/websocket
+// processes pong and close frames only inside a read. The same reader hands text frames to
+// OnMessage (the typer, typer.go).
 
 import (
 	"context"
@@ -20,15 +25,23 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// WSConn is one connection to the router. Writes are serialised by mu, so the outbox writer and
+// the per-connection pumps can share it.
 type WSConn struct {
 	Conn *websocket.Conn
 	mu   sync.Mutex
 
 	done chan struct{}
-	errC chan error
+	errC chan error // capacity 1: the first failure wins
+
+	// OnMessage, when set, receives every text frame from the server. The
+	// bridge uses it for `term` replies it types into the tablet.
+	OnMessage func(data []byte)
 }
 
-func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait time.Duration) (*WSConn, error) {
+// DialWS connects and starts the keepalive. onMessage (may be nil) is installed before the
+// reader starts, so no early server message is missed.
+func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait time.Duration, onMessage func(data []byte)) (*WSConn, error) {
 	u, err := url.Parse(wsURL)
 	if err != nil {
 		return nil, err
@@ -48,12 +61,12 @@ func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait
 	}
 
 	w := &WSConn{
-		Conn: conn,
-		done: make(chan struct{}),
-		errC: make(chan error, 1),
+		Conn:      conn,
+		done:      make(chan struct{}),
+		errC:      make(chan error, 1),
+		OnMessage: onMessage,
 	}
 
-	// Keepalive needs READ to process PONG/close frames.
 	conn.SetReadLimit(1 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(_ string) error {
@@ -66,6 +79,7 @@ func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait
 	return w, nil
 }
 
+// Close stops the reader and pinger and closes the socket; it is safe to call twice.
 func (w *WSConn) Close() {
 	select {
 	case <-w.done:
@@ -76,8 +90,10 @@ func (w *WSConn) Close() {
 	_ = w.Conn.Close()
 }
 
+// Err delivers the connection's first failure (read, ping or a pump's write).
 func (w *WSConn) Err() <-chan error { return w.errC }
 
+// sendErr reports a failure without blocking; later ones are dropped.
 func (w *WSConn) sendErr(err error) {
 	select {
 	case w.errC <- err:
@@ -92,10 +108,13 @@ func (w *WSConn) readLoop() {
 			return
 		default:
 		}
-		_, _, err := w.Conn.ReadMessage()
+		mt, data, err := w.Conn.ReadMessage()
 		if err != nil {
 			w.sendErr(err)
 			return
+		}
+		if mt == websocket.TextMessage && w.OnMessage != nil {
+			w.OnMessage(data)
 		}
 	}
 }
@@ -120,15 +139,19 @@ func (w *WSConn) pingLoop(pingEvery time.Duration) {
 	}
 }
 
+// WriteJSON marshals v and sends it as one text message.
 func (w *WSConn) WriteJSON(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	return w.WriteRaw(b)
+}
+
+// WriteRaw sends an already encoded JSON message (5 s write deadline).
+func (w *WSConn) WriteRaw(b []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	return w.Conn.WriteMessage(websocket.TextMessage, b)
 }
-
-

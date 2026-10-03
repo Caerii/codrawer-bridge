@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     # Debugging
     debug_log_msgs: bool = False
 
+    # even-terminal bridge (docs: server/term_bridge.py). Empty url = disabled.
+    term_url: str = ""
+    term_token: str = ""
+    term_provider: str = "claude"
+    term_session: str = ""
+    # Working directory of the terminal session; drawings are written under
+    # <term_cwd>/.codrawer/turns/ so the agent can Read them (ADR 002).
+    term_cwd: str = ""
+
+
     # Reserved for future model integration
     glm_api_key: str | None = None
     glm_base_url: str | None = None

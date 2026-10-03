@@ -1,0 +1,18 @@
+# codrawer stub: the only file codrawer puts on the reMarkable's root partition. It never changes
+# between codrawer versions; it starts whatever release /home/root/codrawer/current points at.
+# install.sh puts it under the read-only rootfs; an OS update swaps the root partition and drops
+# it (re-run install.sh, or let the desktop watcher / Vellum hook do it). See
+# docs/investigations/durable-install.md.
+[Unit]
+Description=codrawer (starts the release in /home/root/codrawer)
+RequiresMountsFor=/home/root /var/lib/bluetooth
+After=var-lib-bluetooth.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /home/root/codrawer/current/boot.sh start
+ExecStop=-/bin/sh /home/root/codrawer/current/boot.sh stop
+
+[Install]
+WantedBy=multi-user.target

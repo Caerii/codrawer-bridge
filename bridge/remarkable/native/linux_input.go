@@ -1,44 +1,26 @@
 package main
 
-// Linux input plumbing:
-// - constants for event codes we care about
-// - ioctl helpers to read ABS axis ranges and optionally EVIOCGRAB
-// - parsing input_event stream (16B vs 24B timeval size)
+// Linux evdev plumbing: the input_event wire struct and the three ioctls the bridge needs.
+//
+// Every /dev/input/eventN read returns whole struct input_event records:
+//
+//	struct timeval time (sec, usec: two longs) · u16 type · u16 code · s32 value
+//
+// which is 24 bytes where long is 64-bit (the Paper Pro is aarch64) and 16 bytes on 32-bit
+// platforms. The event codes themselves are package pen's constants, so the device code and the
+// state machine share one vocabulary.
 
 import (
 	"encoding/binary"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"codrawer-bridge-native/pen"
 )
 
-// Minimal Linux input constants
-const (
-	EV_SYN = 0x00
-	EV_KEY = 0x01
-	EV_ABS = 0x03
-)
-
-// Keys (stylus tools)
-const (
-	BTN_TOUCH       = 0x14A
-	BTN_TOOL_PEN    = 0x140
-	BTN_TOOL_RUBBER = 0x141
-)
-
-// ABS axes
-const (
-	ABS_X        = 0x00
-	ABS_Y        = 0x01
-	ABS_PRESSURE = 0x18
-	ABS_DISTANCE = 0x19
-)
-
-// SYN codes
-const (
-	SYN_REPORT = 0x00
-)
-
+// absInfo mirrors struct input_absinfo (EVIOCGABS): the axis's current value and its range, in
+// device units.
 type absInfo struct {
 	Value      int32
 	Min        int32
@@ -48,11 +30,7 @@ type absInfo struct {
 	Resolution int32
 }
 
-type absRanges struct {
-	xMin, xMax int32
-	yMin, yMax int32
-	pMin, pMax int32
-}
+// ── ioctls ──────────────────────────────────────────────────────────────────
 
 // ioctl request encoding (Linux _IOC macro)
 const (
@@ -74,13 +52,13 @@ func ioc(dir uint32, typ uint32, nr uint32, size uint32) uintptr {
 	return uintptr((dir << iocDirShift) | (typ << iocTypeShift) | (nr << iocNRShift) | (size << iocSizeShift))
 }
 
+// evioCGAbs is EVIOCGABS(abs) = _IOR('E', 0x40 + abs, struct input_absinfo).
 func evioCGAbs(absCode int) uintptr {
-	// EVIOCGABS(abs) = _IOR('E', 0x40 + abs, struct input_absinfo)
 	return ioc(iocRead, uint32('E'), uint32(0x40+absCode), uint32(unsafe.Sizeof(absInfo{})))
 }
 
+// evioCGrab is EVIOCGRAB = _IOW('E', 0x90, int).
 func evioCGrab() uintptr {
-	// EVIOCGRAB = _IOW('E', 0x90, int)
 	return ioc(iocWrite, uint32('E'), uint32(0x90), uint32(unsafe.Sizeof(int32(0))))
 }
 
@@ -93,63 +71,95 @@ func getAbsInfo(fd int, absCode int) (absInfo, error) {
 	return info, nil
 }
 
-func getRanges(fd int) absRanges {
-	x, errX := getAbsInfo(fd, ABS_X)
-	y, errY := getAbsInfo(fd, ABS_Y)
-	p, errP := getAbsInfo(fd, ABS_PRESSURE)
-	r := absRanges{xMin: 0, xMax: 1, yMin: 0, yMax: 1, pMin: 0, pMax: 4096}
+// getRanges reads the pen's x, y and pressure ranges. An axis that cannot be read keeps a
+// placeholder range (0..1 for x and y, 0..4096 for pressure).
+func getRanges(fd int) pen.Ranges {
+	x, errX := getAbsInfo(fd, pen.AbsX)
+	y, errY := getAbsInfo(fd, pen.AbsY)
+	p, errP := getAbsInfo(fd, pen.AbsPressure)
+	r := pen.Ranges{XMin: 0, XMax: 1, YMin: 0, YMax: 1, PMin: 0, PMax: 4096}
 	if errX == nil {
-		r.xMin, r.xMax = x.Min, x.Max
+		r.XMin, r.XMax = x.Min, x.Max
 	}
 	if errY == nil {
-		r.yMin, r.yMax = y.Min, y.Max
+		r.YMin, r.YMax = y.Min, y.Max
 	}
 	if errP == nil {
-		r.pMin, r.pMax = p.Min, p.Max
+		r.PMin, r.PMax = p.Min, p.Max
 	}
 	return r
 }
 
+// getKeyBits reads the device's current key state (EVIOCGKEY): bit k of the result is key k.
+func getKeyBits(fd int) ([96]byte, error) {
+	var bits [96]byte // KEY_MAX 0x2ff → 96 bytes
+	req := ioc(iocRead, uint32('E'), 0x18, uint32(len(bits)))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), req, uintptr(unsafe.Pointer(&bits[0])))
+	if errno != 0 {
+		return bits, errno
+	}
+	return bits, nil
+}
+
+// tryGrab makes this process the device's only reader (EVIOCGRAB); failures are ignored. Grabbing
+// the pen stops xochitl from drawing, which is why NO_GRAB is the default.
 func tryGrab(fd int) {
 	var one int32 = 1
 	_, _, _ = unix.Syscall(unix.SYS_IOCTL, uintptr(fd), evioCGrab(), uintptr(unsafe.Pointer(&one)))
 }
 
-// inputParser parses Linux input_event structs from a stream.
-// Kernel uses different struct size depending on timeval size (32-bit vs 64-bit).
+// ── input_event parsing ─────────────────────────────────────────────────────
+
+// inputParser parses input_event records from a stream of reads, carrying a partial record over
+// to the next read. The zero value is ready.
 type inputParser struct {
 	buf []byte
-	sz  int // 0 unknown, else 16 or 24
+	sz  int // record size: 0 until the first feed, then 16 or 24
 }
 
-func (p *inputParser) feed(chunk []byte, cb func(etype uint16, code uint16, value int32)) {
-	p.buf = append(p.buf, chunk...)
+// feed parses every whole record in chunk (after any partial one held from the previous feed)
+// and calls cb with each, timestamp in Unix ms. The record size follows the platform's timeval:
+// 24 bytes where long is 64-bit, else 16. (An older guess from the first read's length misread
+// 48-byte reads of 16-byte events.) chunk may be reused by the caller after feed returns.
+func (p *inputParser) feed(chunk []byte, cb func(ev pen.Event)) {
 	if p.sz == 0 {
-		if len(p.buf) >= 48 && len(p.buf)%24 == 0 {
-			p.sz = 24
-		} else if len(p.buf) >= 32 && len(p.buf)%16 == 0 {
-			p.sz = 16
-		} else if len(p.buf) >= 24 {
-			// fallback: assume 24 on 64-bit devices (Paper Pro likely aarch64)
+		p.sz = 16
+		if unsafe.Sizeof(uintptr(0)) == 8 {
 			p.sz = 24
 		}
 	}
-	for p.sz != 0 && len(p.buf) >= p.sz {
-		ev := p.buf[:p.sz]
+	if len(p.buf) == 0 {
+		p.buf = chunk // common case: whole events, no copy
+	} else {
+		p.buf = append(p.buf, chunk...)
+	}
+	for len(p.buf) >= p.sz {
+		rec := p.buf[:p.sz]
 		p.buf = p.buf[p.sz:]
-		var etype, code uint16
-		var value int32
-		if p.sz == 24 {
-			etype = binary.LittleEndian.Uint16(ev[16:18])
-			code = binary.LittleEndian.Uint16(ev[18:20])
-			value = int32(binary.LittleEndian.Uint32(ev[20:24]))
-		} else {
-			etype = binary.LittleEndian.Uint16(ev[8:10])
-			code = binary.LittleEndian.Uint16(ev[10:12])
-			value = int32(binary.LittleEndian.Uint32(ev[12:16]))
-		}
-		cb(etype, code, value)
+		cb(decodeEvent(rec))
 	}
+	// keep a partial event for the next read, detached from the caller's reused buffer
+	p.buf = append([]byte(nil), p.buf...)
 }
 
-
+// decodeEvent decodes one little-endian input_event record of 24 or 16 bytes.
+func decodeEvent(rec []byte) pen.Event {
+	if len(rec) == 24 {
+		sec := int64(binary.LittleEndian.Uint64(rec[0:8]))
+		usec := int64(binary.LittleEndian.Uint64(rec[8:16]))
+		return pen.Event{
+			Type:   binary.LittleEndian.Uint16(rec[16:18]),
+			Code:   binary.LittleEndian.Uint16(rec[18:20]),
+			Value:  int32(binary.LittleEndian.Uint32(rec[20:24])),
+			TimeMS: sec*1000 + usec/1000,
+		}
+	}
+	sec := int64(int32(binary.LittleEndian.Uint32(rec[0:4])))
+	usec := int64(int32(binary.LittleEndian.Uint32(rec[4:8])))
+	return pen.Event{
+		Type:   binary.LittleEndian.Uint16(rec[8:10]),
+		Code:   binary.LittleEndian.Uint16(rec[10:12]),
+		Value:  int32(binary.LittleEndian.Uint32(rec[12:16])),
+		TimeMS: sec*1000 + usec/1000,
+	}
+}

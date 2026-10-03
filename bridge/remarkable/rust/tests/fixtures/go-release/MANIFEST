@@ -1,0 +1,5 @@
+version 2026.10.02-go
+bbeebd879e1dff6918546dc0c179fdde505f2a21591c9a9c96e36b054ec5af83  Z-upper
+b4a806d660ec3894be94c00393437f2c425c47ed38797fe3d270859e75c54ac2  boot.sh
+c3b1d91ebb0e037f981c062e7fd37a13101afbea0a35e7ba1b7d586ec6af1c89  codrawer_bridge_native
+71d23e39e3ecac42d516188d247b7ae359c14dfdd7e42b9629f0888c1e541e12  units/codrawer-bridge.service

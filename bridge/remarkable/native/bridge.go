@@ -1,67 +1,52 @@
 package main
 
-// Bridge run loop + stroke state machine.
+// Wiring and the connection loop.
 //
-// This file is intentionally verbose and heavily commented because it is the "business logic"
-// for turning Linux input events into protocol messages.
+// Data flows one way through each stage, with no shared mutable state between them:
+//
+//   - penReaderForever (pen_stream.go) owns the pen device for the life of the process and
+//     parses input_events, with kernel timestamps, into evC; it reopens the device on error and
+//     resynchronises after a kernel SYN_DROPPED.
+//   - penMachineForever (pen_stream.go) runs one pen.Machine for the life of the process. It
+//     always drains evC, so contact state is never lost while the network is down, and turns
+//     events into encoded messages on the outbox. A full outbox skips whole strokes.
+//   - runKeyboardForever (keyboard.go) produces `key` messages on keyC.
+//   - runPageWatch (page_watch.go) keeps the latest `page` snapshot in a pageFeed.
+//   - typerForever (typer.go) types `term` replies that arrive from the router.
+//   - RunBridgeForever dials the router and drains the outbox, keyC and the page feed into the
+//     socket until it dies, then reconnects with backoff. It also notices a suspend/resume and
+//     reconnects at once instead of writing into a socket that died while the tablet slept.
+//
+// The socket is the only thing that comes and goes. Each connection gets its own pumps (keys,
+// pages) next to the outbox writer; WSConn serialises their writes.
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/rand"
+	"net/url"
 	"os"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	"codrawer-bridge-native/pen"
 )
 
-type BridgeConfig struct {
-	WsURL          string
-	Brush          string
-	Color          string
-	InputDevice    string
-	BatchHz        int
-	MaxBatchPoints int
-	NoGrab         bool
+// outboxSize bounds what is held while the link is down: about 30 s of continuous drawing
+// at 60 batches/s. Older ink is delivered first when the link returns.
+const outboxSize = 2048
 
-	TouchMode         string
-	PressureThreshold float64
-	DistanceThreshold int
+// Reconnect backoff: from reconnectMin, ×1.7 per failed dial up to reconnectMax, plus up to
+// reconnectJitter so that several devices do not retry in lockstep.
+const (
+	reconnectMin    = 500 * time.Millisecond
+	reconnectMax    = 5 * time.Second
+	reconnectJitter = 250 * time.Millisecond
+)
 
-	Debug      bool
-	DumpEvents bool
-	ListDevices bool
-
-	ProbeSeconds       float64
-	PingSeconds        float64
-	PongTimeoutSeconds float64
-}
-
-type outStrokeBegin struct {
-	T     string `json:"t"`
-	ID    string `json:"id"`
-	Layer string `json:"layer"`
-	Brush string `json:"brush"`
-	Color string `json:"color,omitempty"`
-	TS    int64  `json:"ts"`
-}
-
-type outStrokePts struct {
-	T   string      `json:"t"`
-	ID  string      `json:"id"`
-	Pts [][]float64 `json:"pts"`
-}
-
-type outStrokeEnd struct {
-	T  string `json:"t"`
-	ID string `json:"id"`
-	TS int64  `json:"ts"`
-}
-
+// RunBridgeForever starts every source and then streams into the router until the process
+// exits. It returns only on a startup error (no pen device), or nil after -list-devices.
 func RunBridgeForever(cfg BridgeConfig) error {
 	if cfg.ListDevices {
 		for _, d := range listProcInputDevices() {
@@ -70,251 +55,178 @@ func RunBridgeForever(cfg BridgeConfig) error {
 		return nil
 	}
 
-	probeDur := time.Duration(float64(time.Second) * math.Max(0.1, cfg.ProbeSeconds))
-	path, err := autoDetectActiveDevice(cfg.InputDevice, cfg.Debug, probeDur)
+	outC, err := startPen(cfg)
 	if err != nil {
 		return err
 	}
+	keyC := startKeyboard(cfg)
+	pages := startPageWatch(cfg)
+	onMessage := startTyper(cfg)
+
+	connectForever(cfg, outC, keyC, pages, onMessage)
+	return nil
+}
+
+// startPen finds the pen device, starts its reader and machine, and returns the outbox.
+func startPen(cfg BridgeConfig) (<-chan []byte, error) {
+	probeDur := time.Duration(float64(time.Second) * math.Max(0.1, cfg.ProbeSeconds))
+	path, err := autoDetectActiveDevice(cfg.InputDevice, cfg.Debug, probeDur)
+	if err != nil {
+		return nil, err
+	}
 	fmt.Printf("[bridge] using input device: %s\n", path)
 
-	flushEvery := time.Second / time.Duration(max(1, cfg.BatchHz))
+	evC := make(chan pen.Event, 4096)
+	readyC := make(chan pen.Ranges, 1)
+	go penReaderForever(path, cfg, evC, readyC)
+	rng := <-readyC // the machine needs the axis ranges, known once the device opened
+
+	outC := make(chan []byte, outboxSize)
+	go penMachineForever(cfg, rng, evC, outC)
+	return outC, nil
+}
+
+// startKeyboard starts the keyboard reader unless KEYBOARD_DEVICE=off. Key events flow through
+// the returned channel regardless of socket state; a connection's pump drains it while up.
+func startKeyboard(cfg BridgeConfig) chan outKey {
+	if strings.ToLower(strings.TrimSpace(cfg.Keyboard)) == "off" {
+		return nil
+	}
+	keyC := make(chan outKey, 256)
+	go runKeyboardForever(cfg.Keyboard, cfg.KeyboardGrab, cfg.Debug, keyC)
+	return keyC
+}
+
+// startPageWatch starts the page watcher when enabled (page_watch.go) and returns its feed, or
+// nil after logging why it is off.
+func startPageWatch(cfg BridgeConfig) *pageFeed {
+	if !pageWatchEnabled(cfg.PageWatch, os.Getenv("CODRAWER_OS_TESTED")) {
+		fmt.Printf("[page] watcher off (PAGE_WATCH=%s, CODRAWER_OS_TESTED=%q)\n", cfg.PageWatch, os.Getenv("CODRAWER_OS_TESTED"))
+		return nil
+	}
+	pages := newPageFeed()
+	go runPageWatch(cfg.XochitlDir, time.Duration(max(100, cfg.PagePollMs))*time.Millisecond, pages, cfg.Debug)
+	return pages
+}
+
+// startTyper starts the virtual keyboard when TYPE_REPLIES is on and returns the handler for
+// messages from the router (nil when off: the bridge then ignores what the router sends).
+func startTyper(cfg BridgeConfig) func([]byte) {
+	if !cfg.TypeReplies {
+		return func([]byte) {}
+	}
+	typeC := make(chan string, 1024)
+	go typerForever(typeC, time.Duration(max(1, cfg.TypeCharMs))*time.Millisecond, cfg.Debug)
+	return func(data []byte) {
+		out, ok := typedReply(data)
+		if !ok {
+			return
+		}
+		select {
+		case typeC <- out:
+		default: // the typer is far behind; drop rather than block the socket reader
+		}
+	}
+}
+
+// ── the connection loop ─────────────────────────────────────────────────────
+
+// connectForever dials the router, runs one connection until it fails, and reconnects.
+func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, pages *pageFeed, onMessage func([]byte)) {
 	pingEvery := time.Duration(float64(time.Second) * math.Max(1, cfg.PingSeconds))
 	pongWait := time.Duration(float64(time.Second) * math.Max(2, cfg.PongTimeoutSeconds))
+	wsURL := sourceURL(cfg.WsURL)
 
-	reconnectDelay := 500 * time.Millisecond
-	maxReconnectDelay := 5 * time.Second
-
-	var strokesSent atomic.Int64
-
+	reconnectDelay := reconnectMin
 	for {
-		ctx := context.Background()
-		ws, err := DialWS(ctx, cfg.WsURL, pingEvery, pongWait)
+		ws, err := DialWS(context.Background(), wsURL, pingEvery, pongWait, onMessage)
 		if err != nil {
-			j := time.Duration(rand.Int63n(int64(250 * time.Millisecond)))
+			j := time.Duration(rand.Int63n(int64(reconnectJitter)))
 			fmt.Printf("[bridge] ws connect error: %v; retrying in %s\n", err, reconnectDelay+j)
 			time.Sleep(reconnectDelay + j)
-			reconnectDelay = time.Duration(math.Min(float64(maxReconnectDelay), float64(reconnectDelay)*1.7))
+			reconnectDelay = time.Duration(math.Min(float64(reconnectMax), float64(reconnectDelay)*1.7))
 			continue
 		}
 
-		fmt.Printf("[bridge] connected ws=%s\n", cfg.WsURL)
-		reconnectDelay = 500 * time.Millisecond
-
-		err = runOnce(path, cfg, ws, flushEvery, &strokesSent)
-		ws.Close()
-		fmt.Printf("[bridge] disconnected; strokes_sent=%d; reconnecting in %s (err=%v)\n", strokesSent.Load(), reconnectDelay, err)
+		fmt.Printf("[bridge] connected ws=%s\n", wsURL)
+		reconnectDelay = reconnectMin
+		err = runConnection(ws, outC, keyC, pages)
+		fmt.Printf("[bridge] disconnected; reconnecting in %s (err=%v)\n", reconnectDelay, err)
 		time.Sleep(reconnectDelay)
 	}
 }
 
-func runOnce(path string, cfg BridgeConfig, ws *WSConn, flushEvery time.Duration, strokesSent *atomic.Int64) error {
-	f, err := os.Open(path)
+// runConnection starts this connection's pumps, writes the outbox until the socket fails, then
+// stops the pumps and closes the socket.
+func runConnection(ws *WSConn, outC <-chan []byte, keyC chan outKey, pages *pageFeed) error {
+	stopPump := make(chan struct{})
+	if keyC != nil {
+		go pumpKeys(ws, keyC, stopPump)
+	}
+	if pages != nil {
+		go pumpPages(ws, pages, stopPump)
+	}
+	err := writeOutbox(ws, outC)
+	close(stopPump)
+	ws.Close()
+	return err
+}
+
+// sourceURL marks the bridge as a pen source: a replaying router (the Go one) then skips the
+// page replay, which the bridge has no use for. Routers that do not replay ignore it. An
+// explicit replay= in the URL is kept.
+func sourceURL(raw string) string {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return err
+		return raw
 	}
-	defer f.Close()
-
-	fd := int(f.Fd())
-	if !cfg.NoGrab {
-		tryGrab(fd)
+	q := u.Query()
+	if q.Get("replay") == "" {
+		q.Set("replay", "0")
+		u.RawQuery = q.Encode()
 	}
+	return u.String()
+}
 
-	rng := getRanges(fd)
-	reader := bufio.NewReaderSize(f, 4096)
-	parser := &inputParser{}
-
-	// Input state (raw)
-	var (
-		xRaw, yRaw, pRaw, dRaw int32
-		hasX, hasY             bool
-	)
-
-	// Tool + brush state
-	var (
-		btnTouchDown   bool
-		toolPenDown    bool
-		toolRubberDown bool
-		curBrush       = cfg.Brush
-	)
-
-	// Stroke state
-	var (
-		touching    bool
-		strokeID    string
-		batch       [][]float64
-		lastFlush   = time.Now()
-		lastAnyEvent = time.Now()
-
-		// Used to drop micro-jitter after normalization.
-		lastNormX    float64
-		lastNormY    float64
-		haveLastNorm bool
-	)
-
-	sendPts := func(force bool) error {
-		if strokeID == "" || len(batch) == 0 {
-			return nil
-		}
-		if !force && time.Since(lastFlush) < flushEvery && len(batch) < cfg.MaxBatchPoints {
-			return nil
-		}
-		if err := ws.WriteJSON(outStrokePts{T: "stroke_pts", ID: strokeID, Pts: batch}); err != nil {
-			return err
-		}
-		batch = nil
-		lastFlush = time.Now()
-		return nil
-	}
-
-	debugTick := time.Now()
-
+// writeOutbox writes queued messages until the socket fails. A wall clock that jumps ahead of
+// the monotonic clock means the tablet was suspended (the monotonic clock stops in suspend): the
+// socket is presumed dead, since its timers did not run while asleep, and the caller reconnects
+// immediately.
+func writeOutbox(ws *WSConn, outC <-chan []byte) error {
+	check := time.NewTicker(time.Second)
+	defer check.Stop()
+	lastWall, lastMono := time.Now().Round(0), time.Now()
 	for {
-		// If WS layer reports an error (ping/pong/close), bail so outer loop reconnects.
 		select {
 		case err := <-ws.Err():
 			return err
-		default:
-		}
-
-		chunk := make([]byte, 4096)
-		n, err := reader.Read(chunk)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+		case msg := <-outC:
+			if err := ws.WriteRaw(msg); err != nil {
+				// The message is lost with the socket; the router ends the stroke when we drop.
 				return err
 			}
-			return err
-		}
-
-		parser.feed(chunk[:n], func(etype uint16, code uint16, value int32) {
-			lastAnyEvent = time.Now()
-			if cfg.DumpEvents {
-				fmt.Printf("[ev] type=%d code=%d value=%d\n", etype, code, value)
+		case <-check.C:
+			wall, mono := time.Now().Round(0), time.Now()
+			if gap := wall.Sub(lastWall) - mono.Sub(lastMono); gap > 2*time.Second {
+				return fmt.Errorf("resumed after ~%s asleep", gap.Round(time.Second))
 			}
-
-			switch etype {
-			case EV_ABS:
-				switch code {
-				case ABS_X:
-					xRaw = value
-					hasX = true
-				case ABS_Y:
-					yRaw = value
-					hasY = true
-				case ABS_PRESSURE:
-					pRaw = value
-				case ABS_DISTANCE:
-					dRaw = value
-				}
-
-			case EV_KEY:
-				switch code {
-				case BTN_TOUCH:
-					btnTouchDown = value != 0
-				case BTN_TOOL_PEN:
-					toolPenDown = value != 0
-				case BTN_TOOL_RUBBER:
-					toolRubberDown = value != 0
-				}
-
-				// Maintain current brush based on current tool state.
-				if toolRubberDown {
-					curBrush = "eraser"
-				} else {
-					curBrush = cfg.Brush
-				}
-
-			case EV_SYN:
-				if code != SYN_REPORT {
-					return
-				}
-
-				// Decide "down" based on chosen mode, using the most recent state.
-				mode := strings.ToLower(strings.TrimSpace(cfg.TouchMode))
-				if mode == "" {
-					mode = "auto"
-				}
-
-				// Auto heuristic: prefer BTN_TOUCH when available, else pressure, else distance, else tool.
-				if mode == "auto" {
-					if btnTouchDown {
-						mode = "btn"
-					} else {
-						// We treat "pressure mode" as a threshold on the normalized pressure value,
-						// but only if pressure range is meaningful.
-						mode = "pressure"
-					}
-				}
-
-				var down bool
-				switch mode {
-				case "btn":
-					down = btnTouchDown
-				case "pressure":
-					down = norm(pRaw, rng.pMin, rng.pMax) > cfg.PressureThreshold
-				case "distance":
-					down = int(dRaw) <= cfg.DistanceThreshold
-				case "tool":
-					down = toolPenDown || toolRubberDown
-				default:
-					down = btnTouchDown
-				}
-
-				// Start/end strokes on transitions.
-				if down && !touching {
-					touching = true
-					strokeID = fmt.Sprintf("u_%x", time.Now().UnixNano())
-					batch = nil
-					haveLastNorm = false
-					lastFlush = time.Now()
-					_ = ws.WriteJSON(outStrokeBegin{T: "stroke_begin", ID: strokeID, Layer: "user", Brush: curBrush, Color: cfg.Color, TS: nowMS()})
-				} else if !down && touching {
-					touching = false
-					_ = sendPts(true)
-					_ = ws.WriteJSON(outStrokeEnd{T: "stroke_end", ID: strokeID, TS: nowMS()})
-					strokesSent.Add(1)
-					strokeID = ""
-					return
-				}
-
-				// Emit one coherent point per SYN_REPORT (prevents X/Y desync artifacts).
-				if touching && strokeID != "" && hasX && hasY {
-					x := norm(xRaw, rng.xMin, rng.xMax)
-					y := norm(yRaw, rng.yMin, rng.yMax)
-					p := norm(pRaw, rng.pMin, rng.pMax)
-
-					if haveLastNorm {
-						dx := x - lastNormX
-						dy := y - lastNormY
-						if (dx*dx + dy*dy) < 1e-8 {
-							return
-						}
-					}
-					lastNormX, lastNormY, haveLastNorm = x, y, true
-
-					batch = append(batch, []float64{x, y, p, float64(nowMS())})
-					_ = sendPts(false)
-				}
-			}
-		})
-
-		// Flush on timer even if SYN_REPORT is sparse.
-		if strokeID != "" && len(batch) > 0 && time.Since(lastFlush) >= flushEvery {
-			if err := sendPts(true); err != nil {
-				return err
-			}
-		}
-
-		if cfg.Debug && time.Since(debugTick) > 2*time.Second {
-			debugTick = time.Now()
-			fmt.Printf("[bridge] stats touching=%v strokes=%d brush=%s\n", touching, strokesSent.Load(), curBrush)
-		}
-
-		// If input goes quiet, print a hint in debug mode.
-		if cfg.Debug && time.Since(lastAnyEvent) > 5*time.Second {
-			fmt.Printf("[bridge] warning: no input events seen for 5s on %s (try -list-devices, increase -probe-seconds, or pass -input /dev/input/eventX)\n", path)
-			lastAnyEvent = time.Now()
+			lastWall, lastMono = wall, mono
 		}
 	}
 }
 
-
+// pumpKeys forwards keyboard messages over the current socket until stop closes. A write failure
+// is reported to the socket's error channel so the outbox writer reconnects.
+func pumpKeys(ws *WSConn, keyC <-chan outKey, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case k := <-keyC:
+			if err := ws.WriteJSON(k); err != nil {
+				ws.sendErr(err)
+				return
+			}
+		}
+	}
+}

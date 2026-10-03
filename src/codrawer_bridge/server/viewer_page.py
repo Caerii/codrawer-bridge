@@ -373,6 +373,14 @@ def render_viewer_html(session_id: str) -> str:
             if (msg.plan) statusEl.textContent = `AI: ${{msg.plan}}`;
           }} else if (t === "ai_say") {{
             if (msg.text) statusEl.textContent = `AI: ${{msg.text}}`;
+          }} else if (t === "clear") {{
+            const w = window.innerWidth, h = window.innerHeight;
+            userCtx.clearRect(0, 0, w, h);
+            aiCtx.clearRect(0, 0, w, h);
+            hudCtx.clearRect(0, 0, w, h);
+            strokeState.clear(); strokeBrush.clear(); strokeColor.clear();
+            aiPending.clear(); aiEnded.clear();
+            statusEl.textContent = "new drawing";
           }}
         }};
       }}
