@@ -1,9 +1,13 @@
-// codrawer-release: build, sign and verify codrawer releases on the desktop (any OS).
-// The tablet verifies with the bridge binary's own `release verify`. See package release.
+// Command codrawer-release builds, signs and verifies codrawer releases on the desktop (any OS).
+// The tablet verifies with the bridge binary's own `release verify` (release_cmd.go); both are
+// thin front ends to package release, which documents the format.
 //
 //	codrawer-release keygen <priv-file> <pub-file>
 //	codrawer-release seal <dir> <version> <priv-file>   manifest + signature
-//	codrawer-release verify <dir> <pub-file>
+//	codrawer-release verify <dir> <pub-file>            prints the version
+//
+// scripts/dev/deploy-tablet.sh builds it and seals every release it stages. Exit status: 0 on
+// success, 1 on any error, 2 on a usage error.
 package main
 
 import (
@@ -14,15 +18,6 @@ import (
 	"codrawer-bridge-native/release"
 )
 
-func read(p string) string {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	return strings.TrimSpace(string(b))
-}
-
 func main() {
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: codrawer-release keygen <priv> <pub> | seal <dir> <version> <priv> | verify <dir> <pub>")
@@ -31,12 +26,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "keygen":
-		var priv, pub string
-		if priv, pub, err = release.GenerateKey(); err == nil {
-			if err = os.WriteFile(os.Args[2], []byte(priv+"\n"), 0o600); err == nil {
-				err = os.WriteFile(os.Args[3], []byte(pub+"\n"), 0o644)
-			}
-		}
+		err = keygen(os.Args[2], os.Args[3])
 	case "seal":
 		if len(os.Args) < 5 {
 			err = fmt.Errorf("seal needs <dir> <version> <priv>")
@@ -55,4 +45,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, "codrawer-release:", err)
 		os.Exit(1)
 	}
+}
+
+// keygen writes a new key pair: the private key readable only by the owner.
+func keygen(privPath, pubPath string) error {
+	priv, pub, err := release.GenerateKey()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(privPath, []byte(priv+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(pubPath, []byte(pub+"\n"), 0o644)
+}
+
+// read returns a key file's contents, trimmed; a missing file is fatal.
+func read(p string) string {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return strings.TrimSpace(string(b))
 }
