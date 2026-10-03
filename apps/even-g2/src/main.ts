@@ -134,8 +134,13 @@ const opts: RasterOptions = {
 }
 const loupeCam = new LoupeCamera(LOUPE_H / Math.max(1, LOUPE_W), opts.pageAspect)
 const LOUPE_CAM = cfg('loupe_cam', '1') !== '0' // 0: plain re-centring on the pen every frame
+// loupe zoom relative to the default (set by dragging the loupe box on the phone)
+let loupeZoom = Number(cfg('loupe_zoom', '1')) || 1
+function loupeBase(): number {
+  return opts.window * 0.45 * (LOUPE_W / 128) * loupeZoom
+}
 function loupeOpts(): RasterOptions {
-  const base = opts.window * 0.45 * (LOUPE_W / 128) // same zoom as the original 128-px loupe
+  const base = loupeBase()
   if (!LOUPE_CAM) return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: base }
   const cam = loupeCam.update(store.lastPoint, base, performance.now())
   return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: cam.window, center: cam.center }
@@ -190,7 +195,9 @@ const connEl = document.getElementById('conn') as HTMLSpanElement
 function applyTheme(t: Theme) {
   stage.setTheme(t)
   document.documentElement.dataset.theme = t
-  themeBtn.textContent = t === 'paper' ? 'Dark' : 'Paper'
+  // the icon shows where a tap goes: a moon on paper, a sun in the dark
+  themeBtn.innerHTML = t === 'paper' ? '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+  themeBtn.title = t === 'paper' ? 'Dark theme' : 'Paper theme'
   try {
     localStorage.setItem('codrawer:theme', t)
   } catch {
@@ -199,21 +206,42 @@ function applyTheme(t: Theme) {
 }
 applyTheme(cfg('theme', 'paper') === 'dark' ? 'dark' : 'paper')
 themeBtn.onclick = () => applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
-;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = () => document.body.classList.toggle('debug')
+;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = (e) => {
+  const on = document.body.classList.toggle('debug')
+  ;(e.currentTarget as HTMLButtonElement).setAttribute('aria-pressed', String(on))
+}
 // tap the page to hide the bar (clean projection); tap again to bring it back
-;(document.getElementById('stage') as HTMLCanvasElement).onclick = () => document.body.classList.toggle('chromeless')
-const viewBtn = document.getElementById('viewBtn') as HTMLButtonElement
-function applyView(v: View) {
-  stage.setView(v)
-  viewBtn.textContent = v === 'focus' ? 'Page' : 'Focus'
+;(document.getElementById('stage') as HTMLCanvasElement).onclick = () => {
+  if (stage.consumeDrag()) return // that was a resize of the loupe box
+  document.body.classList.toggle('chromeless')
+}
+// The loupe's view, drawn on the phone (Fit/Page views) as a dashed box; drag its corner to zoom
+// the loupe (remembered).
+stage.loupeRect = () => (HAS_LOUPE && LOUPE_CAM && store.lastPoint ? loupeCam.rect() : null)
+stage.onLoupeResize = (w) => {
+  // the box's width is the camera's window (base × speed zoom): set the base so it lands there
+  loupeZoom = Math.min(6, Math.max(0.15, w / loupeBase()))
   try {
-    localStorage.setItem('codrawer:stage', v)
+    localStorage.setItem('codrawer:loupe_zoom', loupeZoom.toFixed(3))
   } catch {
     /* ignore */
   }
+  loupeDirty = true
 }
-applyView(cfg('stage', 'focus') === 'page' ? 'page' : 'focus')
-viewBtn.onclick = () => applyView(stage.view === 'focus' ? 'page' : 'focus')
+const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg button[data-view]'))
+// The phone view mirrors the glasses: a ring tap (follow ↔ full) and ring zoom change both. The
+// Follow · Fit · Page control sets the phone alone (until the next ring action).
+function applyView(v: View) {
+  stage.followWindow = opts.window
+  stage.setView(v)
+  for (const b of viewButtons) b.setAttribute('aria-pressed', String(b.dataset.view === v))
+}
+function viewFromGlasses(): View {
+  return opts.mode === 'follow' ? 'follow' : 'focus'
+}
+// start in step with the glasses; ?stage=page|focus|follow overrides for this load only
+applyView(((v) => (v === 'page' || v === 'focus' || v === 'follow' ? v : viewFromGlasses()))(params.get('stage')))
+for (const b of viewButtons) b.onclick = () => applyView(b.dataset.view as View)
 
 // ── camera: draw over the world ─────────────────────────────────────────────
 // Live video from the back camera behind the ink (getUserMedia). If the WebView will not grant
@@ -229,12 +257,13 @@ function stopCamera() {
   camStream = null
   video.srcObject = null
   stage.setBackdrop(null)
-  camBtn.textContent = 'Camera'
+  camBtn.setAttribute('aria-pressed', 'false')
+  camBtn.title = 'Draw over the camera'
   freezeBtn.hidden = true
 }
 
 async function startCamera() {
-  camBtn.textContent = 'Starting…'
+  camBtn.title = 'Starting the camera…'
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia unavailable')
     camStream = await navigator.mediaDevices.getUserMedia({
@@ -244,9 +273,10 @@ async function startCamera() {
     video.srcObject = camStream
     await video.play()
     stage.setBackdrop(video)
-    camBtn.textContent = 'Paper'
+    camBtn.setAttribute('aria-pressed', 'true')
+    camBtn.title = 'Back to paper'
     freezeBtn.hidden = false
-    freezeBtn.textContent = 'Freeze'
+    freezeBtn.setAttribute('aria-pressed', 'false')
     console.log('[codrawer] camera live', video.videoWidth, 'x', video.videoHeight)
     return
   } catch (e) {
@@ -259,11 +289,12 @@ async function startCamera() {
     img.src = shot.base64.startsWith('data:') ? shot.base64 : `data:${shot.mimeType || 'image/jpeg'};base64,${shot.base64}`
     await img.decode()
     stage.setBackdrop(img)
-    camBtn.textContent = 'Paper'
+    camBtn.setAttribute('aria-pressed', 'true')
+    camBtn.title = 'Back to paper'
     console.log('[codrawer] camera photo', img.naturalWidth, 'x', img.naturalHeight)
   } catch (e) {
     console.warn('[codrawer] camera unavailable', String(e))
-    camBtn.textContent = 'Camera'
+    camBtn.title = 'Camera unavailable'
     notice = 'camera unavailable'
   }
 }
@@ -272,10 +303,10 @@ camBtn.onclick = () => (stage.hasBackdrop ? stopCamera() : void startCamera())
 freezeBtn.onclick = () => {
   if (video.paused) {
     void video.play()
-    freezeBtn.textContent = 'Freeze'
+    freezeBtn.setAttribute('aria-pressed', 'false')
   } else {
     video.pause()
-    freezeBtn.textContent = 'Live'
+    freezeBtn.setAttribute('aria-pressed', 'true')
   }
   stage.touch()
 }
@@ -330,7 +361,7 @@ function tabletNotice(t: Record<string, string>) {
 
 function setConn(live: boolean) {
   connEl.classList.toggle('live', live)
-  connEl.textContent = live ? 'live' : 'reconnecting'
+  ;(connEl.querySelector('span') ?? connEl).textContent = live ? 'live' : 'reconnecting'
 }
 
 let intent = ''
@@ -1120,6 +1151,9 @@ function applyAction(action: string) {
   else if (action === 'cycle-highlight') opts.highlight = opts.highlight === 'all' ? 'user' : opts.highlight === 'user' ? 'ai' : 'all'
   else if (action === 'zoom-in') opts.window = Math.max(0.06, opts.window * 0.8)
   else if (action === 'zoom-out') opts.window = Math.min(1, opts.window * 1.25)
+  if (action === 'toggle-mode' || action === 'zoom-in' || action === 'zoom-out') {
+    applyView(viewFromGlasses()) // the phone follows the ring too
+  }
   canvasDirty = true
   loupeDirty = true
   strokeEnded = true // force a canvas refresh for the new view

@@ -6,9 +6,13 @@
  * or dark theme, and redraws on every animation frame while ink arrives.
  *
  * - View: "page" shows the whole page; "focus" frames the writing (ink bounds with margin, never
- *   tighter than a third of the page) so a projector is not mostly empty paper. The camera glides
- *   to its target instead of jumping.
+ *   tighter than a third of the page) so a projector is not mostly empty paper; "follow" tracks
+ *   the pen at the glasses' follow scale (the same slice of page width), so a ring tap that
+ *   switches the glasses between follow and full does the same here. The camera glides to its
+ *   target instead of jumping.
  * - Pointer: where the pen hovers (cursor messages), so viewers can follow before ink appears.
+ * - Loupe overlay (Fit and Page views): a dashed box for what the glasses loupe shows, with a
+ *   corner handle: drag it to change the loupe's zoom.
  * - Backdrop: the phone camera (live video, or a still) instead of paper: ink is drawn white with
  *   a soft dark halo so it reads over any scene. Drawing over the world.
  * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
@@ -17,7 +21,7 @@
 import type { Stroke, StrokeStore } from './strokes'
 
 export type Theme = 'paper' | 'dark'
-export type View = 'page' | 'focus'
+export type View = 'page' | 'focus' | 'follow'
 
 const THEMES: Record<Theme, { page: string; surround: string; ink: string; ai: string; edge: string; pointer: string }> = {
   // the reMarkable's warm off-white page and near-black ink
@@ -44,7 +48,16 @@ export class Stage {
   private backdrop: HTMLVideoElement | HTMLImageElement | null = null
   theme: Theme = 'paper'
   view: View = 'focus'
+  /** follow view: visible width as a fraction of the page width (the glasses' opts.window) */
+  followWindow = 0.22
   showAi = false
+  /** the glasses loupe's view in normalized page coords [x0, y0, x1, y1]; null hides it */
+  loupeRect: () => number[] | null = () => null
+  /** the loupe box was resized to this width (fraction of the page width) */
+  onLoupeResize: (window: number) => void = () => {}
+  private handle: { x: number; y: number; r: number } | null = null // device px, last drawn
+  private dragging: { cx: number } | null = null
+  private suppressClick = false
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -53,6 +66,7 @@ export class Stage {
   ) {
     this.cam.cx = this.camAt.cx = pageAspect / 2
     new ResizeObserver(() => this.resize()).observe(canvas)
+    this.wireHandle()
     this.resize()
     const frame = () => {
       this.step()
@@ -117,6 +131,14 @@ export class Stage {
     const A = this.pageAspect
     const whole = { cx: A / 2, cy: 0.5, h: Math.max(1, A / screenAspect) * 1.06 }
     if (this.view === 'page') return whole
+    if (this.view === 'follow') {
+      const pen = this.pointer ? [this.pointer.x, this.pointer.y] : this.store.lastPoint
+      if (pen) {
+        const h = (this.followWindow * A) / screenAspect // same page width as the glasses view
+        return h >= whole.h ? whole : { cx: pen[0] * A, cy: pen[1], h }
+      }
+      // no pen yet: frame the writing until there is one
+    }
     let x0 = Infinity
     let y0 = Infinity
     let x1 = -Infinity
@@ -275,6 +297,81 @@ export class Stage {
     ctx.restore()
   }
 
+  /** Resize the glasses rectangle by dragging its corner handle (pointer events on the stage). */
+  private wireHandle() {
+    const toDevice = (e: PointerEvent) => {
+      const r = this.canvas.getBoundingClientRect()
+      const k = this.canvas.width / Math.max(1, r.width)
+      return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k }
+    }
+    this.canvas.addEventListener('pointerdown', (e) => {
+      const h = this.handle
+      if (!h) return
+      const p = toDevice(e)
+      if (Math.hypot(p.x - h.x, p.y - h.y) > h.r * 2.2) return // generous touch target
+      const box = this.loupeRect()
+      if (!box) return
+      const { X } = this.xf(this.cam)
+      this.dragging = { cx: X((box[0] + box[2]) / 2) }
+      this.canvas.setPointerCapture(e.pointerId)
+      e.preventDefault()
+    })
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (!this.dragging) return
+      const p = toDevice(e)
+      // the box stays centred where it is: its width is twice the handle's distance
+      const { s } = this.xf(this.cam)
+      const widthPageUnits = (2 * Math.abs(p.x - this.dragging.cx)) / s
+      const w = Math.min(1, Math.max(0.06, widthPageUnits / this.pageAspect))
+      this.onLoupeResize(w)
+      this.dirty = true
+    })
+    const end = (e: PointerEvent) => {
+      if (!this.dragging) return
+      this.dragging = null
+      this.suppressClick = true // the tap-to-hide-the-bar must not fire after a drag
+      this.canvas.releasePointerCapture(e.pointerId)
+    }
+    this.canvas.addEventListener('pointerup', end)
+    this.canvas.addEventListener('pointercancel', end)
+  }
+
+  /** True once after a handle drag (lets the page's tap handler ignore the drag's click). */
+  consumeDrag(): boolean {
+    const was = this.suppressClick
+    this.suppressClick = false
+    return was
+  }
+
+  private paintGlasses(ctx: CanvasRenderingContext2D) {
+    this.handle = null
+    if (this.view === 'follow' || this.backdrop) return
+    const box = this.loupeRect()
+    if (!box) return
+    const { X, Y } = this.xf(this.cam)
+    const dpr = this.canvas.width / Math.max(1, this.canvas.getBoundingClientRect().width)
+    const accent = this.theme === 'paper' ? 'rgba(47,128,95,' : 'rgba(126,231,135,'
+    const x0 = X(box[0])
+    const y0 = Y(box[1])
+    const x1 = X(box[2])
+    const y1 = Y(box[3])
+    ctx.save()
+    ctx.fillStyle = accent + '0.05)'
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
+    ctx.setLineDash([5 * dpr, 4 * dpr])
+    ctx.lineWidth = 1.5 * dpr
+    ctx.strokeStyle = accent + '0.9)'
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0)
+    ctx.setLineDash([])
+    const r = 7 * dpr
+    ctx.fillStyle = accent + '1)'
+    ctx.beginPath()
+    ctx.roundRect(x1 - r, y1 - r, 2 * r, 2 * r, 3 * dpr)
+    ctx.fill()
+    ctx.restore()
+    this.handle = { x: x1, y: y1, r }
+  }
+
   private paintPointer(ctx: CanvasRenderingContext2D) {
     if (!this.pointer) return
     const t = THEMES[this.theme]
@@ -324,6 +421,7 @@ export class Stage {
       for (const s of strokes) if (!s.done) this.paintStroke(l, s, cam)
       ctx.drawImage(this.live, 0, 0)
     }
+    this.paintGlasses(ctx)
     this.paintPointer(ctx)
   }
 }

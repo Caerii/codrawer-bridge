@@ -5,41 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>codrawer</title>
     <style>
-      :root[data-theme='paper'] { --bg: #e4e1d8; --bar: rgba(246,244,238,0.92); --fg: #1d1d1b; --muted: #77746c; --line: rgba(0,0,0,0.12); --live: #2f9e44; --off: #c2410c; }
-      :root[data-theme='dark'] { --bg: #060806; --bar: rgba(16,20,16,0.92); --fg: #d8f5dc; --muted: #6f8f74; --line: rgba(126,231,135,0.18); --live: #7ee787; --off: #f59e0b; }
-      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px -apple-system, system-ui, sans-serif; }
+      :root[data-theme='paper'] { --bg: #e4e1d8; --bar: rgba(246,244,238,0.86); --fg: #1d1d1b; --muted: #77746c; --line: rgba(29,29,27,0.12); --chip: rgba(29,29,27,0.06); --chip-on: #1d1d1b; --chip-on-fg: #f6f4ee; --accent: #2f805f; --live: #2f9e44; --off: #c2410c; }
+      :root[data-theme='dark'] { --bg: #060806; --bar: rgba(16,20,16,0.86); --fg: #d8f5dc; --muted: #6f8f74; --line: rgba(126,231,135,0.16); --chip: rgba(126,231,135,0.08); --chip-on: #7ee787; --chip-on-fg: #0a0d0a; --accent: #7ee787; --live: #7ee787; --off: #f59e0b; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
       body { display: flex; flex-direction: column; overflow: hidden; }
-      #bar { display: flex; align-items: center; gap: 10px; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); padding-top: max(8px, env(safe-area-inset-top)); background: var(--bar); border-bottom: 1px solid var(--line); transition: margin-top 0.25s; }
-      body.chromeless #bar { margin-top: -80px; }
-      #title { font-weight: 600; letter-spacing: 0.02em; }
-      #conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-      #conn::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
-      #conn.live::before { background: var(--live); }
-      #bar .spacer { flex: 1; }
-      #bar button[hidden] { display: none; }
-      #bar { flex-wrap: wrap; }
-      #bar button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
-      #banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--bar); border-bottom: 1px solid var(--line); }
+      #bar { display: flex; align-items: center; gap: 8px; padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); background: var(--bar); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid var(--line); transition: margin-top 0.25s ease; z-index: 2; }
+      body.chromeless #bar { margin-top: -96px; }
+      #brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -0.01em; }
+      #brand svg { width: 20px; height: 20px; }
+      #conn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12px; font-weight: 500; }
+      #conn::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--off); box-shadow: 0 0 0 3px color-mix(in srgb, var(--off) 25%, transparent); }
+      #conn.live::before { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+      .spacer { flex: 1; }
+      .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--chip); }
+      .seg button { height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; transition: background 0.15s, color 0.15s; }
+      .seg button[aria-pressed='true'] { background: var(--chip-on); color: var(--chip-on-fg); }
+      .icon { width: 36px; height: 36px; display: inline-grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--fg); cursor: pointer; transition: background 0.15s; }
+      .icon:hover, .seg button:hover { background: var(--chip); }
+      .icon[aria-pressed='true'] { background: var(--chip-on); color: var(--chip-on-fg); }
+      .icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .icon[hidden] { display: none; }
+      @media (max-width: 480px) { #conn span { display: none; } #conn { padding: 3px; } .seg button { padding: 0 9px; } }
+      #banner { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--bar); border-bottom: 1px solid var(--line); font-size: 13px; }
       #banner[hidden] { display: none; }
       #banner span { flex: 1; }
-      #banner button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+      #banner button { font: inherit; font-weight: 600; color: var(--chip-on-fg); background: var(--chip-on); border: 0; border-radius: 8px; padding: 5px 12px; }
       #stage { flex: 1; width: 100%; min-height: 0; display: block; touch-action: manipulation; }
-      #debug { display: none; padding: 8px 12px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, monospace; }
+      #debug { display: none; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, SFMono-Regular, monospace; }
       body.debug #debug { display: block; }
-      #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); background: #000; }
+      #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; background: #000; }
       #status { margin-top: 6px; white-space: pre-wrap; color: var(--muted); }
     </style>
   </head>
   <body>
     <div id="bar">
-      <span id="title">codrawer</span>
-      <span id="conn">connecting</span>
+      <span id="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20c3-1 4-4 6-8s4-7 8-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="18" cy="4" r="2" fill="currentColor"/></svg>codrawer</span>
+      <span id="conn"><span>connecting</span></span>
       <span class="spacer"></span>
-      <button id="camBtn" type="button">Camera</button>
-      <button id="freezeBtn" type="button" hidden>Freeze</button>
-      <button id="viewBtn" type="button">Page</button>
-      <button id="themeBtn" type="button">Dark</button>
-      <button id="debugBtn" type="button">Glasses</button>
+      <span class="seg" role="group" aria-label="View">
+        <button type="button" data-view="follow" aria-pressed="false" title="Follow the pen at the glasses' scale">Follow</button>
+        <button type="button" data-view="focus" aria-pressed="false" title="Fit the writing">Fit</button>
+        <button type="button" data-view="page" aria-pressed="false" title="The whole page">Page</button>
+      </span>
+      <button id="camBtn" class="icon" type="button" aria-pressed="false" aria-label="Camera" title="Draw over the camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+      <button id="freezeBtn" class="icon" type="button" aria-pressed="false" aria-label="Freeze frame" title="Freeze the camera frame" hidden><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg></button>
+      <button id="themeBtn" class="icon" type="button" aria-label="Theme" title="Paper or dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+      <button id="debugBtn" class="icon" type="button" aria-pressed="false" aria-label="Glasses" title="Glasses previews and status"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4M3 14l1.5-6M21 14l-1.5-6"/></svg></button>
     </div>
     <div id="banner" hidden><span id="bannerText"></span><button id="bannerOk" type="button">OK</button></div>
     <canvas id="stage"></canvas>

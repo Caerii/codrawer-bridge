@@ -95,3 +95,14 @@ test('loupe camera: room ahead, steady while writing, new line, jump, speed zoom
   for (let i = 1; i <= 30; i++) v = cam.update([0.34 + i * 0.0005, 0.9], base, (t += 100))
   assert.ok(v.window < base * 1.1, `slow: ${v.window}`)
 })
+
+test('loupe window keeps the loupe proportions on the page (no squashing)', async () => {
+  const { LoupeCamera } = await import('../src/strokes')
+  const pageW = 1620
+  const pageH = 2160
+  const cam = new LoupeCamera(64 / 128, pageW / pageH)
+  cam.update([0.5, 0.5], 0.1, 0)
+  const [x0, y0, x1, y1] = cam.rect()
+  const physical = ((x1 - x0) * pageW) / ((y1 - y0) * pageH)
+  assert.ok(Math.abs(physical - 2) < 1e-9, `128x64 loupe frames a 2:1 patch of paper, got ${physical}`)
+})

@@ -179,7 +179,7 @@ function followWindow(o: RasterOptions, store: StrokeStore): [number, number, nu
   const last = o.center ?? store.lastPoint
   if (!last) return null
   const winW = o.window
-  const winH = (o.window * o.height) / o.width / o.pageAspect
+  const winH = (o.window * o.height * o.pageAspect) / o.width // normalized page height; keeps shapes true
   const pad = 0.02 // wide lines reach slightly past their points
   return [last[0] - winW / 2 - pad, last[1] - winH / 2 - pad, last[0] + winW / 2 + pad, last[1] + winH / 2 + pad]
 }
@@ -189,7 +189,7 @@ function makeMapper(o: RasterOptions, store: StrokeStore) {
   const last = o.center ?? store.lastPoint
   if (o.mode === 'follow' && last) {
     const winW = o.window
-    const winH = (o.window * o.height) / o.width / o.pageAspect
+    const winH = (o.window * o.height * o.pageAspect) / o.width // normalized page height; keeps shapes true
     const x0 = last[0] - winW / 2
     const y0 = last[1] - winH / 2
     return (x: number, y: number): [number, number] => [((x - x0) / winW) * o.width, ((y - y0) / winH) * o.height]
@@ -449,7 +449,7 @@ export class LoupeCamera {
   /** The window in page coords [x0, y0, x1, y1] for the last update (for a minimap marker). */
   rect(): [number, number, number, number] {
     const w = this.win
-    const h = (w * this.aspect) / this.pageAspect
+    const h = w * this.aspect * this.pageAspect // normalized page height of the window
     return [this.cx - w / 2, this.cy - h / 2, this.cx + w / 2, this.cy + h / 2]
   }
 
@@ -478,7 +478,7 @@ export class LoupeCamera {
 
     const target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
     this.win += (target - this.win) * 0.35
-    const winH = (this.win * this.aspect) / this.pageAspect
+    const winH = this.win * this.aspect * this.pageAspect // normalized page height
     const relX = (pen[0] - this.cx) / this.win // -0.5 .. 0.5 inside the frame
     const relY = (pen[1] - this.cy) / winH
 
