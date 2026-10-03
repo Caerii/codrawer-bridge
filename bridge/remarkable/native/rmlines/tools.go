@@ -1,5 +1,12 @@
 package rmlines
 
+// Tool and colour vocabularies.
+//
+// A Line stores xochitl's numeric ids. This file maps them onto the page model's names (ADR 008,
+// the `tool` field of a `page` stroke) and onto display colours, so that every consumer of the
+// page agrees on what "tool 21, colour 9" means. Ids and values: rmscene scene_items, rmc
+// RM_PALETTE, docs/investigations/xochitl-pen-data.md §1.
+
 // Tool ids (rmscene scene_items.Pen). The _1 ids are the legacy tools, the _2 ids the current.
 const (
 	ToolPaintbrush1       = 0
