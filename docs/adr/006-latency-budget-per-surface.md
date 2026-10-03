@@ -8,29 +8,33 @@ Measured on real hardware during the first live loop (Paper Pro → router → p
 
 | Path | Cost |
 | --- | --- |
-| Even Hub image update via the phone | ~70 ms + ~120 ms per KB (damage-wm); a 288×144 Gray8 frame measured 200–500 ms |
-| Even Hub text update | ~83 ms per call |
+| Even Hub image update via the phone | **~200 ms fixed per send** (measured 2026-10-02, `?probe=1`: median 204 ms for a 192×144 loupe whether 137 B or 1.9 KB, 288×144 the same; idle gaps change nothing); rises with edges/texture, not bytes |
+| Even Hub text update | **~60 ms** per call (measured 2026-10-02) |
 | Page rebuild | ~165 ms flat |
-| Desktop direct BLE image | ~60 ms + ~20 ms per KB; ~9.5 fps ceiling per container |
-| Tablet → router stroke batch | LAN, tens of ms |
+| Direct BLE image (desktop, stock fw 2.3.0.24, LZ4) | **197 ms** at 192×144, **174 ms** at 128×64 (measured 2026-10-02); two in flight stalls |
+| Tablet → router stroke batch | ~16 ms batches; LAN / loopback, milliseconds |
 
-Per-call overhead dominates on the glasses; payload size is secondary. The phone host
-rejects any string `imageData`; PNG bytes as a number array is the working encoding.
+The image cost is the glasses' own processing (direct BLE is barely faster than the phone path),
+one image at a time. Earlier figures here (~70 ms + 120 ms/KB; direct ~60 ms + 20 ms/KB, 9.5 fps)
+were not borne out; see `docs/investigations/direct-ble-tablet.md`. The phone host rejects any
+string `imageData`; PNG bytes as a number array is the working encoding (1-bit PNG, `fmt=png1`).
 
 ## Decision
 
-- **Live ink on the glasses goes through one small container** (the loupe, 128×64 default),
-  latest-wins, throttled to its own measured round trip. The full canvas refreshes once per
-  stroke. Two image containers per frame are never pushed.
+- **Live ink on the glasses goes through one container** (the loupe, 192×144 default: size is
+  nearly free), latest-wins, drawn just in time when the link frees up. The full canvas refreshes
+  after a lull in the writing. Two image sends never overlap (the glasses refuse it).
 - **Text never competes with ink.** Status updates are held during a stroke and sent at most
   every 2 s, except while typing (150 ms floor) so the line follows the keys.
-- **Budgets:** pen-to-glasses loupe ≤ 150 ms on the phone path, ≤ 80 ms direct; keystroke-to-
-  glasses ≤ 200 ms; terminal token-to-glasses ≤ 300 ms after coalescing; a page rebuild
+- **Budgets:** pen-to-glasses loupe ≤ 250 ms (one ~200 ms send plus the router hop; the old
+  ≤ 150/80 ms targets are below what the glasses can do); keystroke-to-glasses ≤ 200 ms; terminal token-to-glasses ≤ 300 ms after coalescing; a page rebuild
   (view switch) ≤ 200 ms and never mid-stroke.
 - **Frames are PNG bytes**, binarized, sent as a number array; raw Gray8/Gray4 remain
   available for measurement (`?fmt=`).
-- **Direct BLE (desktop or tablet) is the path to sub-100 ms** and is pursued on stock
-  firmware first; custom firmware (g2flash) is the path to full-frame delta streaming.
+- **Direct BLE is not a speed path on stock firmware** (measured above); it remains an option
+  for phone-free use. Faster ink needs fewer image sends (text containers at ~60 ms for
+  fast-changing readouts), perceived-latency work (prediction), or custom firmware (g2flash
+  delta streaming), which we do not use.
 
 ## Consequences
 

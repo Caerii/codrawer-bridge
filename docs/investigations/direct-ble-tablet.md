@@ -303,3 +303,26 @@ warranty and brick risk.
 4. Does any GATT access trigger SMP?
 5. Firmware version on our pair (LZ4 needs ≥ 2.2.6.10).
 6. Does the Even app (backgrounded, Bluetooth on) re-grab an arm the moment the tablet releases it?
+
+## Measured (2026-10-02): the ~200 ms is the glasses, not the phone
+
+Phase 0 run from the desktop (Windows, noble WinRT) with the phone's Bluetooth off; glasses on
+stock firmware **2.3.0.24** (L and R). Benchmark: g2flash `demos/video-bench.ts`, `G2_MODE=lz4`
+(stock 4bpp BMP + LZ4, CompressMode=2), a 116-frame synthetic handwriting GIF, binarized.
+
+| Path | Size | Per frame | Notes |
+| --- | --- | --- | --- |
+| Even app (phone), in-app probe `?probe=1` | 192×144 loupe | med 204 ms (min 173, p90 208) | same for 137 B and 1.9 KB PNGs; 500 ms gaps → 190 ms |
+| Even app (phone), in-app probe | 288×144 canvas | med ~200 ms | |
+| Even app text update | — | **med 60 ms** | |
+| Direct BLE, LZ4, window 1 | 192×144 | **197 ms** (5.07 fps), ack avg 188 | ~1 KB/frame |
+| Direct BLE, LZ4, window 1 | 128×64 | **174 ms** (5.76 fps), ack avg 167 | |
+| Direct BLE, window 2 | any | stalls (no acks, 12 s timeouts) | stock firmware processes one image at a time |
+
+Conclusion: the per-image cost is the glasses' own processing; bypassing the phone saves ~0–15%,
+and overlapping is not possible on stock firmware. RAZKOM/g2-kit (DESIGN.md §10) measured the same
+independently: ~200 ms fixed per send rising with edges/texture (detailed tiles 500 ms), bytes and
+format barely matter, text updates ~60 ms. Our binarized, mostly blank ink frames already sit at the
+blank-tile floor. **No-go on a tablet BLE link for speed**; it stays an option for phone-free use.
+Windows note: g2-kit's barrel import loads a macOS-only LC3 library (`/opt/homebrew/lib/liblc3.dylib`)
+at import time; the bench used a copy without that export.
