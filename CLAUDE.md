@@ -98,6 +98,12 @@ To ship a release that runs on a new OS version, add its `IMG_VERSION` to `boot/
 
 ## Conventions
 
+- **Literate code (Knuth-style), at the quality of rmscene/rmc.** Every module opens with a prose
+  overview: the problem it solves, the facts it rests on (cite ADRs, `docs/investigations/*.md`,
+  measurements), how data flows. Sections in reading order, why before how; every exported item
+  documents intent, invariants and units (normalized page coords, ms, px). No comments that
+  restate code; every prose claim must be true of the code. Release builds strip symbols.
+
 - `uv run …` for Python, `pnpm` for Node (never npm), Go 1.22+ for the bridge, Bun for `g2-kit`.
 - Router runtime state (`.codrawer-term-sessions.json`, `.codrawer/`) is gitignored.
 - Commits: `feat|fix|docs|chore(scope): …`, with the SIG provenance trailers when an agent commits.
