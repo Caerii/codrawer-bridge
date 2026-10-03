@@ -354,3 +354,71 @@ async fn live_messages_during_replay_keep_order() {
     }
     assert_eq!((n_replayed, n_live), (PAGE * 2, LIVE));
 }
+
+async fn serve_router(r: Router) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    tokio::spawn(r.serve(l));
+    addr
+}
+
+#[tokio::test]
+async fn hello_carries_host_info() {
+    let info = [("os", "6.1.0"), ("osChangedFrom", "6.0.105"), ("version", "v8")].map(|(k, v)| (k.to_string(), v.to_string()));
+    let srv = serve_router(Router::quiet().with_info(info.into())).await;
+    let mut c = dial_path(&srv, "/ws/s1").await;
+    let m = read(&mut c).await;
+    let tab = &m["tablet"];
+    assert!(tab["os"] == "6.1.0" && tab["osChangedFrom"] == "6.0.105" && tab["version"] == "v8", "hello: {m}");
+    // no info: no "tablet" key at all (Go sends it only when the map is not empty)
+    let srv = new_server().await;
+    let mut c = dial_path(&srv, "/ws/s1").await;
+    let m = read(&mut c).await;
+    assert!(m["t"] == "hello" && m.get("tablet").is_none(), "hello: {m}");
+}
+
+/// Connects with extra request headers, without reading anything.
+async fn dial_with(addr: &str, path: &str, headers: &[(&'static str, &str)]) -> Ws {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = format!("ws://{addr}{path}").into_client_request().unwrap();
+    for (k, v) in headers {
+        req.headers_mut().insert(*k, v.parse().unwrap());
+    }
+    let stream = TcpStream::connect(addr).await.unwrap();
+    tokio_tungstenite::client_async(req, stream).await.expect("dial").0
+}
+
+#[tokio::test]
+async fn pairing_code_required_off_machine() {
+    let r = Router::quiet().with_token("K7Q2-M9TX");
+    let local = serve_router(r.clone()).await;
+    // The listener is on loopback, which is exempt; pretend every peer is remote, as Go's test
+    // rewrites RemoteAddr. Same router (same sessions), different check.
+    let remote = serve_router(r.with_local_check(std::sync::Arc::new(|_: &std::net::SocketAddr| false))).await;
+
+    // remote without the code: told why, then closed with 4401
+    let mut c = dial_path(&remote, "/ws/s1").await;
+    let m = read(&mut c).await;
+    assert!(m["t"] == "error" && m["code"] == "unauthorized" && m["text"] == "pairing code required", "want unauthorized, got {m}");
+    let next = tokio::time::timeout(Duration::from_secs(2), c.next()).await.expect("close: timeout");
+    match next {
+        Some(Ok(Message::Close(Some(f)))) => assert_eq!(u16::from(f.code), 4401, "close: {f:?}"),
+        other => panic!("want close 4401, got {other:?}"),
+    }
+
+    // remote with the wrong code: refused; with the right one (query or header): joins
+    let mut c2 = dial_path(&remote, "/ws/s1?token=nope").await;
+    let m = read(&mut c2).await;
+    assert_eq!(m["code"], "unauthorized", "wrong code joined: {m}");
+    let mut ok = dial_path(&remote, "/ws/s1?token=K7Q2-M9TX").await;
+    let m = read(&mut ok).await;
+    assert_eq!(m["t"], "hello", "right code: {m}");
+    let mut hc = dial_with(&remote, "/ws/s1", &[("Authorization", "Bearer K7Q2-M9TX")]).await;
+    let m = read(&mut hc).await;
+    assert_eq!(m["t"], "hello", "bearer: {m}");
+
+    // loopback (the pen bridge on the tablet) needs no code
+    let mut lc = dial_path(&local, "/ws/s1").await;
+    let m = read(&mut lc).await;
+    assert_eq!(m["t"], "hello", "loopback: {m}");
+}

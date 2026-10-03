@@ -36,6 +36,9 @@ pub struct Config {
     pub type_replies: bool,
     pub type_char_ms: i64,
 
+    /// Cursor messages per second while the pen hovers (0: off).
+    pub hover_hz: i64,
+
     /// Run the stroke router in this process; `router_only` skips the pen and keyboard.
     pub serve_addr: String,
     pub router_only: bool,
@@ -65,6 +68,7 @@ impl Config {
             keyboard_grab: getenv_bool_default("KEYBOARD_GRAB", false),
             type_replies: getenv_bool_default("TYPE_REPLIES", true),
             type_char_ms: getenv_int_default("TYPE_CHAR_MS", 12),
+            hover_hz: getenv_int_default("HOVER_HZ", 30),
             serve_addr: std::env::var("SERVE_ADDR").unwrap_or_default(),
             router_only: getenv_bool_default("ROUTER_ONLY", false),
         }
@@ -104,6 +108,7 @@ const FLAGS: &[FlagDef] = &[
     FlagDef { name: "keyboard-grab", usage: "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)" },
     FlagDef { name: "type-replies", usage: "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)" },
     FlagDef { name: "type-char-ms", usage: "Milliseconds between typed characters" },
+    FlagDef { name: "hover-hz", usage: "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables" },
     FlagDef { name: "serve", usage: "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>" },
     FlagDef { name: "router-only", usage: "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)" },
 ];
@@ -130,6 +135,7 @@ fn slot<'a>(cfg: &'a mut Config, name: &str) -> Option<Slot<'a>> {
         "keyboard-grab" => Slot::Bool(&mut cfg.keyboard_grab),
         "type-replies" => Slot::Bool(&mut cfg.type_replies),
         "type-char-ms" => Slot::Int(&mut cfg.type_char_ms),
+        "hover-hz" => Slot::Int(&mut cfg.hover_hz),
         "serve" => Slot::Str(&mut cfg.serve_addr),
         "router-only" => Slot::Bool(&mut cfg.router_only),
         _ => return None,
@@ -288,7 +294,7 @@ mod tests {
             &args(&[
                 "-ws", "ws://192.168.50.2:8577/ws/session1", "-input=/dev/input/event2",
                 "--touch-mode", "auto", "-keyboard", "auto", "-type-replies", "-no-grab=false",
-                "-batch-hz", "0x3c", "-pressure-threshold", "0.05", "-serve", ":8577",
+                "-batch-hz", "0x3c", "-pressure-threshold", "0.05", "-serve", ":8577", "-hover-hz", "0",
             ]),
         )
         .unwrap();
@@ -299,6 +305,9 @@ mod tests {
         assert_eq!(c.batch_hz, 60);
         assert_eq!(c.pressure_threshold, 0.05);
         assert_eq!(c.serve_addr, ":8577");
+        assert_eq!(c.hover_hz, 0);
+        assert_eq!(crate::bridge::hover_every(0), std::time::Duration::ZERO);
+        assert_eq!(crate::bridge::hover_every(30), std::time::Duration::from_nanos(33_333_333));
     }
 
     #[test]

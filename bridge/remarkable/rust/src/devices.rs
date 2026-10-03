@@ -7,6 +7,8 @@ use crate::keymap::VIRTUAL_KEYBOARD_NAME;
 pub struct InputDeviceInfo {
     pub name: String,
     pub handlers: Vec<String>,
+    /// A uinput device (bus 0x06), e.g. a typist injecting text.
+    pub virtual_dev: bool,
 }
 
 pub fn parse_proc_input_devices(text: &str) -> Vec<InputDeviceInfo> {
@@ -14,6 +16,10 @@ pub fn parse_proc_input_devices(text: &str) -> Vec<InputDeviceInfo> {
     for blk in text.split("\n\n") {
         let mut info = InputDeviceInfo::default();
         for line in blk.split('\n') {
+            // "I: Bus=0006 Vendor=…": bus 0x06 is BUS_VIRTUAL (uinput devices)
+            if let Some(v) = line.strip_prefix("I: Bus=") {
+                info.virtual_dev = v.starts_with("0006");
+            }
             if let Some(v) = line.strip_prefix("N: Name=") {
                 info.name = v.trim_matches(|c| c == ' ' || c == '"').to_string();
             }
@@ -35,7 +41,7 @@ pub fn list_proc_input_devices() -> Vec<InputDeviceInfo> {
 }
 
 /// Picks a keyboard's event node: a device with a `kbd` handler that is not the tablet's power
-/// key or our own virtual keyboard; a name containing "keyboard" wins, else the first candidate.
+/// key, our own virtual keyboard, or any other virtual (uinput) keyboard; a name containing "keyboard" wins, else the first candidate.
 pub fn pick_keyboard(devs: &[InputDeviceInfo]) -> Option<String> {
     let mut fallback = None;
     for d in devs {
@@ -43,7 +49,9 @@ pub fn pick_keyboard(devs: &[InputDeviceInfo]) -> Option<String> {
         let event = d.handlers.iter().rev().find(|h| h.starts_with("event"));
         let (true, Some(event)) = (has_kbd, event) else { continue };
         let lname = d.name.to_lowercase();
-        if lname.contains("powerkey") || lname.contains("power button") || lname == VIRTUAL_KEYBOARD_NAME {
+        // Skip the power key, our own typer, and any other virtual (uinput) keyboard: e.g.
+        // smart_remarkable's typist would otherwise be streamed as the user's keystrokes.
+        if lname.contains("powerkey") || lname.contains("power button") || lname == VIRTUAL_KEYBOARD_NAME || d.virtual_dev {
             continue;
         }
         let path = format!("/dev/input/{event}");
@@ -93,6 +101,7 @@ H: Handlers=sysrq kbd leds event6
         assert_eq!(devs.len(), 4);
         assert_eq!(devs[1].name, "Elan marker input");
         assert_eq!(devs[1].handlers, vec!["event2"]);
+        assert_eq!(devs.iter().map(|d| d.virtual_dev).collect::<Vec<_>>(), [false, false, true, false]);
     }
 
     #[test]
@@ -104,9 +113,22 @@ H: Handlers=sysrq kbd leds event6
     }
 
     #[test]
+    fn keyboard_auto_detect_skips_every_virtual_device() {
+        // Another uinput keyboard (e.g. smart_remarkable's typist), named like a keyboard: skipped.
+        let text = format!(
+            "{PROC}\nI: Bus=0006 Vendor=0000 Product=0000 Version=0000\nN: Name=\"typist keyboard\"\nH: Handlers=sysrq kbd event7\n"
+        );
+        let devs = parse_proc_input_devices(&text);
+        assert!(devs[4].virtual_dev && devs[4].name == "typist keyboard");
+        assert_eq!(pick_keyboard(&devs).as_deref(), Some("/dev/input/event6"));
+        let without_pebble: Vec<_> = devs.iter().filter(|d| !d.name.starts_with("Pebble")).cloned().collect();
+        assert_eq!(pick_keyboard(&without_pebble), None);
+    }
+
+    #[test]
     fn keyboard_named_device_wins_over_fallback() {
         let mut devs = parse_proc_input_devices(PROC);
-        devs.push(InputDeviceInfo { name: "Logitech Keyboard".into(), handlers: vec!["kbd".into(), "event9".into()] });
+        devs.push(InputDeviceInfo { name: "Logitech Keyboard".into(), handlers: vec!["kbd".into(), "event9".into()], virtual_dev: false });
         assert_eq!(pick_keyboard(&devs).as_deref(), Some("/dev/input/event9"));
         assert_eq!(find_keyboard_device("/dev/input/event3").unwrap(), "/dev/input/event3");
     }

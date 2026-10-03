@@ -8,6 +8,9 @@ fn main() {
     let mut args = std::env::args();
     let prog = args.next().unwrap_or_else(|| "codrawer_bridge_rs".into());
     let args: Vec<String> = args.collect();
+    if args.first().map(String::as_str) == Some("release") {
+        std::process::exit(codrawer_bridge::release::run_release(&args[1..]));
+    }
 
     let defaults = Config::from_env();
     let mut cfg = defaults.clone();
@@ -37,7 +40,15 @@ fn main() {
                 // A failed listen is fatal: the glasses app would otherwise have nothing to connect to.
                 println!("[router] listening on {addr}");
                 let r = match router::bind(&addr).await {
-                    Ok(l) => router::Router::new().serve(l).await,
+                    Ok(l) => {
+                        router::Router::new()
+                            // pairing code for clients off the tablet (bridge.env)
+                            .with_token(&std::env::var("ROUTER_TOKEN").unwrap_or_default())
+                            // what boot.sh derived for this boot (/run/codrawer/env → the service's environment)
+                            .with_info(router::host_info(|k| std::env::var(k).ok()))
+                            .serve(l)
+                            .await
+                    }
                     Err(e) => Err(e),
                 };
                 if let Err(e) = r {

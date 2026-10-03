@@ -21,6 +21,12 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 socket2 = { version = "0.6", features = ["all"] }
+# `release` subcommand (signed tablet releases, same format as the Go tool). No "fast" basepoint
+# tables: verifying one manifest per update does not need them, the binary stays small.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+data-encoding = "2"
+getrandom = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

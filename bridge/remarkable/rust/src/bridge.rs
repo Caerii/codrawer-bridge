@@ -67,7 +67,16 @@ pub fn pen_config(cfg: &Config) -> pen::Config {
         distance_threshold: cfg.distance_threshold,
         flush_every: Duration::from_secs(1) / cfg.batch_hz.clamp(1, u32::MAX as i64) as u32,
         max_batch: cfg.max_batch_points.max(0) as usize,
+        hover_every: hover_every(cfg.hover_hz),
     }
+}
+
+/// The cursor pacing for `hover_hz` messages per second; zero (off) when `hz <= 0`.
+pub fn hover_every(hz: i64) -> Duration {
+    if hz <= 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs(1) / hz.min(u32::MAX as i64) as u32
 }
 
 /// Marks the bridge as a pen source: a replaying router then skips the page replay, which the

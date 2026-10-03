@@ -69,6 +69,9 @@ pub struct Config {
     pub flush_every: Duration,
     /// Flush early at this many points (0 → 64).
     pub max_batch: usize,
+    /// Paces `cursor` messages while the pen hovers in range without touching (a pointer for
+    /// viewers to follow); zero disables them.
+    pub hover_every: Duration,
 }
 
 /// A moment on both clocks: monotonic for batching, wall for ids and fallback timestamps
@@ -126,6 +129,12 @@ pub struct Machine {
     last: Option<(f64, f64)>,
     strokes: i64,
     lost_strokes: i64,
+    /// A cursor was sent and no "gone" since.
+    hovering: bool,
+    /// `None` = no cursor sent yet (Go's zero `time.Time`: always due).
+    last_hover: Option<Instant>,
+    hover_x: f64,
+    hover_y: f64,
 }
 
 impl Machine {
@@ -164,6 +173,10 @@ impl Machine {
             last: None,
             strokes: 0,
             lost_strokes: 0,
+            hovering: false,
+            last_hover: None,
+            hover_x: 0.0,
+            hover_y: 0.0,
         }
     }
 
@@ -221,6 +234,45 @@ impl Machine {
             self.lost = true; // skip the rest of this stroke; the router ends it if we drop off
             self.lost_strokes += 1;
         }
+    }
+
+    /// Sends the pen's position while it is in range but not touching, paced by `hover_every` and
+    /// only when it moved, and one `{"gone":true}` when it leaves range. Cursor messages are
+    /// ephemeral: a refused one is simply dropped and never affects stroke delivery.
+    fn hover(&mut self, now: Stamp, ts_ms: i64) {
+        if self.cfg.hover_every.is_zero() {
+            return;
+        }
+        if !(self.tool_pen || self.tool_rubber) {
+            if self.hovering {
+                self.hovering = false;
+                let _ = (self.emit)(r#"{"t":"cursor","who":"pen","gone":true}"#.to_string());
+            }
+            return;
+        }
+        if !self.has_x || !self.has_y {
+            return;
+        }
+        if let Some(t) = self.last_hover {
+            if now.mono.saturating_duration_since(t) < self.cfg.hover_every {
+                return;
+            }
+        }
+        let x = norm(self.x, self.rng.x_min, self.rng.x_max);
+        let y = norm(self.y, self.rng.y_min, self.rng.y_max);
+        if self.hovering && (x - self.hover_x).abs() < 0.002 && (y - self.hover_y).abs() < 0.002 {
+            return; // still: nothing new to show
+        }
+        self.last_hover = Some(now.mono);
+        (self.hover_x, self.hover_y, self.hovering) = (x, y, true);
+        let mut msg = String::with_capacity(96);
+        msg.push_str(r#"{"t":"cursor","who":"pen","x":"#);
+        push_fixed(&mut msg, x, 4);
+        msg.push_str(r#","y":"#);
+        push_fixed(&mut msg, y, 4);
+        msg.push_str(if self.tool_rubber { r#","tool":"eraser""# } else { r#","tool":"pen""# });
+        let _ = write!(msg, r#","ts":{ts_ms}}}"#);
+        let _ = (self.emit)(msg);
     }
 
     /// Consumes one event and emits whatever messages it completes.
@@ -302,7 +354,11 @@ impl Machine {
             }
             return;
         }
-        if !self.touching || !self.has_x || !self.has_y {
+        if !self.touching {
+            self.hover(now, ts_ms);
+            return;
+        }
+        if !self.has_x || !self.has_y {
             return;
         }
         let x = norm(self.x, self.rng.x_min, self.rng.x_max);
@@ -377,6 +433,7 @@ mod tests {
                 pressure_threshold: 0.02,
                 flush_every: Duration::from_millis(16),
                 max_batch: 64,
+                hover_every: Duration::from_millis(33),
                 ..Default::default()
             },
             Ranges { x_min: 0, x_max: 10000, y_min: 0, y_max: 10000, p_min: 0, p_max: 4096 },
@@ -511,7 +568,85 @@ mod tests {
         assert_eq!(r.out()[0]["brush"], "eraser");
     }
 
+    #[test]
+    fn hover_sends_paced_cursor_and_gone() {
+        let mut r = new_rig();
+        r.ev(EV_KEY, BTN_TOOL_PEN, 1); // in range, not touching
+        for i in 0..10 {
+            r.ev(EV_ABS, ABS_X, 1000 + i * 100);
+            r.ev(EV_ABS, ABS_Y, 2000);
+            r.syn();
+            r.advance(10); // 100 Hz of reports; cursor at most every 33 ms
+        }
+        let n = r.out().len();
+        assert!((2..=4).contains(&n), "want ~3 paced cursors, got {n}: {:?}", r.types());
+        for m in r.out() {
+            assert!(m["t"] == "cursor" && m["who"] == "pen" && m["tool"] == "pen", "cursor: {m}");
+        }
+        // touching suppresses the cursor; the stroke flows as usual
+        r.point(3000, 3000);
+        let out = r.out();
+        assert_eq!(out[out.len() - 2]["t"], "stroke_begin", "stroke after hover: {:?}", r.types());
+        r.up();
+        // leaving range sends one gone
+        r.ev(EV_KEY, BTN_TOOL_PEN, 0);
+        r.syn();
+        let out = r.out();
+        let last = out.last().unwrap();
+        assert!(last["t"] == "cursor" && last["gone"] == true, "want gone, got {last}");
+    }
+
     // Beyond the Go tests.
+
+    #[test]
+    fn hover_details() {
+        let mut r = new_rig();
+        let raw = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (rw, rf) = (raw.clone(), r.refuse.clone());
+        r.m.emit = Box::new(move |b| {
+            if *rf.lock().unwrap() {
+                return false;
+            }
+            rw.lock().unwrap().push(b);
+            true
+        });
+        // the rubber end hovering is an eraser cursor; exact bytes match Go's encoding
+        r.ev(EV_KEY, BTN_TOOL_RUBBER, 1);
+        r.ev(EV_ABS, ABS_X, 2500);
+        r.ev(EV_ABS, ABS_Y, 5000);
+        r.syn();
+        let ts = r.ts;
+        assert_eq!(raw.lock().unwrap().clone(), [format!(r#"{{"t":"cursor","who":"pen","x":0.25,"y":0.5,"tool":"eraser","ts":{ts}}}"#)]);
+        // still (moved < 0.002): nothing new even after the pacing window
+        r.advance(50);
+        r.ev(EV_ABS, ABS_X, 2510);
+        r.syn();
+        assert_eq!(raw.lock().unwrap().len(), 1);
+        // a refused cursor is dropped and never counts as a lost stroke
+        r.set_refuse(true);
+        r.advance(50);
+        r.ev(EV_ABS, ABS_X, 4000);
+        r.syn();
+        assert_eq!(r.m.lost_strokes(), 0);
+        r.set_refuse(false);
+        r.ev(EV_KEY, BTN_TOOL_RUBBER, 0);
+        r.syn();
+        r.syn(); // only one gone
+        let got = raw.lock().unwrap().clone();
+        assert_eq!(got.last().unwrap(), r#"{"t":"cursor","who":"pen","gone":true}"#);
+        assert_eq!(got.iter().filter(|m| m.contains("gone")).count(), 1);
+        // hover_every = 0 disables cursors entirely
+        let n = Arc::new(Mutex::new(0));
+        let n2 = n.clone();
+        let mut m = Machine::new(Config { brush: "pen".into(), ..Default::default() }, Ranges::default(), Box::new(move |_| {
+            *n2.lock().unwrap() += 1;
+            true
+        }));
+        for (t, c, v) in [(EV_KEY, BTN_TOOL_PEN, 1), (EV_ABS, ABS_X, 1), (EV_ABS, ABS_Y, 1), (EV_SYN, SYN_REPORT, 0), (EV_KEY, BTN_TOOL_PEN, 0), (EV_SYN, SYN_REPORT, 0)] {
+            m.handle(Event { etype: t, code: c, value: v, time_ms: 0 });
+        }
+        assert_eq!(*n.lock().unwrap(), 0);
+    }
 
     #[test]
     fn skewed_kernel_clock_falls_back_to_wall_clock() {

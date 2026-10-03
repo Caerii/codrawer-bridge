@@ -23,10 +23,15 @@
 //! [`DOC_COMPACT_AT`] it asks the client that just wrote for `{"t":"doc_state","u":<full state>}`
 //! and replaces the log with that state plus everything that arrived after the request.
 //!
+//! Pairing code: with a token set ([`Router::with_token`], env `ROUTER_TOKEN`), every client that is
+//! not on this machine must present it as `?token=` (browsers cannot set WebSocket headers) or
+//! `Authorization: Bearer`. The pen bridge talks over loopback and is exempt. A wrong or missing
+//! code gets `{"t":"error","code":"unauthorized",…}` and close code 4401, so an app can ask for it.
+//!
 //! Serves `GET /healthz` and `GET /ws/{session}` on a plain TCP listener: the HTTP request head
 //! is read here, then handed (replayed) to tungstenite for the WebSocket handshake.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -74,6 +79,12 @@ const MAX_HEADER: usize = 64 << 10;
 const TERM_STATUS: &str = "no terminal on this router (tablet-local; stroke streaming only)";
 
 pub type Logf = Arc<dyn Fn(&str) + Send + Sync>;
+/// Decides whether a peer is on this machine (exempt from the pairing code).
+pub type LocalCheck = Arc<dyn Fn(&SocketAddr) -> bool + Send + Sync>;
+
+/// What boot.sh derived for this boot, by hello key → environment variable (serve.go).
+pub const HOST_INFO_ENV: [(&str, &str); 4] =
+    [("os", "CODRAWER_OS"), ("osTested", "CODRAWER_OS_TESTED"), ("version", "CODRAWER_VERSION"), ("osChangedFrom", "CODRAWER_OS_CHANGED")];
 
 /// Holds the sessions. Cheap to clone (shared state).
 #[derive(Clone)]
@@ -81,6 +92,12 @@ pub struct Router {
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
     next_client: Arc<AtomicU64>,
     logf: Logf,
+    /// Describes the host (the tablet's OS and codrawer versions); sent in hello as `"tablet"`
+    /// so clients can say "tablet updated" or show versions. Empty: not sent.
+    info: Arc<BTreeMap<String, String>>,
+    /// The pairing code required from clients off this machine; empty: none required.
+    token: Arc<str>,
+    is_local: LocalCheck,
 }
 
 impl Default for Router {
@@ -96,7 +113,47 @@ impl Router {
     }
 
     pub fn with_logger(logf: Logf) -> Self {
-        Router { sessions: Arc::default(), next_client: Arc::new(AtomicU64::new(1)), logf }
+        Router {
+            sessions: Arc::default(),
+            next_client: Arc::new(AtomicU64::new(1)),
+            logf,
+            info: Arc::default(),
+            token: "".into(),
+            is_local: Arc::new(|a: &SocketAddr| a.ip().to_canonical().is_loopback()),
+        }
+    }
+
+    /// Host info sent in hello as `"tablet"` (see [`host_info`]). Set before serving.
+    pub fn with_info(mut self, info: BTreeMap<String, String>) -> Self {
+        self.info = Arc::new(info);
+        self
+    }
+
+    /// The pairing code clients off this machine must present (empty: none). Set before serving.
+    pub fn with_token(mut self, token: &str) -> Self {
+        self.token = token.into();
+        self
+    }
+
+    /// Replaces the "is this peer on this machine" check (loopback by default); tests use it to
+    /// pose as a remote client, as Go's test rewrites `RemoteAddr`.
+    pub fn with_local_check(mut self, f: LocalCheck) -> Self {
+        self.is_local = f;
+        self
+    }
+
+    /// Whether a request from `addr` may join (Go: `authorized`).
+    fn authorized(&self, addr: &SocketAddr, req: &Head) -> bool {
+        if self.token.is_empty() || (self.is_local)(addr) {
+            return true;
+        }
+        let mut got = req.token.as_str();
+        if got.is_empty() {
+            if let Some(b) = req.authorization.strip_prefix("Bearer ") {
+                got = b;
+            }
+        }
+        constant_time_eq(got.as_bytes(), self.token.as_bytes())
     }
 
     pub fn quiet() -> Self {
@@ -154,11 +211,21 @@ impl Router {
         }
         let cfg = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
         let io = Prefixed { prefix: head, pos: 0, inner: stream };
-        let Ok(ws) = tokio_tungstenite::accept_async_with_config(io, Some(cfg)).await else {
+        let Ok(mut ws) = tokio_tungstenite::accept_async_with_config(io, Some(cfg)).await else {
             return;
         };
         // Log IPv4 peers on the dual-stack socket as 1.2.3.4:port, not [::ffff:1.2.3.4]:port.
         let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
+        if !self.authorized(&addr, &req) {
+            let _ = timeout(WRITE_WAIT, ws.send(Message::Text(Utf8Bytes::from_static(UNAUTHORIZED)))).await;
+            let frame = CloseFrame { code: CloseCode::from(4401), reason: Utf8Bytes::from_static("unauthorized") };
+            let _ = timeout(WRITE_WAIT, ws.send(Message::Close(Some(frame)))).await;
+            (self.logf)(&format!("[router] {addr} refused: missing or wrong pairing code"));
+            // Give the client a moment to answer the close, so the TCP close never races (and
+            // resets) the frames it has not read yet.
+            let _ = timeout(Duration::from_secs(2), async { while let Some(Ok(_)) = ws.next().await {} }).await;
+            return;
+        }
         self.run_client(ws, id, addr.to_string(), req.replay).await;
     }
 
@@ -181,7 +248,8 @@ impl Router {
         // stalled client.
         let (tx, rx) = mpsc::channel(SEND_QUEUE + replay.len() + 1);
         *client.tx.lock().unwrap() = Some(tx);
-        client.queue(json_msg(&Hello { t: "hello", session: &id, replay: want_replay }));
+        let tablet = (!self.info.is_empty()).then_some(&*self.info);
+        client.queue(json_msg(&Hello { t: "hello", session: &id, replay: want_replay, tablet }));
         let replayed = replay.len();
         for m in replay {
             client.queue(m);
@@ -214,6 +282,27 @@ impl Router {
         (self.logf)(&format!("[router] {addr} left {id} ({n} clients)"));
     }
 }
+
+/// The hello `"tablet"` info from `get` (an env lookup): every [`HOST_INFO_ENV`] variable that is
+/// set and not empty, under its hello key.
+pub fn host_info(get: impl Fn(&str) -> Option<String>) -> BTreeMap<String, String> {
+    HOST_INFO_ENV
+        .iter()
+        .filter_map(|(key, env)| get(env).filter(|v| !v.is_empty()).map(|v| (key.to_string(), v)))
+        .collect()
+}
+
+/// Go's `subtle.ConstantTimeCompare(a, b) == 1`: unequal lengths fail at once (the length is not
+/// secret), equal lengths take the same time whatever the bytes.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+const UNAUTHORIZED: &str = r#"{"t":"error","code":"unauthorized","text":"pairing code required"}"#;
 
 /// Binds `addr` the way Go's `net.Listen("tcp", addr)` does (":8577" = every interface, IPv4
 /// and IPv6) and serves until the process exits.
@@ -248,6 +337,10 @@ struct Head {
     upgrade: bool,
     /// False when the query says `replay=0` (a pen source).
     replay: bool,
+    /// The `token` query value (first, decoded; empty if absent).
+    token: String,
+    /// The first `Authorization` header's value, trimmed (empty if absent).
+    authorization: String,
 }
 
 async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -276,12 +369,19 @@ fn parse_head(head: &[u8]) -> Option<Head> {
     let (_method, target) = (parts.next()?, parts.next()?);
     let (raw_path, query) = target.split_once('?').unwrap_or((target, ""));
     let path = percent_decode(raw_path)?;
-    let upgrade = lines.any(|l| {
-        l.split_once(':')
-            .is_some_and(|(k, v)| k.trim().eq_ignore_ascii_case("upgrade") && v.trim().eq_ignore_ascii_case("websocket"))
-    });
+    let (mut upgrade, mut authorization) = (false, None);
+    for (k, v) in lines.filter_map(|l| l.split_once(':')) {
+        let (k, v) = (k.trim(), v.trim());
+        if k.eq_ignore_ascii_case("upgrade") && v.eq_ignore_ascii_case("websocket") {
+            upgrade = true;
+        }
+        if k.eq_ignore_ascii_case("authorization") && authorization.is_none() {
+            authorization = Some(v.to_string());
+        }
+    }
     let replay = query_get(query, "replay").as_deref() != Some("0");
-    Some(Head { path, upgrade, replay })
+    let token = query_get(query, "token").unwrap_or_default();
+    Some(Head { path, upgrade, replay, token, authorization: authorization.unwrap_or_default() })
 }
 
 /// The first value of `key` in a query string, decoded like Go's `url.Values.Get` (`+` is a
@@ -376,6 +476,8 @@ struct Hello<'a> {
     t: &'static str,
     session: &'a str,
     replay: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tablet: Option<&'a BTreeMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -734,6 +836,43 @@ mod tests {
         assert!(replay("/ws/s1?replay="));
         assert!(!replay("/ws/s1?replay=0&replay=1")); // the first value wins
         assert!(replay("/ws/s1?replays=0"));
+    }
+
+    #[test]
+    fn parses_pairing_code_from_query_and_header() {
+        let h = parse_head(b"GET /ws/s1?replay=0&token=K7Q2%2DM9TX HTTP/1.1\r\nauthorization:  Bearer abc \r\nAuthorization: Bearer second\r\n\r\n").unwrap();
+        assert_eq!(h.token, "K7Q2-M9TX");
+        assert_eq!(h.authorization, "Bearer abc");
+        let h = parse_head(b"GET /ws/s1 HTTP/1.1\r\n\r\n").unwrap();
+        assert!(h.token.is_empty() && h.authorization.is_empty());
+    }
+
+    #[test]
+    fn authorized_like_go() {
+        let remote: SocketAddr = "192.168.50.165:50000".parse().unwrap();
+        let local: SocketAddr = "[::ffff:127.0.0.1]:50000".parse().unwrap();
+        let head = |target: &str, auth: &str| {
+            parse_head(format!("GET {target} HTTP/1.1\r\nAuthorization: {auth}\r\n\r\n").as_bytes()).unwrap()
+        };
+        let open = Router::quiet();
+        assert!(open.authorized(&remote, &head("/ws/s1", "")));
+        let r = Router::quiet().with_token("K7Q2-M9TX");
+        assert!(!r.authorized(&remote, &head("/ws/s1", "")));
+        assert!(!r.authorized(&remote, &head("/ws/s1?token=nope", "Bearer K7Q2-M9TX"))); // the query wins when set
+        assert!(r.authorized(&remote, &head("/ws/s1?token=K7Q2-M9TX", "")));
+        assert!(r.authorized(&remote, &head("/ws/s1?token=", "Bearer K7Q2-M9TX")));
+        assert!(!r.authorized(&remote, &head("/ws/s1", "bearer K7Q2-M9TX"))); // Go's prefix is case-sensitive
+        assert!(!r.authorized(&remote, &head("/ws/s1", "Bearer K7Q2-M9T")));
+        assert!(r.authorized(&local, &head("/ws/s1", ""))); // IPv4-mapped loopback counts
+        assert!(r.authorized(&"[::1]:1".parse().unwrap(), &head("/ws/s1", "")));
+        assert!(constant_time_eq(b"", b"") && !constant_time_eq(b"a", b"ab") && !constant_time_eq(b"ab", b"ac"));
+    }
+
+    #[test]
+    fn host_info_reads_only_set_variables() {
+        let env: HashMap<&str, &str> = [("CODRAWER_OS", "6.1.0"), ("CODRAWER_VERSION", "v8"), ("CODRAWER_OS_CHANGED", "")].into();
+        let info = host_info(|k| env.get(k).map(|v| v.to_string()));
+        assert_eq!(info.into_iter().collect::<Vec<_>>(), [("os".to_string(), "6.1.0".to_string()), ("version".into(), "v8".into())]);
     }
 
     fn rec(s: &mut Session, msg: &str, from: u64) {
