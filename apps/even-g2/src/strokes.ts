@@ -8,7 +8,8 @@
 
 import { zlibSync } from 'fflate'
 
-export type Layer = 'user' | 'ai'
+/** user: the tablet's own ink · peer: another participant (phone, web, …) · ai: agent ink */
+export type Layer = 'user' | 'ai' | 'peer'
 
 export interface Stroke {
   id: string
@@ -30,6 +31,8 @@ export interface Stroke {
   color?: string
   /** the tool's thickness setting */
   size?: number
+  /** participant who drew it (peer layer) */
+  author?: string
 }
 
 /** A `page` message (docs/protocol.md): the tablet's saved page, authoritative up to `rev`. */
@@ -81,7 +84,7 @@ export class StrokeStore {
   /** the tablet page the snapshot strokes belong to (null: no `page` message yet) */
   page: { doc: string; page: string; title?: string; rev: number } | null = null
 
-  begin(id: string, layer: Layer, brush = 'pen', ts?: number) {
+  begin(id: string, layer: Layer, brush = 'pen', ts?: number, peer?: { color?: string; author?: string }) {
     const old = this.strokes.get(id)
     if (old) {
       // Seen before (a router replaying the page after a reconnect): restart it in place.
@@ -92,9 +95,11 @@ export class StrokeStore {
       old.done = false
       old.box = [1, 1, 0, 0]
       old.ts = ts
+      old.color = peer?.color ?? old.color
+      old.author = peer?.author ?? old.author
       return
     }
-    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts })
+    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts, color: peer?.color, author: peer?.author })
     this.order.push(id)
   }
 
@@ -112,7 +117,9 @@ export class StrokeStore {
     for (const id of this.order) {
       const s = this.strokes.get(id)
       if (!s) continue
-      const keepIt = s.layer === 'ai' ? !changed : !s.fromPage && s.ts !== undefined && s.ts > rev
+      // other participants' and the AI's ink is never in the tablet's file: it stays while the
+      // page stays; the tablet's own live ink stays only if it began after the save
+      const keepIt = s.layer !== 'user' ? !changed : !s.fromPage && s.ts !== undefined && s.ts > rev
       if (keepIt) keep.push(id)
       else {
         this.nPoints -= s.pts.length
@@ -327,7 +334,8 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     const emphasised = (o.highlight === 'all' || o.highlight === s.layer) && !wash
     const lum = emphasised ? 255 : 110
     ctx.strokeStyle = `rgb(${lum},${lum},${lum})`
-    ctx.setLineDash(wash ? [1, 4] : emphasised ? [] : [2, 3])
+    // on the one-colour lens other participants' ink is dashed, so it reads as not yours
+    ctx.setLineDash(wash ? [1, 4] : !emphasised ? [2, 3] : s.layer === 'peer' ? [4, 2] : [])
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (s.brush === 'eraser' && s.layer === 'user') {

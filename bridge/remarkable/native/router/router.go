@@ -207,8 +207,10 @@ type envelope struct {
 	ID  string            `json:"id"`
 	Pts []json.RawMessage `json:"pts"`
 	U   string            `json:"u"`
-	Ts  int64             `json:"ts"`  // stroke_begin: when the stroke started (ms)
-	Rev int64             `json:"rev"` // page: the snapshot covers everything up to this time (ms)
+	Ts  int64             `json:"ts"` // stroke_begin: when the stroke started (ms)
+	// stroke_begin: "user" (the tablet's ink), "peer" (another participant), "ai"
+	Layer string `json:"layer"`
+	Rev   int64  `json:"rev"` // page: the snapshot covers everything up to this time (ms)
 }
 
 func (r *Router) readLoop(s *session, c *client) {
@@ -306,6 +308,7 @@ type stroke struct {
 	pts   []json.RawMessage // every point, as received
 	ended bool
 	owner *client // who is drawing it (ended for everyone if they leave mid-stroke)
+	layer string  // from stroke_begin; "" or "user" is the tablet's own ink
 }
 
 func (s *session) recordLocked(m envelope, raw []byte, from *client) {
@@ -319,7 +322,7 @@ func (s *session) recordLocked(m envelope, raw []byte, from *client) {
 		} else {
 			s.order = append(s.order, m.ID)
 		}
-		s.strokes[m.ID] = &stroke{ts: m.Ts, begin: append([]byte(nil), raw...), owner: from}
+		s.strokes[m.ID] = &stroke{ts: m.Ts, layer: m.Layer, begin: append([]byte(nil), raw...), owner: from}
 	case "stroke_pts":
 		st := s.strokes[m.ID]
 		if st == nil {
@@ -352,15 +355,20 @@ func (s *session) resetLocked() {
 	s.points = 0
 }
 
+// isTabletInk reports whether the stroke is the tablet user's own ink (and so belongs to the
+// tablet's saved page), as opposed to another participant's or the AI's.
+func (st *stroke) isTabletInk() bool { return st.layer == "" || st.layer == "user" }
+
 // setPageLocked makes a `page` snapshot the page's new base. The snapshot already holds every
 // stroke the tablet saved up to its rev (erased ones are simply absent), so the live log keeps
-// only strokes that began after rev: ink drawn since the save, not yet in any file.
+// only strokes that began after rev: ink drawn since the save, not yet in any file. Strokes on
+// other layers (other participants, AI) are never in the tablet's file, so they always stay.
 func (s *session) setPageLocked(m envelope, raw []byte) {
 	s.page = append([]byte(nil), raw...)
 	order := s.order[:0:0]
 	for _, id := range s.order {
 		st := s.strokes[id]
-		if st != nil && st.ts > m.Rev {
+		if st != nil && (st.ts > m.Rev || !st.isTabletInk()) {
 			order = append(order, id)
 			continue
 		}

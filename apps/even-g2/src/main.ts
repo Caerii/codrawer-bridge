@@ -285,6 +285,71 @@ for (const b of viewButtons) b.onclick = () => applyView(b.dataset.view as View)
 // Live video from the back camera behind the ink (getUserMedia). If the WebView will not grant
 // live video, fall back to the Even app's own camera (a still photo via the SDK).
 let evenSdk: EvenAppBridge | null = null // the SDK bridge, even when the glasses page is not up
+// ── drawing here: this device as a participant (ADR 008, first slice) ───────────────────────
+// Strokes drawn on this page go to the session on the "peer" layer with this participant's id and
+// colour; everyone sees them live (in colour on phones and the web, dashed on the glasses), and
+// they survive the tablet's page snapshots. They are not written into the reMarkable notebook yet.
+const PARTICIPANT_COLORS = ['#d6482a', '#2f80ed', '#9b51e0', '#219653', '#f2994a', '#eb5757']
+const me = (() => {
+  let id = ''
+  try {
+    id = localStorage.getItem('codrawer:participant') ?? ''
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10)
+      localStorage.setItem('codrawer:participant', id)
+    }
+  } catch {
+    id = Math.random().toString(36).slice(2, 10)
+  }
+  let h = 0
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return { id, color: cfg('color', PARTICIPANT_COLORS[h % PARTICIPANT_COLORS.length]) }
+})()
+
+const drawBtn = document.getElementById('drawBtn') as HTMLButtonElement
+drawBtn.style.color = me.color
+drawBtn.onclick = () => {
+  stage.drawMode = !stage.drawMode
+  drawBtn.setAttribute('aria-pressed', String(stage.drawMode))
+}
+
+let myStroke: string | null = null
+let myBatch: number[][] = []
+let myFlushAt = 0
+function sendJson(m: object) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(m))
+}
+function flushMine() {
+  if (!myStroke || myBatch.length === 0) return
+  sendJson({ t: 'stroke_pts', id: myStroke, pts: myBatch })
+  myBatch = []
+  myFlushAt = performance.now()
+}
+stage.onDraw = (phase, x, y, pressure) => {
+  const pt = [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4, Math.round(pressure * 1e3) / 1e3, Date.now()]
+  if (phase === 'down') {
+    myStroke = `p_${me.id}_${Date.now().toString(36)}`
+    store.begin(myStroke, 'peer', 'pen', Date.now(), { color: me.color, author: me.id })
+    sendJson({ t: 'stroke_begin', id: myStroke, layer: 'peer', brush: 'pen', color: me.color, author: me.id, ts: Date.now() })
+    myBatch = []
+  }
+  if (!myStroke) return
+  store.points(myStroke, [pt], 'peer') // local ink never waits for the network
+  myBatch.push(pt)
+  if (phase === 'up') {
+    flushMine()
+    store.end(myStroke)
+    sendJson({ t: 'stroke_end', id: myStroke, ts: Date.now() })
+    myStroke = null
+  } else if (performance.now() - myFlushAt >= 16) {
+    flushMine() // pen-rate batches, like the tablet's 60 Hz
+  }
+  stage.touch()
+  loupeDirty = true
+  canvasDirty = true
+  if (phase === 'up') strokeEnded = true
+}
+
 const camBtn = document.getElementById('camBtn') as HTMLButtonElement
 const freezeBtn = document.getElementById('freezeBtn') as HTMLButtonElement
 const video = document.getElementById('camera') as HTMLVideoElement
@@ -1030,7 +1095,13 @@ function connect() {
         break
       case 'stroke_begin':
         // no frame yet: the first stroke_pts carries the first ink
-        store.begin(m.id, 'user', m.brush || 'pen', typeof m.ts === 'number' ? m.ts : undefined)
+        store.begin(
+          m.id,
+          m.layer === 'peer' ? 'peer' : 'user',
+          m.brush || 'pen',
+          typeof m.ts === 'number' ? m.ts : undefined,
+          m.layer === 'peer' ? { color: typeof m.color === 'string' ? m.color : undefined, author: m.author } : undefined,
+        )
         strokeActive = true
         lastInkAt = performance.now()
         stage.setPointer(null) // the ink itself shows the pen now

@@ -65,6 +65,11 @@ export class Stage {
   /** the loupe box was resized to this width (fraction of the page width) */
   onLoupeResize: (window: number) => void = () => {}
   private handle: { x: number; y: number; r: number } | null = null // device px, last drawn
+  /** Draw mode: pointer input on the stage draws (a mouse, a finger, an Apple Pencil). */
+  drawMode = false
+  /** pen down / move / up in normalized page coords, pressure 0..1 (draw mode only) */
+  onDraw: (phase: 'down' | 'move' | 'up', x: number, y: number, pressure: number) => void = () => {}
+  private drawing = false
   private dragging: { cx: number } | null = null
   private suppressClick = false
 
@@ -178,6 +183,11 @@ export class Stage {
   }
 
   private step() {
+    if (this.drawing) {
+      // hold the camera still under a stroke being drawn here, or the line would bend
+      if (this.dirty) this.draw()
+      return
+    }
     const t = this.target()
     const c = this.cam
     const k = 0.14 // glide: ~0.3 s to settle at 60 fps
@@ -280,7 +290,7 @@ export class Stage {
       ctx.shadowColor = 'rgba(0,0,0,0.75)'
       ctx.shadowBlur = Math.max(2, base * 6)
     } else {
-      ctx.strokeStyle = ctx.fillStyle = s.layer === 'ai' ? t.ai : t.ink
+      ctx.strokeStyle = ctx.fillStyle = s.layer === 'peer' && s.color ? s.color : s.layer === 'ai' ? t.ai : t.ink
     }
     const pts = s.pts
     const width = (p: number) => (eraser ? base * 24 : base * (this.backdrop ? 2 : 1.4) + base * 4.2 * p)
@@ -368,6 +378,36 @@ export class Stage {
       const k = this.canvas.width / Math.max(1, r.width)
       return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k }
     }
+    // Draw mode takes the pointer first: every down/move/up becomes a stroke in page coords.
+    this.canvas.addEventListener('pointerdown', (e) => {
+      if (!this.drawMode) return
+      const [x, y] = this.toPage(e)
+      this.drawing = true
+      this.canvas.setPointerCapture(e.pointerId)
+      this.onDraw('down', x, y, e.pressure || 0.5)
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    })
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (!this.drawing) return
+      // coalesced events: a pen reports far more often than animation frames
+      for (const ev of e.getCoalescedEvents?.() ?? [e]) {
+        const [x, y] = this.toPage(ev)
+        this.onDraw('move', x, y, ev.pressure || 0.5)
+      }
+      e.stopImmediatePropagation()
+    })
+    const lift = (e: PointerEvent) => {
+      if (!this.drawing) return
+      this.drawing = false
+      const [x, y] = this.toPage(e)
+      this.onDraw('up', x, y, e.pressure || 0.5)
+      this.suppressClick = true // not a tap on the page
+      e.stopImmediatePropagation()
+    }
+    this.canvas.addEventListener('pointerup', lift)
+    this.canvas.addEventListener('pointercancel', lift)
+
     this.canvas.addEventListener('pointerdown', (e) => {
       const h = this.handle
       if (!h) return
@@ -398,6 +438,18 @@ export class Stage {
     }
     this.canvas.addEventListener('pointerup', end)
     this.canvas.addEventListener('pointercancel', end)
+  }
+
+  /** A pointer position as normalized page coords [x, y] under the current camera. */
+  toPage(e: { clientX: number; clientY: number }): [number, number] {
+    const r = this.canvas.getBoundingClientRect()
+    const k = this.canvas.width / Math.max(1, r.width)
+    const X = (e.clientX - r.left) * k
+    const Y = (e.clientY - r.top) * k
+    const s = this.canvas.height / this.cam.h
+    const nx = ((X - this.canvas.width / 2) / s + this.cam.cx) / this.pageAspect
+    const ny = (Y - this.canvas.height / 2) / s + this.cam.cy
+    return [nx, ny]
   }
 
   /** True once after a handle drag (lets the page's tap handler ignore the drag's click). */

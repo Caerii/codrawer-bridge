@@ -511,3 +511,29 @@ func TestBigPageMessageIsAccepted(t *testing.T) {
 		t.Fatalf("big page: %d bytes, %v", len(raw), err)
 	}
 }
+
+func TestPageSnapshotKeepsOtherParticipantsStrokes(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	peer := dial(t, srv, "s1")
+	// the tablet user draws, then a peer draws on its own layer
+	send(t, tablet, `{"t":"stroke_begin","id":"u_1","layer":"user","ts":100}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_1"}`)
+	send(t, peer, `{"t":"stroke_begin","id":"p_1","layer":"peer","color":"#d6482a","ts":150}`)
+	send(t, peer, `{"t":"stroke_end","id":"p_1"}`)
+	read(t, tablet) // p_1 begin
+	read(t, tablet) // p_1 end
+	// the tablet saves its page (covers u_1); the peer's stroke is in no file and must stay
+	send(t, tablet, `{"t":"page","doc":"d","page":"p","rev":200,"strokes":[]}`)
+	read(t, peer) // u_1 begin
+	read(t, peer) // u_1 end
+	read(t, peer) // page
+	late := dial(t, srv, "s1")
+	if m := read(t, late); m["t"] != "page" {
+		t.Fatalf("want the page first, got %v", m)
+	}
+	m := read(t, late)
+	if m["t"] != "stroke_begin" || m["id"] != "p_1" {
+		t.Fatalf("peer stroke dropped by the snapshot: %v", m)
+	}
+}
