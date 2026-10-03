@@ -21,7 +21,8 @@ STAGE="$ROOT/.codrawer/releases/$VERSION"
 
 echo "[deploy] building release $VERSION"
 mkdir -p "$KEYDIR" "$STAGE/units"
-(cd "$NATIVE" && GOOS=linux GOARCH=arm64 go build -o "$STAGE/codrawer_bridge_native" .)
+# -s -w: release builds are stripped (symbol table and DWARF); panics still print stack traces.
+(cd "$NATIVE" && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$STAGE/codrawer_bridge_native" .)
 # The Rust engine ships alongside (ENGINE=go|rust in bridge.env picks one at start).
 # CODRAWER_SKIP_RUST=1 skips it; a failed Rust build only warns (Go stays the default engine).
 if [ "${CODRAWER_SKIP_RUST:-0}" != 1 ] && command -v cargo > /dev/null; then
