@@ -11,15 +11,16 @@
  * `p_<participant>_<base36 ms>`; points are [x, y, pressure, t] with x, y normalized page
  * coordinates rounded to 1e-4, pressure 0..1 rounded to 1e-3, and t Unix ms.
  */
-import { cfg } from '../config'
+import { cfg, remember } from '../config'
 import { link } from '../link'
 import { dirty, store } from '../state'
+import { defaultColorFor } from './palette'
 import { stage } from './screen'
 
-/** The participant palette; a participant's default colour is picked from it by id. */
-const PARTICIPANT_COLORS = ['#d6482a', '#2f80ed', '#9b51e0', '#219653', '#f2994a', '#eb5757']
-
-/** This participant: a random id made once and remembered, and a colour (`?color=` overrides). */
+/**
+ * This participant: a random id made once and remembered, and a colour (`?color=`, or the one
+ * picked in the menu, else one derived from the id).
+ */
 function participant(): { id: string; color: string } {
   let id = ''
   try {
@@ -31,9 +32,23 @@ function participant(): { id: string; color: string } {
   } catch {
     id = Math.random().toString(36).slice(2, 10)
   }
-  let h = 0
-  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0
-  return { id, color: cfg('color', PARTICIPANT_COLORS[h % PARTICIPANT_COLORS.length]) }
+  return { id, color: cfg('color', defaultColorFor(id)) }
+}
+
+/** Who draws here; set up by {@link setupDrawing}. */
+let me = { id: '', color: '' }
+const drawBtn = () => document.getElementById('drawBtn') as HTMLButtonElement
+
+/** This participant's colour (CSS hex). */
+export function myColor(): string {
+  return me.color
+}
+
+/** Change this participant's colour for new strokes (strokes already drawn keep theirs); remembered. */
+export function setMyColor(color: string) {
+  me = { ...me, color }
+  remember('color', color)
+  drawBtn().style.color = color
 }
 
 /** The stroke being drawn here, and its points not yet sent. */
@@ -50,12 +65,12 @@ function flush() {
 
 /** Identify this participant, colour the draw button, and turn stage pointer input into strokes. */
 export function setupDrawing() {
-  const me = participant()
-  const drawBtn = document.getElementById('drawBtn') as HTMLButtonElement
-  drawBtn.style.color = me.color
-  drawBtn.onclick = () => {
+  me = participant()
+  const btn = drawBtn()
+  btn.style.color = me.color
+  btn.onclick = () => {
     stage.drawMode = !stage.drawMode
-    drawBtn.setAttribute('aria-pressed', String(stage.drawMode))
+    btn.setAttribute('aria-pressed', String(stage.drawMode))
   }
 
   stage.onDraw = (phase, x, y, pressure) => {

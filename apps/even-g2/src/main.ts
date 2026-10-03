@@ -43,6 +43,7 @@ import { keepScreenAwake } from './phone/awake'
 import { setupCamera } from './phone/camera'
 import { installDevLog } from './phone/devlog'
 import { setupDrawing } from './phone/draw'
+import { setupMenu } from './phone/menu'
 import { askPairingCode, onHelloNotice } from './phone/notices'
 import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
@@ -58,6 +59,7 @@ setupToolbar()
 setupViews()
 setupDrawing()
 setupCamera()
+setupMenu()
 keepScreenAwake()
 loadDocument()
 

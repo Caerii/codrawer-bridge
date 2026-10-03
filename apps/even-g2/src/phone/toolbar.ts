@@ -2,7 +2,10 @@
  * The phone toolbar's simple controls: connection chip, theme, Glasses panel, and hiding the bar.
  *
  * The toolbar (index.html #bar) also holds the view switch (phone/views.ts), the draw button
- * (phone/draw.ts) and the camera buttons (phone/camera.ts); each of those modules wires its own.
+ * (phone/draw.ts), the camera buttons (phone/camera.ts) and the "⋯" menu (phone/menu.ts); each
+ * of those modules wires its own. The menu repeats the theme and Glasses-panel toggles, so both
+ * are exported here.
+ *
  * Tapping the page hides the bar for a clean projection and tapping again brings it back, unless
  * the tap ended a drag of the loupe box.
  */
@@ -28,14 +31,27 @@ function applyTheme(t: Theme) {
   remember('theme', t)
 }
 
+/** Switch between paper and dark (the theme button, and the menu's "Dark theme"). */
+export function toggleTheme() {
+  applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
+}
+
+/** Show or hide the Glasses panel (the glasses button, and the menu's "Glasses diagnostics"). */
+export function toggleDiagnostics() {
+  const on = document.body.classList.toggle('debug')
+  ;(document.getElementById('debugBtn') as HTMLButtonElement).setAttribute('aria-pressed', String(on))
+}
+
+/** Whether the Glasses panel is showing. */
+export function diagnosticsShown(): boolean {
+  return document.body.classList.contains('debug')
+}
+
 /** Wire the toolbar's theme and Glasses-panel buttons and the tap-to-hide on the page. */
 export function setupToolbar() {
   applyTheme(INITIAL_THEME)
-  themeBtn.onclick = () => applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
-  ;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = (e) => {
-    const on = document.body.classList.toggle('debug')
-    ;(e.currentTarget as HTMLButtonElement).setAttribute('aria-pressed', String(on))
-  }
+  themeBtn.onclick = toggleTheme
+  ;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = toggleDiagnostics
   // tap the page to hide the bar (clean projection); tap again to bring it back
   ;(document.getElementById('stage') as HTMLCanvasElement).onclick = () => {
     if (stage.consumeDrag()) return // that was a resize of the loupe box

@@ -17,6 +17,8 @@
  *   a soft dark halo so it reads over any scene. Drawing over the world.
  * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
  *   is then the background (paper or video), one blit, and the strokes still being drawn.
+ * - Export: pagePng() draws the whole page at its own resolution the same way, for the phone
+ *   menu's "Download page as PNG".
  */
 import type { Stroke, StrokeStore } from '../strokes'
 import { ERASER_TOOLS, WASH_TOOLS } from '../strokes'
@@ -71,6 +73,7 @@ export class Stage {
   onDraw: (phase: 'down' | 'move' | 'up', x: number, y: number, pressure: number) => void = () => {}
   private drawing = false
   private dragging: { cx: number } | null = null
+  private exportSize: { w: number; h: number } | null = null // set while pagePng() paints
   private suppressClick = false
 
   constructor(
@@ -205,8 +208,8 @@ export class Stage {
 
   /** page units → device pixels for the current camera */
   private xf(cam: Cam) {
-    const W = this.canvas.width
-    const H = this.canvas.height
+    const W = this.exportSize?.w ?? this.canvas.width
+    const H = this.exportSize?.h ?? this.canvas.height
     const s = H / cam.h
     const A = this.pageAspect
     return {
@@ -450,6 +453,40 @@ export class Stage {
     const nx = ((X - this.canvas.width / 2) / s + this.cam.cx) / this.pageAspect
     const ny = (Y - this.canvas.height / 2) / s + this.cam.cy
     return [nx, ny]
+  }
+
+  /**
+   * The whole page as a PNG, `width` device px wide (default 1620, the Paper Pro page's own
+   * width; the height follows the page aspect). Drawn as the stage draws it, on the current
+   * theme's paper, but without the camera backdrop, the pointer or the loupe box. Resolves null
+   * if the browser cannot encode it.
+   */
+  pagePng(width = 1620): Promise<Blob | null> {
+    const w = Math.round(width)
+    const h = Math.round(width / this.pageAspect)
+    // ink on its own transparent layer first, as on screen, so eraser strokes cut ink, not paper
+    const ink = document.createElement('canvas')
+    ink.width = w
+    ink.height = h
+    const backdrop = this.backdrop
+    this.backdrop = null
+    this.exportSize = { w, h }
+    try {
+      const cam = { cx: this.pageAspect / 2, cy: 0.5, h: 1 } // exactly the page
+      const ictx = ink.getContext('2d')!
+      for (const s of this.store.all()) this.paintStroke(ictx, s, cam)
+    } finally {
+      this.backdrop = backdrop
+      this.exportSize = null
+    }
+    const out = document.createElement('canvas')
+    out.width = w
+    out.height = h
+    const ctx = out.getContext('2d')!
+    ctx.fillStyle = THEMES[this.theme].page
+    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(ink, 0, 0)
+    return new Promise((resolve) => out.toBlob(resolve, 'image/png'))
   }
 
   /** True once after a handle drag (lets the page's tap handler ignore the drag's click). */

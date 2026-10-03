@@ -69,6 +69,27 @@ WebView bridge as base64 (2x faster than the SDK's default number array even in 
 
 The HUD status line shows `L<ms>/<count> · C<ms>/<count>`: round trip and pushes per container.
 
+## Phone menu
+
+The toolbar's "⋯" button opens a small menu (touch and keyboard: arrows, Home/End, Escape; a tap
+outside closes it and does nothing else):
+
+- **New drawing…** clears the page for everyone (the same as the glasses menu's *New drawing*),
+  after an inline "Clear the page for everyone?".
+- **My colour** picks this device's ink colour from the participant palette (remembered as
+  `codrawer:color`; `?color=` still overrides). New strokes only.
+- **Download page as PNG** renders the whole page at 1620×2160 on the current theme (shared
+  through the share sheet on touch devices that can share files).
+- **Copy invite link** copies this page's address with just `?ws=` and `?token=`, so another
+  phone or browser joins the same session. Not offered in the packaged app (no address to share);
+  a `localhost` router makes a link that works on this computer only.
+- **Glasses diagnostics** and **Dark theme** repeat the toolbar's glasses and moon buttons, which
+  are hidden on phones narrower than 480 px.
+
+Follow-up, not done: *Undo my last stroke* and *Clear my strokes*. Removing a stroke for everyone
+needs a message the routers relay and drop from their page replay (e.g. `stroke_delete {"id"}`);
+done locally only, the stroke would come back on the next reconnect.
+
 ## Input
 
 Contextual menu (long-press / context gesture): Toggle AI ghost · Follow / fit page ·
@@ -139,10 +160,12 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `phone/stage.ts`, `phone/screen.ts` | the phone's full-resolution page renderer and its instance |
 | `phone/toolbar.ts`, `phone/views.ts`, `phone/mirror.ts` | connection chip, theme, Glasses panel; Follow/Fit/Page and the loupe box; mirroring the ring |
 | `phone/draw.ts`, `phone/camera.ts`, `phone/notices.ts` | drawing as a participant; camera backdrop; tablet notices and the pairing prompt |
+| `phone/menu.ts`, `phone/invite.ts`, `phone/palette.ts` | the toolbar's "⋯" menu; invite links; participant colours |
 | `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
 
 Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text
-pacing, reconnect policy, loupe geometry, view mirroring and the HUD text helpers.
+pacing, reconnect policy, loupe geometry, view mirroring, the HUD text helpers, invite links and
+the palette.
 
 ## What the SDK actually does (learned in the simulator)
 

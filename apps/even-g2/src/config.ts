@@ -13,8 +13,9 @@
  * at a time; a text update is a much cheaper host call; a page rebuild is ~165 ms flat.
  *
  * Everything here is read once, at load. Settings that change while the app runs (the AI toggle,
- * the loupe zoom, the theme, the page mode, the pairing code, the document) are written back with
- * {@link remember} by the module that owns them, so the next load starts where this one left off.
+ * the loupe zoom, the theme, the page mode, the pairing code, the participant colour) are written
+ * back with {@link remember} by the module that owns them, so the next load starts where this one
+ * left off. (The shared document keeps its own storage: doc/document.ts.)
  */
 import type { Highlight, ViewMode } from './strokes'
 import type { PageMode } from './glasses/layout'
