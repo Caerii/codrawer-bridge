@@ -31,6 +31,7 @@ node_modules/
 # Compiled device binaries — build from source (bridge/remarkable/native/README.md)
 bridge/remarkable/native/codrawer_bridge_native
 bridge/remarkable/native/codrawer_bridge_native.*
+bridge/remarkable/native/main.test
 
 # Stroke recordings / replay captures (large, machine-specific)
 *.jsonl
