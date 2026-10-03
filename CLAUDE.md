@@ -77,6 +77,12 @@ To ship a release that runs on a new OS version, add its `IMG_VERSION` to `boot/
   ~165 ms per rebuild; phone path ≈ 70 ms + 120 ms/KB, direct BLE ≈ 60 ms + 20 ms/KB (ADR 006).
 - **even-terminal `/api/prompt` is text-only** (`text`, `sessionId`, `provider`, `cwd`); a bare prompt
   creates a session and returns its id. Drawings reach the model as files it `Read`s (ADR 002).
+- **even-terminal ≥ 0.10 will not start without `~/.even-terminal/config.json`** and its setup
+  wizard needs a TTY; `config <key> <value>` refuses to create the file. Create it with the
+  package's own `createDefaultConfig`/`saveConfig` (bin/config.js), then token/provider. It binds
+  127.0.0.1 by default. API used by the router is unchanged (`/api/prompt`, `/api/events?sessionId=`).
+- **G2 image updates cost ~200 ms each on stock firmware, phone or direct BLE alike** (one at a
+  time; text updates ~60 ms): measured 2026-10-02, ADR 006.
 - **Keep asyncio tasks referenced** in the router (`_spawn`); dropped tasks were collected mid-flight.
 - **The bridge must select on socket errors, not only after a pen read** (fixed; keep it that way).
 - **Git Bash converts `/hw` arguments into `C:/Program Files/Git/hw`**: set `MSYS_NO_PATHCONV=1`
