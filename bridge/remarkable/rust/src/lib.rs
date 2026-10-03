@@ -13,7 +13,8 @@
 //! - [`pen`]: the pen stroke state machine, pure and portable (package pen, pen/pen.go)
 //! - [`ws_client`]: WebSocket client with ping/pong watchdog (ws_client.go)
 //! - [`bridge`]: the pen machine task, the outbox writer + reconnect loop, the typer hookup (bridge.go)
-//! - [`router`]: the stroke-only session router (router/router.go, serve.go)
+//! - [`router`]: the stroke-only session router (router/router.go, serve.go), split into
+//!   `http`, `messages`, `session` and `client` submodules
 //! - [`release`]: build, sign and verify tablet releases (package release, release_cmd.go)
 //! - `linux` (Linux only): evdev ioctls, device probing, pen/keyboard readers, uinput (linux_input.go,
 //!   device_select.go, keyboard.go, uinput.go)
