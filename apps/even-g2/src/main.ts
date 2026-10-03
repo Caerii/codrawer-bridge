@@ -1127,6 +1127,8 @@ async function setPageMode(b: EvenAppBridge | null, mode: PageMode) {
   }
   pending.loupe = null
   pending.canvas = null
+  produce.loupe = null
+  produce.canvas = null
   if (!b) {
     textDirty = true
     return
@@ -1304,6 +1306,11 @@ function sameFrame(a: Frame | null, b: Frame): boolean {
   return true
 }
 
+// Just-in-time frames: a slot may hold a recipe instead of a frame; the drain runs it at the
+// moment the link is free, so the frame shows the pen where it is at send time, not where it was
+// up to ~65 ms earlier (50 ms tick + 15 ms poll) when it was queued.
+const produce: Record<Slot, (() => Frame) | null> = { loupe: null, canvas: null }
+
 /** Queue a frame unless it is identical to what the container already shows. */
 function offer(slot: Slot, frame: Frame, b: EvenAppBridge) {
   if (sameFrame(lastFrame[slot], frame)) return
@@ -1317,9 +1324,19 @@ function offer(slot: Slot, frame: Frame, b: EvenAppBridge) {
 function readySlot(): Slot | null {
   const now = performance.now()
   for (const s of ['loupe', 'canvas'] as Slot[]) {
-    if (pending[s] && now - lastPushAt[s] >= Math.max(minMs[s], rt[s])) return s // rt: the send has completed
+    if ((pending[s] || produce[s]) && now - lastPushAt[s] >= Math.max(minMs[s], rt[s])) return s // rt: the send has completed
   }
   return null
+}
+
+/** ms until some wanted slot may send (for an exact wait instead of polling). */
+function msUntilReady(): number {
+  const now = performance.now()
+  let wait = 50
+  for (const s of ['loupe', 'canvas'] as Slot[]) {
+    if (pending[s] || produce[s]) wait = Math.min(wait, lastPushAt[s] + Math.max(minMs[s], rt[s]) - now)
+  }
+  return Math.max(1, Math.ceil(wait))
 }
 
 // Per-slot send stats for the phone log (every 5 s while sending): fps, ms per send, bytes.
@@ -1347,18 +1364,27 @@ async function drain(b: EvenAppBridge) {
     // no image containers on this page (text and edit views)
     pending.loupe = null
     pending.canvas = null
+    produce.loupe = null
+    produce.canvas = null
     return
   }
   draining = true
   try {
-    while (pending.loupe || pending.canvas) {
+    while (pending.loupe || pending.canvas || produce.loupe || produce.canvas) {
       const slot = inFlight < INFLIGHT ? readySlot() : null
       if (!slot) {
-        await new Promise((r) => setTimeout(r, inFlight ? 5 : 15))
+        await new Promise((r) => setTimeout(r, inFlight ? 5 : msUntilReady()))
         continue
       }
-      const frame = pending[slot]!
+      let frame = pending[slot]
       pending[slot] = null
+      const recipe = produce[slot]
+      if (recipe) {
+        produce[slot] = null
+        frame = recipe() // drawn now, with the latest points
+        if (sameFrame(lastFrame[slot], frame)) continue // nothing new to show
+      }
+      if (!frame) continue
       lastFrame[slot] = frame
       const sending = send(b, slot, frame)
       if (INFLIGHT === 1) await sending
@@ -1444,8 +1470,16 @@ function tick() {
   }
   if (HAS_LOUPE && loupeDirty) {
     loupeDirty = false
-    rasterize(lctx, store, loupeOpts())
-    if (bridge) offer('loupe', encode(lctx, LOUPE_W, LOUPE_H), bridge)
+    if (bridge) {
+      // drawn and encoded when the link is free (just in time), not now
+      produce.loupe = () => {
+        rasterize(lctx, store, loupeOpts())
+        return encode(lctx, LOUPE_W, LOUPE_H)
+      }
+      void drain(bridge)
+    } else {
+      rasterize(lctx, store, loupeOpts()) // the phone's preview only
+    }
   }
   // The phone preview redraws live, every tick. The glasses copy of the canvas is a big send:
   // with a loupe showing live ink it waits for stroke_end, so it never holds the link during a
