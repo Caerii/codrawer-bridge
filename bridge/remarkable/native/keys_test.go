@@ -98,8 +98,11 @@ func TestKeystrokes(t *testing.T) {
 }
 
 // Every character that has an unshifted key is typed without Shift.
+// Digits, - . / and space are unshifted on the main row. (* and + need Shift+8 and Shift+=: the
+// only unshifted way to type them is the keypad, which the typer must avoid — see
+// TestTypedCharactersNeverUseTheKeypad.)
 func TestKeystrokesPreferUnshifted(t *testing.T) {
-	for _, ks := range keystrokes("0123456789-./*+ ") {
+	for _, ks := range keystrokes("0123456789-./ ") {
 		if ks.shift {
 			t.Fatalf("typed with shift: %+v", ks)
 		}
@@ -149,5 +152,26 @@ func TestHostInfo(t *testing.T) {
 	want := map[string]string{"os": "3.29.0.149", "osTested": "1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// The typer must never choose a keypad key: with NumLock off xochitl may read KP_1, KP_MINUS…
+// as navigation. Characters on both the main row and the keypad come from the main row, every
+// time (charToKey used to depend on Go's random map order).
+func TestTypedCharactersNeverUseTheKeypad(t *testing.T) {
+	want := map[rune][2]int{
+		'1': {2, 0}, '0': {11, 0}, '-': {12, 0}, '.': {52, 0}, '/': {53, 0},
+		'*': {9, 1}, // Shift+8
+		'+': {13, 1}, // Shift+=
+	}
+	for r, w := range want {
+		if got := charToKey[r]; got != w {
+			t.Errorf("%q: got key %d shift %d, want key %d shift %d", r, got[0], got[1], w[0], w[1])
+		}
+	}
+	for r, k := range charToKey {
+		if isKeypad(k[0]) {
+			t.Errorf("%q is typed on keypad key %d", r, k[0])
+		}
 	}
 }

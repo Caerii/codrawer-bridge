@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unsafe"
@@ -165,21 +166,42 @@ type keystroke struct {
 	shift bool
 }
 
-// charToKey inverts usKeymap: character → (code, shift index). Where a character is on two keys
-// (the digits and the keypad), an unshifted mapping wins.
+// charToKey inverts usKeymap: character → (code, shift index). Some characters sit on two keys:
+// the digits and - . / * + are on both the main keyboard and the keypad. The typer must never use
+// the keypad: with NumLock off xochitl may read those keys as navigation (arrows, Home/End). So a
+// keypad key is used only for a character no main-keyboard key produces, and among main keys an
+// unshifted one wins. Codes are walked in ascending order so the result never depends on Go's
+// random map order (it used to).
 var charToKey = func() map[rune][2]int {
+	codes := make([]int, 0, len(usKeymap))
+	for code := range usKeymap {
+		codes = append(codes, int(code))
+	}
+	sort.Ints(codes)
 	m := map[rune][2]int{}
-	for code, pair := range usKeymap {
-		for i, s := range pair {
-			for _, r := range s {
-				if _, ok := m[r]; !ok || i == 0 {
-					m[r] = [2]int{int(code), i}
+	for _, keypad := range []bool{false, true} { // main keyboard first, keypad only as a fallback
+		for _, code := range codes {
+			if isKeypad(code) != keypad {
+				continue
+			}
+			for i, s := range usKeymap[uint16(code)] {
+				for _, r := range s {
+					prev, ok := m[r]
+					if !ok || (!keypad && i == 0 && prev[1] == 1 && !isKeypad(prev[0])) {
+						m[r] = [2]int{code, i}
+					}
 				}
 			}
 		}
 	}
 	return m
 }()
+
+// isKeypad reports whether a Linux key code is on the numeric keypad (KP_ASTERISK 55,
+// KP_7…KP_DOT 71–83, KP_ENTER 96, KP_SLASH 98).
+func isKeypad(code int) bool {
+	return code == 55 || (code >= 71 && code <= 83) || code == 96 || code == 98
+}
 
 // keystrokes maps text to the keys a US layout needs for it. CRLF and LF are Enter, tab is Tab.
 // Typography the model likes is folded to ASCII (dashes to '-', curly quotes to straight ones,

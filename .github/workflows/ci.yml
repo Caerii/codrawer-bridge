@@ -25,7 +25,7 @@ jobs:
       - name: vet (tablet target)
         run: GOOS=linux GOARCH=arm64 go vet ./...
       - name: test
-        run: go test -count=1 ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/
+        run: go test -count=1 . ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/   # . = main package (Linux-only, fine on the runner)
       - name: router ordering tests, repeated
         run: go test -count=20 -run 'LiveMessagesDuringReplay|LeavingMidStroke|BigPage|HelloSays' ./router/
       - name: build for the Paper Pro
