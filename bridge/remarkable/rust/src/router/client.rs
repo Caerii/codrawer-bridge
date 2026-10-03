@@ -54,6 +54,8 @@ impl Client {
 type WsSink = futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<Prefixed>, Message>;
 type WsStream = futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<Prefixed>>;
 
+/// Reads the client's messages and applies each to the session until the client goes silent
+/// for [`PONG_WAIT`], disconnects, errs, or its writer gives up. Any frame counts as alive.
 pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: u64, client: &Client, mut writer_done: oneshot::Receiver<()>) {
     let mut deadline = Instant::now() + PONG_WAIT;
     loop {
@@ -107,6 +109,9 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
     }
 }
 
+/// Sends queued messages (each within [`WRITE_WAIT`]) and, every [`PING_EVERY`], a WebSocket
+/// ping plus a `{"t":"ping"}` text message. When the queue is dropped (the client was closed
+/// or fell behind) it sends a close frame and returns.
 pub(super) async fn write_loop(mut sink: WsSink, mut rx: mpsc::Receiver<Utf8Bytes>, _done: oneshot::Sender<()>) {
     // `_done` drops when this returns, which unblocks the read loop.
     let mut ping = tokio::time::interval_at(Instant::now() + PING_EVERY, PING_EVERY);

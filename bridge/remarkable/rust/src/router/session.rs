@@ -44,13 +44,16 @@ pub(super) struct Member {
 /// Points per block: one replayed stroke_pts message.
 pub(super) type Block = Arc<Vec<Box<RawValue>>>;
 
+/// A recorded stroke: everything needed to replay it as the messages it arrived as.
 pub(super) struct Stroke {
     /// The stroke_begin message as received.
     pub(super) begin: Utf8Bytes,
     /// Every point as received (up to [`MAX_STROKE_POINTS`]), in blocks of [`REPLAY_PTS`]. A
     /// snapshot shares the blocks; only a shared, still-filling last block is copied on write.
     pub(super) blocks: Vec<Block>,
+    /// Points recorded (the sum of the blocks' lengths).
     pub(super) n_pts: usize,
+    /// Its stroke_end arrived (or its owner left).
     pub(super) ended: bool,
     /// Who is drawing it (ended for everyone if they leave mid-stroke).
     pub(super) owner: u64,
@@ -62,6 +65,7 @@ pub(super) struct PageSnapshot {
     pub(super) doc: Vec<Arc<str>>,
 }
 
+/// One stroke of a [`PageSnapshot`].
 pub(super) struct StrokeSnap {
     pub(super) id: String,
     pub(super) begin: Utf8Bytes,
@@ -91,39 +95,21 @@ impl PageSnapshot {
 }
 
 impl Session {
+    // ── the page log ───────────────────────────────────────────────────────
+    //
+    // Live strokes are recorded as they are relayed, so a joiner can be replayed the page.
+    // Memory is bounded (MAX_STROKES, MAX_POINTS: the oldest strokes go first, but the newest
+    // always stays), and one stroke keeps at most MAX_STROKE_POINTS for replay.
+
+    /// Records a `stroke_begin`, `stroke_pts` or `stroke_end` from client `from` for replay.
+    /// Messages without an id are relayed but not recorded.
     pub(super) fn record(&mut self, m: &Envelope<'_>, raw: &Utf8Bytes, from: u64) {
         if m.id.is_empty() {
             return;
         }
         match m.t.as_str() {
-            "stroke_begin" => {
-                if let Some(old) = self.strokes.get(&m.id) {
-                    self.points -= old.n_pts;
-                } else {
-                    self.order.push_back(m.id.clone());
-                }
-                let st = Stroke { begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
-                self.strokes.insert(m.id.clone(), st);
-            }
-            "stroke_pts" => {
-                // Points for a stroke that began before a clear or before we started are dropped.
-                let Some(st) = self.strokes.get_mut(&m.id) else { return };
-                let pts = m.pts.as_deref().unwrap_or_default();
-                // Still relayed live; only the replay copy is capped.
-                let add = &pts[..pts.len().min(MAX_STROKE_POINTS.saturating_sub(st.n_pts))];
-                for p in add {
-                    match st.blocks.last_mut() {
-                        Some(b) if b.len() < REPLAY_PTS => Arc::make_mut(b).push((*p).to_owned()),
-                        _ => {
-                            let mut b = Vec::with_capacity(REPLAY_PTS.min(add.len()).max(16));
-                            b.push((*p).to_owned());
-                            st.blocks.push(Arc::new(b));
-                        }
-                    }
-                }
-                st.n_pts += add.len();
-                self.points += add.len();
-            }
+            "stroke_begin" => self.begin_stroke(&m.id, raw, from),
+            "stroke_pts" => self.append_points(&m.id, m.pts.as_deref().unwrap_or_default()),
             "stroke_end" => {
                 if let Some(st) = self.strokes.get_mut(&m.id) {
                     st.ended = true;
@@ -131,6 +117,42 @@ impl Session {
             }
             _ => {}
         }
+        self.drop_oldest_over_bounds();
+    }
+
+    /// Starts (or restarts, replacing its points) the stroke `id`.
+    fn begin_stroke(&mut self, id: &str, raw: &Utf8Bytes, from: u64) {
+        if let Some(old) = self.strokes.get(id) {
+            self.points -= old.n_pts;
+        } else {
+            self.order.push_back(id.to_string());
+        }
+        let st = Stroke { begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
+        self.strokes.insert(id.to_string(), st);
+    }
+
+    /// Adds points to the stroke `id`, up to its replay cap. Points for a stroke that began
+    /// before a clear (or before this router started) are not recorded; they are still relayed.
+    fn append_points(&mut self, id: &str, pts: &[&RawValue]) {
+        let Some(st) = self.strokes.get_mut(id) else { return };
+        let room = MAX_STROKE_POINTS.saturating_sub(st.n_pts);
+        let add = &pts[..pts.len().min(room)];
+        for p in add {
+            match st.blocks.last_mut() {
+                Some(b) if b.len() < REPLAY_PTS => Arc::make_mut(b).push((*p).to_owned()),
+                _ => {
+                    let mut b = Vec::with_capacity(REPLAY_PTS.min(add.len()).max(16));
+                    b.push((*p).to_owned());
+                    st.blocks.push(Arc::new(b));
+                }
+            }
+        }
+        st.n_pts += add.len();
+        self.points += add.len();
+    }
+
+    /// Enforces the page's memory bounds, oldest stroke first, never dropping the last one.
+    fn drop_oldest_over_bounds(&mut self) {
         while (self.order.len() > MAX_STROKES || self.points > MAX_POINTS) && self.order.len() > 1 {
             let oldest = self.order.pop_front().expect("non-empty");
             if let Some(st) = self.strokes.remove(&oldest) {
@@ -139,6 +161,7 @@ impl Session {
         }
     }
 
+    /// Forgets every recorded stroke (a `clear`).
     pub(super) fn reset(&mut self) {
         self.order.clear();
         self.strokes.clear();
@@ -158,6 +181,8 @@ impl Session {
         PageSnapshot { strokes, doc: self.doc_log.clone() }
     }
 
+    /// Queues `raw` for every member but `from`; a member whose replay is still being queued
+    /// holds it until then, so it sees messages in order.
     pub(super) fn broadcast(&mut self, raw: &Utf8Bytes, from: u64) {
         for (id, m) in &mut self.clients {
             if *id == from {

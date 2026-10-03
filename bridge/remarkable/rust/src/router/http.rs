@@ -28,6 +28,8 @@ pub(super) struct Head {
     pub(super) authorization: String,
 }
 
+/// Reads until the blank line that ends the request head (at most [`MAX_HEADER`] bytes). May
+/// read past it; [`Prefixed`] gives those bytes back to the WebSocket layer.
 pub(super) async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 2048];
@@ -46,6 +48,7 @@ pub(super) async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     }
 }
 
+/// Parses the request line and the headers the router uses; `None` for a malformed head.
 pub(super) fn parse_head(head: &[u8]) -> Option<Head> {
     let end = head.windows(4).position(|w| w == b"\r\n\r\n")?;
     let text = std::str::from_utf8(&head[..end]).ok()?;
@@ -79,6 +82,7 @@ fn query_get(query: &str, key: &str) -> Option<String> {
     })
 }
 
+/// Decodes `%XX` escapes; `None` for a bad escape or a result that is not UTF-8.
 fn percent_decode(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -96,6 +100,7 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// Writes a complete plain HTTP response and closes the connection.
 pub(super) async fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &str) -> io::Result<()> {
     let resp = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -140,8 +145,8 @@ impl AsyncWrite for Prefixed {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
-/// Binds `addr` the way Go's `net.Listen("tcp", addr)` does (":8577" = every interface, IPv4
-/// and IPv6) and serves until the process exits.
+/// Binds `addr` the way Go's `net.Listen("tcp", addr)` does: `":8577"` means every interface,
+/// IPv4 and IPv6 (falling back to IPv4 only where IPv6 is unavailable).
 pub async fn bind(addr: &str) -> io::Result<TcpListener> {
     if let Some(port) = addr.strip_prefix(':') {
         let port: u16 = port.parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, format!("listen tcp {addr}: invalid port")))?;
@@ -154,6 +159,7 @@ pub async fn bind(addr: &str) -> io::Result<TcpListener> {
     TcpListener::bind(addr).await
 }
 
+/// One IPv6 socket that also accepts IPv4 (as IPv4-mapped addresses).
 fn dual_stack(port: u16) -> io::Result<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
     let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
