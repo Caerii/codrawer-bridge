@@ -72,6 +72,13 @@ const defaultWs = import.meta.env.DEV
   ? `ws://${location.hostname || 'localhost'}:8577/ws/session1`
   : __CODRAWER_WS__
 const WS_URL = cfg('ws', defaultWs)
+// Pairing code for a router that requires one (the tablet's, ROUTER_TOKEN): from ?token= (the QR
+// code carries it) or remembered; asked for in the banner when the router refuses us.
+let pairingCode = cfg('token', '')
+function routerUrl(): string {
+  if (!pairingCode) return WS_URL
+  return `${WS_URL}${WS_URL.includes('?') ? '&' : '?'}token=${encodeURIComponent(pairingCode)}`
+}
 
 // ── display geometry (G2: 576x288; image containers max 288x144) ────────────
 // Tunables: ?img=240x120 (canvas) ?loupe=128x64 (or 0 to disable) ?fmt=gray4
@@ -388,6 +395,46 @@ function tabletNotice(t: Record<string, string>) {
     }
   }
   console.log('[codrawer] tablet notice:', text, t)
+}
+
+// The router refused us (missing or wrong pairing code): ask once, remember it, reconnect.
+function askPairingCode() {
+  if (document.getElementById('pairing')) return // already asking
+  const text = document.getElementById('bannerText') as HTMLSpanElement
+  const ok = document.getElementById('bannerOk') as HTMLButtonElement
+  text.innerHTML = ''
+  const label = document.createElement('span')
+  label.textContent = pairingCode ? 'That pairing code was not accepted. ' : 'This tablet needs its pairing code: '
+  const input = document.createElement('input')
+  input.id = 'pairing'
+  input.placeholder = 'XXXX-XXXX'
+  input.autocapitalize = 'characters'
+  input.autocomplete = 'off'
+  input.style.cssText = 'font: inherit; width: 9em; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); letter-spacing: 0.08em'
+  text.append(label, input)
+  banner.hidden = false
+  ok.textContent = 'Connect'
+  const submit = () => {
+    const code = input.value.trim().toUpperCase()
+    if (!code) return
+    pairingCode = code
+    try {
+      localStorage.setItem('codrawer:token', code)
+    } catch {
+      /* ignore */
+    }
+    banner.hidden = true
+    ok.textContent = 'OK'
+    text.textContent = ''
+    retryMs = 300
+    socket?.close() // reconnects with the code
+  }
+  ok.onclick = submit
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') submit()
+  }
+  input.focus()
+  console.warn('[codrawer] router wants a pairing code')
 }
 
 function setConn(live: boolean) {
@@ -897,7 +944,7 @@ let routerPings = false
 function connect() {
   let ws: WebSocket
   try {
-    ws = new WebSocket(WS_URL)
+    ws = new WebSocket(routerUrl())
   } catch (e) {
     console.error('[codrawer] bad router URL', WS_URL, e)
     setTimeout(connect, (retryMs = Math.min(5000, retryMs * 1.6)))
@@ -944,6 +991,9 @@ function connect() {
           canvasDirty = true
           strokeEnded = true
         }
+        break
+      case 'error':
+        if (m.code === 'unauthorized') askPairingCode()
         break
       case 'ping':
         routerPings = true

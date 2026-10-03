@@ -13,6 +13,7 @@ import (
 // because the glasses app would otherwise have nothing to connect to.
 func serveRouter(addr string) {
 	r := router.New()
+	r.Token = os.Getenv("ROUTER_TOKEN") // pairing code for clients off the tablet (bridge.env)
 	// what boot.sh derived for this boot (/run/codrawer/env → the service's environment)
 	r.Info = map[string]string{}
 	for key, env := range map[string]string{"os": "CODRAWER_OS", "osTested": "CODRAWER_OS_TESTED", "version": "CODRAWER_VERSION", "osChangedFrom": "CODRAWER_OS_CHANGED"} {

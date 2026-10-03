@@ -28,8 +28,10 @@
 package router
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -62,6 +64,28 @@ type Router struct {
 	// Info describes the host (e.g. the tablet's OS and codrawer versions); sent in hello as
 	// "tablet" so clients can say "tablet updated" or show versions. Set before serving.
 	Info map[string]string
+	// Token, when set, is required from every client that is not on this machine: as ?token=
+	// (browsers cannot set WebSocket headers) or "Authorization: Bearer". The pen bridge talks
+	// over loopback and is exempt. A wrong or missing token gets {"t":"error","code":
+	// "unauthorized"} and close code 4401, so an app can ask for the pairing code.
+	Token string
+}
+
+// authorized reports whether a request may join.
+func (r *Router) authorized(req *http.Request) bool {
+	if r.Token == "" {
+		return true
+	}
+	if host, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return true
+		}
+	}
+	got := req.URL.Query().Get("token")
+	if auth := req.Header.Get("Authorization"); got == "" && strings.HasPrefix(auth, "Bearer ") {
+		got = strings.TrimPrefix(auth, "Bearer ")
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(r.Token)) == 1
 }
 
 func New() *Router {
@@ -108,6 +132,14 @@ func (r *Router) serveWS(w http.ResponseWriter, req *http.Request) {
 	conn, err := r.upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		return // Upgrade already wrote the error response
+	}
+	if !r.authorized(req) {
+		_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"t":"error","code":"unauthorized","text":"pairing code required"}`))
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(4401, "unauthorized"))
+		_ = conn.Close()
+		r.Logf("[router] %s refused: missing or wrong pairing code", req.RemoteAddr)
+		return
 	}
 	s := r.session(id)
 	wantReplay := req.URL.Query().Get("replay") != "0"

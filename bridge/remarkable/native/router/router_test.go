@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -358,5 +359,68 @@ func TestHelloCarriesHostInfo(t *testing.T) {
 	tab, _ := m["tablet"].(map[string]any)
 	if tab["os"] != "6.1.0" || tab["osChangedFrom"] != "6.0.105" || tab["version"] != "v8" {
 		t.Fatalf("hello: %v", m)
+	}
+}
+
+func TestPairingCodeRequiredOffMachine(t *testing.T) {
+	r := New()
+	r.Logf = func(string, ...any) {}
+	r.Token = "K7Q2-M9TX"
+	srv := httptest.NewServer(r.Handler())
+	t.Cleanup(srv.Close)
+	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/s1"
+
+	// httptest listens on loopback, which is exempt; pretend to be a remote client through a
+	// handler that rewrites RemoteAddr.
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		req.RemoteAddr = "192.168.50.165:50000"
+		r.Handler().ServeHTTP(w, req)
+	}))
+	t.Cleanup(remote.Close)
+	rbase := "ws" + strings.TrimPrefix(remote.URL, "http") + "/ws/s1"
+
+	// remote without the code: told why, then closed with 4401
+	c, _, err := websocket.DefaultDialer.Dial(rbase, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := read(t, c); m["t"] != "error" || m["code"] != "unauthorized" {
+		t.Fatalf("want unauthorized, got %v", m)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = c.ReadMessage()
+	if ce, ok := err.(*websocket.CloseError); !ok || ce.Code != 4401 {
+		t.Fatalf("want close 4401, got %v", err)
+	}
+
+	// remote with the wrong code: refused; with the right one (query or header): joins
+	if c2, _, err := websocket.DefaultDialer.Dial(rbase+"?token=nope", nil); err == nil {
+		if m := read(t, c2); m["code"] != "unauthorized" {
+			t.Fatalf("wrong code joined: %v", m)
+		}
+	}
+	ok, _, err := websocket.DefaultDialer.Dial(rbase+"?token=K7Q2-M9TX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := read(t, ok); m["t"] != "hello" {
+		t.Fatalf("right code: %v", m)
+	}
+	h := http.Header{"Authorization": {"Bearer K7Q2-M9TX"}}
+	hc, _, err := websocket.DefaultDialer.Dial(rbase, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := read(t, hc); m["t"] != "hello" {
+		t.Fatalf("bearer: %v", m)
+	}
+
+	// loopback (the pen bridge on the tablet) needs no code
+	lc, _, err := websocket.DefaultDialer.Dial(base, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := read(t, lc); m["t"] != "hello" {
+		t.Fatalf("loopback: %v", m)
 	}
 }

@@ -50,11 +50,16 @@ timeout 180 scp -q -r "$STAGE"/* "root@$TABLET:/home/root/codrawer/releases/$VER
 timeout 30 "${SSH[@]}" "[ -f /home/root/codrawer/release.pub ]" ||
   timeout 30 scp -q "$KEYDIR/release.pub" "root@$TABLET:/home/root/codrawer/release.pub"
 
+# Pairing code for clients off the tablet (the router's ROUTER_TOKEN): created once, kept after.
+# Alphabet without look-alikes (no O/0, I/1/L) so it is easy to type on a phone.
+CODE=$(LC_ALL=C tr -dc 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 8)
+CODE="${CODE:0:4}-${CODE:4:4}"
 if [ "${CODRAWER_TABLET_UPLINK:-0}" = 1 ]; then
   ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:8577/ws/session1#' -e 's#^SERVE_ADDR=#\#SERVE_ADDR=#' bridge.env"
 else
   ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://127.0.0.1:8577/ws/session1#' -e 's#^\#SERVE_ADDR=#SERVE_ADDR=#' bridge.env; \
-    grep -q '^SERVE_ADDR=' bridge.env || echo SERVE_ADDR=:8577 >> bridge.env"
+    grep -q '^SERVE_ADDR=' bridge.env || echo SERVE_ADDR=:8577 >> bridge.env; \
+    grep -q '^ROUTER_TOKEN=' bridge.env || echo ROUTER_TOKEN=$CODE >> bridge.env"
 fi
 
 echo "[deploy] activating"
@@ -77,6 +82,6 @@ timeout 200 "${SSH[@]}" "set -e
 
 if grep -q '^SERVE_ADDR' <(timeout 20 "${SSH[@]}" cat /home/root/codrawer/bridge.env); then
   curl -s -m 5 "http://$TABLET:8577/healthz" | grep -q '"ok":true' &&
-    echo "[deploy] router healthy at ws://$TABLET:8577/ws/session1" ||
+    echo "[deploy] router healthy at ws://$TABLET:8577/ws/session1 — pairing code: $(timeout 20 "${SSH[@]}" "sed -n 's/^ROUTER_TOKEN=//p' /home/root/codrawer/bridge.env") (scripts/dev/qr.sh makes a QR that carries it)" ||
     echo "[deploy] WARN router not answering on $TABLET:8577"
 fi
