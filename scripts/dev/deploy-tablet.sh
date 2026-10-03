@@ -43,6 +43,8 @@ for _ in $(seq 1 60); do
 done
 timeout 8 "${SSH[@]}" true || { echo; echo "[deploy] tablet unreachable"; exit 1; }
 
+# keep the tablet awake for the whole deploy (it autosleeps within seconds and drops Wi-Fi)
+timeout 20 "${SSH[@]}" 'echo "codrawer-deploy 300000000000" > /sys/power/wake_lock' 2>/dev/null || true
 echo "[deploy] uploading"
 timeout 60 "${SSH[@]}" "mkdir -p /home/root/codrawer/releases/$VERSION/units"
 timeout 180 scp -q -r "$STAGE"/* "root@$TABLET:/home/root/codrawer/releases/$VERSION/"
@@ -52,7 +54,8 @@ timeout 30 "${SSH[@]}" "[ -f /home/root/codrawer/release.pub ]" ||
 
 # Pairing code for clients off the tablet (the router's ROUTER_TOKEN): created once, kept after.
 # Alphabet without look-alikes (no O/0, I/1/L) so it is easy to type on a phone.
-CODE=$(LC_ALL=C tr -dc 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 8)
+# (in a subshell without pipefail: tr dies of SIGPIPE once head has its 8 characters)
+CODE=$(set +o pipefail; LC_ALL=C tr -dc 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' < /dev/urandom 2> /dev/null | head -c 8)
 CODE="${CODE:0:4}-${CODE:4:4}"
 if [ "${CODRAWER_TABLET_UPLINK:-0}" = 1 ]; then
   ENV_EDIT="sed -i -e 's#^DESKTOP_WS=.*#DESKTOP_WS=ws://$LAN_IP:8577/ws/session1#' -e 's#^SERVE_ADDR=#\#SERVE_ADDR=#' bridge.env"
