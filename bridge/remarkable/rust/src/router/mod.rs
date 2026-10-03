@@ -16,7 +16,7 @@
 //!   its replay is queued, so a big page never freezes the stream for everyone else.
 //! - The tablet's saved page (`{"t":"page"}`, the bridge's page watcher) is the page's base: the
 //!   router keeps the latest, drops live strokes that began up to its `rev` (they are in it, or
-//!   were erased), and replays it before the live strokes recorded after it (see [`session`]).
+//!   were erased), and replays it before the live strokes recorded after it (see `session`).
 //! - A pen source can join with `?replay=0` (the bridge does). When a client leaves mid-stroke
 //!   its open strokes are ended for everyone.
 //!
@@ -50,10 +50,10 @@
 //!       client::write_loop ──► frames to the peer (+ keepalive pings)
 //! ```
 //!
-//! - [`http`]: the minimal HTTP layer (request head, query decoding, plain responses, listening).
-//! - [`messages`]: the wire shapes the router reads ([`messages::Envelope`]) or writes itself.
-//! - [`session`]: one session's state: members, the replayable page, the shared document.
-//! - [`client`]: one connection: its send queue, the read loop (dispatch) and the write loop.
+//! - `http`: the minimal HTTP layer (request head, query decoding, plain responses, listening).
+//! - `messages`: the wire shapes the router reads (`messages::Envelope`) or writes itself.
+//! - `session`: one session's state: members, the replayable page, the shared document.
+//! - `client`: one connection: its send queue, the read loop (dispatch) and the write loop.
 
 mod client;
 mod http;

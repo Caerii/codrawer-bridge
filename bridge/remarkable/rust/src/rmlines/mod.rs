@@ -9,7 +9,7 @@
 //!
 //! A file is the 43-byte [`HEADER`] followed by blocks: `u32` length, `u8` 0, `u8` minimum
 //! version, `u8` current version, `u8` type, then a body of tagged values. [`parse`] walks the
-//! blocks and hands each body to [`blocks`]:
+//! blocks and hands each body to `blocks`:
 //!
 //! ```text
 //! bytes ──► parse (block loop) ──► blocks::read_item        ─► Item (line / group / tombstone …)
@@ -35,8 +35,8 @@
 //! runs past the end, e.g. read while xochitl is writing it) is [`Error::Truncated`]: the caller
 //! should retry later.
 //!
-//! Submodules: [`reader`] (bytes and tagged values), [`blocks`] (block bodies), [`scene`]
-//! (ordering and the tree walk), [`tools`] (tool names and palette colours).
+//! Submodules: `reader` (bytes and tagged values), `blocks` (block bodies), `scene`
+//! (ordering and the tree walk), `tools` (tool names and palette colours).
 
 mod blocks;
 mod reader;

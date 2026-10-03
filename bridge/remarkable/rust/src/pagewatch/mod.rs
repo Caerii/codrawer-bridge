@@ -9,9 +9,9 @@
 //!                              Watcher::poll: changed? ──► rmlines::parse ──► message ──► `page` JSON
 //! ```
 //!
-//! - [`locate`](mod@locate): which document and page are open.
-//! - [`watcher`]: the polling state machine (what was published, when to publish again, `rev`).
-//! - [`message`](mod@message): the `page` JSON, byte-compatible with the Go bridge.
+//! - `locate`: which document and page are open.
+//! - `watcher`: the polling state machine (what was published, when to publish again, `rev`).
+//! - `message`: the `page` JSON, byte-compatible with the Go bridge.
 //!
 //! It only ever reads xochitl's data directory. It polls (stat calls once a second, a parse only
 //! when something changed), which is portable and cheap: xochitl writes a page's `.rm` ~6–10 s
