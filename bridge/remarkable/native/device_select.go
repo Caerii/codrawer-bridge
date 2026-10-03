@@ -1,11 +1,16 @@
 package main
 
-// Input device selection helpers.
+// Finding input devices.
 //
-// On reMarkable/Codex, pen/touch devices appear as /dev/input/eventX.
-// We support:
-// - printing /proc/bus/input/devices (for debugging)
-// - "probing" each event node for short activity to auto-select the active device
+// The kernel lists every input device in /proc/bus/input/devices, one blank-line-separated block
+// per device with its name (N:), bus (I:) and handlers (H:, e.g. "kbd event3"). The keyboard is
+// found from that list (keyboard.go). The pen is found by probing: each /dev/input/event* is read
+// for a short window (-probe-seconds) while the user draws, and the node with the most pen-like
+// activity wins.
+//
+// On the Paper Pro the probe is not to be trusted: it picks event0, the power key, so the boot
+// configuration names the pen (INPUT_DEVICE=/dev/input/event2, bridge.env.example). An explicit
+// device always wins over probing.
 
 import (
 	"bufio"
@@ -18,22 +23,31 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"codrawer-bridge-native/pen"
 )
 
+// inputDeviceInfo is one block of /proc/bus/input/devices.
 type inputDeviceInfo struct {
 	name     string
-	handlers []string
-	virtual  bool // a uinput device (bus 0x06), e.g. a typist injecting text
+	handlers []string // e.g. ["kbd", "event3"]
+	virtual  bool     // a uinput device (bus 0x06), e.g. a typist injecting text
 }
 
+// listProcInputDevices parses /proc/bus/input/devices (nil if unreadable).
 func listProcInputDevices() []inputDeviceInfo {
 	b, err := os.ReadFile("/proc/bus/input/devices")
 	if err != nil {
 		return nil
 	}
-	blocks := strings.Split(string(b), "\n\n")
+	return parseProcInputDevices(string(b))
+}
+
+// parseProcInputDevices parses the text of /proc/bus/input/devices. Blocks with neither a name
+// nor handlers are skipped.
+func parseProcInputDevices(text string) []inputDeviceInfo {
 	var out []inputDeviceInfo
-	for _, blk := range blocks {
+	for _, blk := range strings.Split(text, "\n\n") {
 		info := inputDeviceInfo{}
 		for _, line := range strings.Split(blk, "\n") {
 			// "I: Bus=0006 Vendor=…": bus 0x06 is BUS_VIRTUAL (uinput devices)
@@ -60,72 +74,9 @@ func listProcInputDevices() []inputDeviceInfo {
 	return out
 }
 
-// pickInputDevicePath uses /proc/bus/input/devices heuristic only (name-based).
-func pickInputDevicePath(explicit string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
-	}
+// ── probing for the pen ─────────────────────────────────────────────────────
 
-	// Heuristic: scan /proc/bus/input/devices and prefer stylus-ish names.
-	b, err := os.ReadFile("/proc/bus/input/devices")
-	if err == nil {
-		blocks := strings.Split(string(b), "\n\n")
-		bestScore := int64(-1)
-		bestPath := ""
-		for _, blk := range blocks {
-			var name string
-			var handlers []string
-			for _, line := range strings.Split(blk, "\n") {
-				if strings.HasPrefix(line, "N: Name=") {
-					parts := strings.SplitN(line, "=", 2)
-					if len(parts) == 2 {
-						name = strings.Trim(parts[1], " \"")
-					}
-				}
-				if strings.HasPrefix(line, "H: Handlers=") {
-					parts := strings.SplitN(line, "=", 2)
-					if len(parts) == 2 {
-						handlers = strings.Fields(parts[1])
-					}
-				}
-			}
-			ev := ""
-			for _, h := range handlers {
-				if strings.HasPrefix(h, "event") {
-					ev = h
-					break
-				}
-			}
-			if ev == "" {
-				continue
-			}
-			score := int64(0)
-			ln := strings.ToLower(name)
-			if strings.Contains(ln, "stylus") || strings.Contains(ln, "wacom") || strings.Contains(ln, "pen") || strings.Contains(ln, "marker") {
-				score += 10
-			}
-			if strings.Contains(ln, "touch") {
-				score += 2
-			}
-			path := "/dev/input/" + ev
-			if score > bestScore {
-				bestScore = score
-				bestPath = path
-			}
-		}
-		if bestPath != "" {
-			return bestPath, nil
-		}
-	}
-
-	// Fallback: first /dev/input/event*
-	matches, _ := filepath.Glob("/dev/input/event*")
-	if len(matches) == 0 {
-		return "", errors.New("no /dev/input/event* devices found")
-	}
-	return matches[0], nil
-}
-
+// devProbe counts the events one device produced during its probe window.
 type devProbe struct {
 	path      string
 	absX      int
@@ -138,11 +89,39 @@ type devProbe struct {
 	any       int
 }
 
+// score prefers X/Y/pressure/distance and the stylus keys; any activity beats none.
 func (p devProbe) score() int {
-	// Prefer X/Y/pressure/distance + tool keys. Any activity beats none.
 	return p.any + 5*p.absX + 5*p.absY + 8*p.absP + 8*p.absD + 8*p.btnTouch + 6*p.btnPen + 6*p.btnRubber
 }
 
+// count tallies one event.
+func (p *devProbe) count(ev pen.Event) {
+	p.any++
+	switch ev.Type {
+	case pen.EvAbs:
+		switch ev.Code {
+		case pen.AbsX:
+			p.absX++
+		case pen.AbsY:
+			p.absY++
+		case pen.AbsPressure:
+			p.absP++
+		case pen.AbsDistance:
+			p.absD++
+		}
+	case pen.EvKey:
+		switch ev.Code {
+		case pen.BtnTouch:
+			p.btnTouch++
+		case pen.BtnToolPen:
+			p.btnPen++
+		case pen.BtnToolRubber:
+			p.btnRubber++
+		}
+	}
+}
+
+// probeDevice reads one device non-blocking for dur and counts what it produced.
 func probeDevice(path string, dur time.Duration) (devProbe, error) {
 	out := devProbe{path: path}
 	f, err := os.Open(path)
@@ -171,35 +150,14 @@ func probeDevice(path string, dur time.Duration) (devProbe, error) {
 		if err != nil || n == 0 {
 			continue
 		}
-		parser.feed(buf[:n], func(etype uint16, code uint16, _value int32) {
-			out.any++
-			switch etype {
-			case EV_ABS:
-				switch code {
-				case ABS_X:
-					out.absX++
-				case ABS_Y:
-					out.absY++
-				case ABS_PRESSURE:
-					out.absP++
-				case ABS_DISTANCE:
-					out.absD++
-				}
-			case EV_KEY:
-				switch code {
-				case BTN_TOUCH:
-					out.btnTouch++
-				case BTN_TOOL_PEN:
-					out.btnPen++
-				case BTN_TOOL_RUBBER:
-					out.btnRubber++
-				}
-			}
-		})
+		parser.feed(buf[:n], out.count)
 	}
 	return out, nil
 }
 
+// autoDetectActiveDevice returns explicit if set, else probes every /dev/input/event* in name
+// order for probeDur each and returns the best-scoring one (on a tie, or if nothing moved, the
+// first that opened; matches[0] if none did).
 func autoDetectActiveDevice(explicit string, debug bool, probeDur time.Duration) (string, error) {
 	if explicit != "" {
 		return explicit, nil
@@ -232,5 +190,3 @@ func autoDetectActiveDevice(explicit string, debug bool, probeDur time.Duration)
 	}
 	return best.path, nil
 }
-
-

@@ -1,21 +1,45 @@
+// Command codrawer_bridge_native is the reMarkable Paper Pro half of codrawer: one static binary,
+// no Python, that streams what happens on the tablet into a codrawer session and, optionally,
+// hosts that session itself.
+//
+// # What runs on the tablet
+//
+//	/dev/input/event2 (Elan marker) ──▶ pen reader ──▶ pen.Machine ──▶ outbox ─┐
+//	keyboard (Bluetooth, kbd handler) ──▶ keyboard reader ──────────── key ─────┤
+//	xochitl's saved pages (read-only) ──▶ page watcher ─────────────── page ────┤
+//	                                                                            ▼
+//	                                              WebSocket to the router (-ws ws://…/ws/session1)
+//	                                                                            │
+//	term replies ◀── virtual keyboard (uinput) ◀── typer ◀── `term` messages ◀──┘
+//
+//	-serve :8577: the stroke router (package router) in the same process; the bridge then
+//	streams into it over loopback and the glasses app connects to the tablet directly.
+//
+// Every source runs for the life of the process and never depends on the socket being up: a
+// network outage must never cost pen state (a dropped pen-up once left the pen "down"), and the
+// tablet sleeps within ~2 minutes and drops Wi-Fi, so the socket is the least reliable part. The
+// connection loop (bridge.go) only drains what the sources produced. Measured costs and budgets
+// are in ADR 006; how this composes with the glasses, the desktop and smart_remarkable is ADR 007;
+// the page model is ADR 008; the wire format is docs/protocol.md.
+//
+// # Modes
+//
+//	codrawer_bridge_native [flags]            the bridge (and the router with -serve)
+//	codrawer_bridge_native -router-only -serve :8577
+//	codrawer_bridge_native -page-dump         print the open page's `page` message and exit
+//	codrawer_bridge_native -list-devices      print the input devices and exit
+//	codrawer_bridge_native release …          sign/verify releases (release_cmd.go)
+//
+// # Reading order
+//
+// main.go → config.go (flags and env) → bridge.go (wiring and the connection loop) →
+// pen_stream.go (pen device → pen.Machine → outbox) → linux_input.go (evdev structs and ioctls) →
+// device_select.go (finding the pen) → keyboard.go → typer.go and uinput.go (replies typed into
+// the tablet) → page_watch.go → ws_client.go → serve.go → release_cmd.go. The packages: pen (the
+// stroke state machine), router, rmlines and pagewatch (the saved page), release.
 package main
 
-// Native Paper Pro bridge entrypoint.
-//
-// This directory builds a single self-contained binary that:
-// - reads /dev/input/event* (Linux input)
-// - detects pen contact + tool mode (pen vs eraser)
-// - streams stroke messages to the desktop server over WebSocket
-//
-// Code is split across:
-// - util.go: env/flag helpers
-// - linux_input.go: Linux input constants + ioctl + input_event parsing
-// - device_select.go: device listing + probing/selection
-// - ws_client.go: robust websocket client (ping/pong, TCP keepalive, reconnect signals)
-// - bridge.go: stroke state machine + main run loop
-
 import (
-	"flag"
 	"fmt"
 	"os"
 
@@ -26,75 +50,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "release" {
 		os.Exit(runRelease(os.Args[2:]))
 	}
-	cfg := BridgeConfig{
-		WsURL:              getenvDefault("DESKTOP_WS", "ws://127.0.0.1:8000/ws/session1"),
-		Brush:              getenvDefault("BRUSH", "pen"),
-		Color:              os.Getenv("COLOR"),
-		InputDevice:        os.Getenv("INPUT_DEVICE"),
-		BatchHz:            getenvIntDefault("BATCH_HZ", 60),
-		MaxBatchPoints:     getenvIntDefault("MAX_BATCH_POINTS", 64),
-		NoGrab:             getenvBoolDefault("NO_GRAB", true),
-		TouchMode:          getenvDefault("TOUCH_MODE", "auto"),
-		PressureThreshold:  getenvFloatDefault("PRESSURE_THRESHOLD", 0.02),
-		DistanceThreshold:  getenvIntDefault("DISTANCE_THRESHOLD", 0),
-		Debug:              getenvBoolDefault("DEBUG", false),
-		DumpEvents:         getenvBoolDefault("DUMP_EVENTS", false),
-		ListDevices:        false,
-		ProbeSeconds:       getenvFloatDefault("PROBE_SECONDS", 1.5),
-		PingSeconds:        getenvFloatDefault("PING_SECONDS", 2),
-		PongTimeoutSeconds: getenvFloatDefault("PONG_TIMEOUT_SECONDS", 8),
-		Keyboard:           getenvDefault("KEYBOARD_DEVICE", "auto"),
-		KeyboardGrab:       getenvBoolDefault("KEYBOARD_GRAB", false),
-		TypeReplies:        getenvBoolDefault("TYPE_REPLIES", true),
-		TypeCharMs:         getenvIntDefault("TYPE_CHAR_MS", 12),
-		HoverHz:            getenvIntDefault("HOVER_HZ", 30),
-		ServeAddr:          os.Getenv("SERVE_ADDR"),
-		RouterOnly:         getenvBoolDefault("ROUTER_ONLY", false),
-		PageWatch:          getenvDefault("PAGE_WATCH", "auto"),
-		XochitlDir:         getenvDefault("XOCHITL_DIR", pagewatch.DefaultDir),
-		PagePollMs:         getenvIntDefault("PAGE_POLL_MS", 1000),
-	}
-	pageDump := false
-
-	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
-	flag.StringVar(&cfg.Brush, "brush", cfg.Brush, "Brush name for pen strokes (non-eraser)")
-	flag.StringVar(&cfg.Color, "color", cfg.Color, "Optional color hint (e.g. #00ff88). Not available from raw input; set via config.")
-	flag.StringVar(&cfg.InputDevice, "input", cfg.InputDevice, "Input device path (e.g. /dev/input/event3). If empty, auto-detect.")
-	flag.IntVar(&cfg.BatchHz, "batch-hz", cfg.BatchHz, "Batch flush rate (Hz)")
-	flag.IntVar(&cfg.MaxBatchPoints, "max-batch", cfg.MaxBatchPoints, "Max points per batch")
-	flag.BoolVar(&cfg.NoGrab, "no-grab", cfg.NoGrab, "Do not EVIOCGRAB the input device (recommended)")
-	flag.StringVar(&cfg.TouchMode, "touch-mode", cfg.TouchMode, "How to detect contact: auto|btn|pressure|distance|tool")
-	flag.Float64Var(&cfg.PressureThreshold, "pressure-threshold", cfg.PressureThreshold, "Contact threshold for pressure mode (0..1)")
-	flag.IntVar(&cfg.DistanceThreshold, "distance-threshold", cfg.DistanceThreshold, "Contact threshold for distance mode (down if ABS_DISTANCE <= threshold)")
-	flag.BoolVar(&cfg.Debug, "debug", cfg.Debug, "Print contact transitions + periodic stats")
-	flag.BoolVar(&cfg.DumpEvents, "dump-events", cfg.DumpEvents, "Print raw input events (type/code/value). Noisy.")
-	flag.BoolVar(&cfg.ListDevices, "list-devices", false, "Print /proc/bus/input/devices names/handlers and exit")
-	flag.Float64Var(&cfg.ProbeSeconds, "probe-seconds", cfg.ProbeSeconds, "Seconds to probe each /dev/input/event* for activity when auto-detecting (draw during this!)")
-	flag.Float64Var(&cfg.PingSeconds, "ping-seconds", cfg.PingSeconds, "WebSocket ping interval (seconds). Aggressive keepalive.")
-	flag.Float64Var(&cfg.PongTimeoutSeconds, "pong-timeout-seconds", cfg.PongTimeoutSeconds, "Reconnect if no pong is received in this window.")
-	flag.StringVar(&cfg.Keyboard, "keyboard", cfg.Keyboard, "Keyboard device: auto (find a kbd device), off, or /dev/input/eventN. Emits key messages.")
-	flag.BoolVar(&cfg.KeyboardGrab, "keyboard-grab", cfg.KeyboardGrab, "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)")
-	flag.BoolVar(&cfg.TypeReplies, "type-replies", cfg.TypeReplies, "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)")
-	flag.IntVar(&cfg.TypeCharMs, "type-char-ms", cfg.TypeCharMs, "Milliseconds between typed characters")
-	flag.IntVar(&cfg.HoverHz, "hover-hz", cfg.HoverHz, "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables")
-	flag.StringVar(&cfg.ServeAddr, "serve", cfg.ServeAddr, "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>")
-	flag.BoolVar(&cfg.RouterOnly, "router-only", cfg.RouterOnly, "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)")
-	flag.StringVar(&cfg.PageWatch, "page-watch", cfg.PageWatch, "Send xochitl's saved page as `page` snapshots: auto (only on an OS boot.sh lists as tested), on, off")
-	flag.StringVar(&cfg.XochitlDir, "xochitl-dir", cfg.XochitlDir, "xochitl's data directory (read-only)")
-	flag.IntVar(&cfg.PagePollMs, "page-poll-ms", cfg.PagePollMs, "How often the page watcher checks xochitl's files (ms)")
-	flag.BoolVar(&pageDump, "page-dump", false, "Print the `page` message for the open document and page, then exit (read-only)")
-	flag.Parse()
+	cfg, pageDump := loadConfig()
 
 	if pageDump {
-		b, err := (&pagewatch.Watcher{Dir: cfg.XochitlDir}).Poll()
-		if err != nil || b == nil {
-			fmt.Fprintf(os.Stderr, "page-dump: %v (no page found)\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("%s\n", b)
-		return
+		os.Exit(dumpPage(cfg.XochitlDir))
 	}
-
 	if cfg.ServeAddr != "" {
 		go serveRouter(cfg.ServeAddr)
 	}
@@ -105,9 +65,20 @@ func main() {
 		}
 		select {}
 	}
-
 	if err := RunBridgeForever(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// dumpPage prints the `page` message for the open document and page once (a safe, read-only
+// check on the tablet) and returns the exit status.
+func dumpPage(dir string) int {
+	b, err := (&pagewatch.Watcher{Dir: dir}).Poll()
+	if err != nil || b == nil {
+		fmt.Fprintf(os.Stderr, "page-dump: %v (no page found)\n", err)
+		return 1
+	}
+	fmt.Printf("%s\n", b)
+	return 0
 }

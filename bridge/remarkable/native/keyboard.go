@@ -1,21 +1,22 @@
 package main
 
-// Keyboard input for the Paper Pro bridge.
+// Keyboard input: a keyboard paired to the tablet becomes `key` messages in the session.
 //
-// A Bluetooth (or USB) keyboard bonded to the tablet appears as another
-// /dev/input/eventN node with a "kbd" handler. This file finds it, reads its
-// EV_KEY events, tracks modifiers, maps a US layout to characters, and emits
-// `key` messages into the session alongside the pen strokes:
+// A Bluetooth (or USB) keyboard bonded to the tablet appears as another /dev/input/eventN node
+// with a "kbd" handler (pairing: docs/remarkable_bluetooth.md). This file finds it, reads its
+// EV_KEY events, tracks modifiers, maps a US layout to characters, and emits (docs/protocol.md):
 //
-//   {"t":"key","key":"a","char":"A","code":30,"repeat":false,
-//    "mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000000123}
+//	{"t":"key","key":"A","char":"A","code":30,"repeat":false,
+//	 "mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000000123}
 //
-// Only key-down and auto-repeat are emitted (a key-up carries no text). The
-// device is not grabbed by default, so the tablet's own UI keeps receiving the
-// keys too; -keyboard-grab makes the bridge the only consumer.
+// Only key-down and auto-repeat are emitted (a key-up carries no text). `char` is present only
+// for text-producing keys with no Ctrl/Alt/Meta held; `key` is the character, or a browser-style
+// name for the rest (Enter, Backspace, ArrowUp, F3, …). Clients own line editing and commands.
 //
-// The keyboard comes and goes (sleep, range), so the reader reopens the node
-// on error and keeps waiting for it to reappear.
+// The device is not grabbed by default, so the tablet's own UI keeps receiving the keys too;
+// -keyboard-grab makes the bridge the only consumer. The keyboard comes and goes (BLE keyboards
+// sleep; boot/keyboard-keeper.sh reconnects them), so the reader reopens the node on error and
+// keeps waiting for it to reappear.
 
 import (
 	"bufio"
@@ -25,8 +26,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"codrawer-bridge-native/pen"
 )
 
+// keyMods is the modifier state sent with every key.
 type keyMods struct {
 	Shift bool `json:"shift"`
 	Ctrl  bool `json:"ctrl"`
@@ -34,11 +38,12 @@ type keyMods struct {
 	Meta  bool `json:"meta"`
 }
 
+// outKey is one `key` message. TS is Unix ms on the tablet's clock, taken when the key was read.
 type outKey struct {
 	T      string  `json:"t"`
 	Key    string  `json:"key"`
 	Char   string  `json:"char,omitempty"`
-	Code   uint16  `json:"code"`
+	Code   uint16  `json:"code"` // the Linux key code
 	Repeat bool    `json:"repeat"`
 	Mods   keyMods `json:"mods"`
 	TS     int64   `json:"ts"`
@@ -57,7 +62,8 @@ const (
 	KEY_RIGHTMETA  = 126
 )
 
-// usKeymap maps a key code to [base, shifted] for printable keys.
+// usKeymap maps a key code to [base, shifted] for printable keys. The typer uses it in reverse
+// (uinput.go).
 var usKeymap = map[uint16][2]string{
 	2: {"1", "!"}, 3: {"2", "@"}, 4: {"3", "#"}, 5: {"4", "$"}, 6: {"5", "%"},
 	7: {"6", "^"}, 8: {"7", "&"}, 9: {"8", "*"}, 10: {"9", "("}, 11: {"0", ")"},
@@ -96,15 +102,25 @@ var namedKeys = map[uint16]string{
 // would both hide the real keyboard and echo typed replies back as keystrokes.
 const virtualKeyboardName = "codrawer virtual keyboard"
 
-// findKeyboardDevice picks the event node of a keyboard: a device with a
-// "kbd" handler that is not the tablet's own power key or our virtual keyboard.
-// An explicit path wins.
+// ── finding the keyboard ────────────────────────────────────────────────────
+
+// findKeyboardDevice picks the event node of a keyboard: a device with a "kbd" handler that is
+// not the tablet's own power key or a virtual keyboard, preferring one whose name says
+// "keyboard". An explicit path wins.
 func findKeyboardDevice(explicit string) (string, error) {
 	if explicit != "" && explicit != "auto" {
 		return explicit, nil
 	}
+	if path := pickKeyboard(listProcInputDevices()); path != "" {
+		return path, nil
+	}
+	return "", errors.New("no keyboard input device found (pair one with bluetoothctl, or pass -keyboard /dev/input/eventN)")
+}
+
+// pickKeyboard applies findKeyboardDevice's rules to a device list ("" if none qualifies).
+func pickKeyboard(devices []inputDeviceInfo) string {
 	var fallback string
-	for _, d := range listProcInputDevices() {
+	for _, d := range devices {
 		hasKbd := false
 		event := ""
 		for _, h := range d.handlers {
@@ -127,20 +143,19 @@ func findKeyboardDevice(explicit string) (string, error) {
 		}
 		path := filepath.Join("/dev/input", event)
 		if strings.Contains(lname, "keyboard") {
-			return path, nil
+			return path
 		}
 		if fallback == "" {
 			fallback = path
 		}
 	}
-	if fallback != "" {
-		return fallback, nil
-	}
-	return "", errors.New("no keyboard input device found (pair one with bluetoothctl, or pass -keyboard /dev/input/eventN)")
+	return fallback
 }
 
-// runKeyboardForever reads the keyboard and pushes key messages into out.
-// It never returns; when the device is missing or drops, it retries.
+// ── reading it ──────────────────────────────────────────────────────────────
+
+// runKeyboardForever reads the keyboard and pushes key messages into out. It never returns;
+// when the device is missing (retry in 5 s) or drops (reopen in 2 s), it tries again.
 func runKeyboardForever(explicit string, grab bool, debug bool, out chan<- outKey) {
 	for {
 		path, err := findKeyboardDevice(explicit)
@@ -158,6 +173,8 @@ func runKeyboardForever(explicit string, grab bool, debug bool, out chan<- outKe
 	}
 }
 
+// readKeyboardOnce reads one open keyboard until a read fails. A full out channel (nobody
+// draining while disconnected) drops the key rather than blocking the reader.
 func readKeyboardOnce(path string, grab bool, debug bool, out chan<- outKey) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -169,8 +186,7 @@ func readKeyboardOnce(path string, grab bool, debug bool, out chan<- outKey) err
 	}
 	reader := bufio.NewReaderSize(f, 4096)
 	parser := &inputParser{}
-	var mods keyMods
-	capsLock := false
+	var dec keyDecoder
 
 	for {
 		chunk := make([]byte, 4096)
@@ -178,64 +194,86 @@ func readKeyboardOnce(path string, grab bool, debug bool, out chan<- outKey) err
 		if err != nil {
 			return err
 		}
-		parser.feed(chunk[:n], func(etype uint16, code uint16, value int32) {
-			if etype != EV_KEY {
+		parser.feed(chunk[:n], func(ev pen.Event) {
+			if ev.Type != pen.EvKey {
 				return
 			}
-			down := value != 0
-			switch code {
-			case KEY_LEFTSHIFT, KEY_RIGHTSHIFT:
-				mods.Shift = down
+			k, ok := dec.decode(ev.Code, ev.Value, nowMS)
+			if !ok {
 				return
-			case KEY_LEFTCTRL, KEY_RIGHTCTRL:
-				mods.Ctrl = down
-				return
-			case KEY_LEFTALT, KEY_RIGHTALT:
-				mods.Alt = down
-				return
-			case KEY_LEFTMETA, KEY_RIGHTMETA:
-				mods.Meta = down
-				return
-			case KEY_CAPSLOCK:
-				if value == 1 {
-					capsLock = !capsLock
-				}
-				return
-			}
-			if value == 0 {
-				return // key-up carries no text
-			}
-			k := outKey{T: "key", Code: code, Repeat: value == 2, Mods: mods, TS: nowMS()}
-			if pair, ok := usKeymap[code]; ok {
-				upper := mods.Shift
-				if capsLock && len(pair[0]) == 1 && pair[0][0] >= 'a' && pair[0][0] <= 'z' {
-					upper = !upper
-				}
-				if upper {
-					k.Char = pair[1]
-				} else {
-					k.Char = pair[0]
-				}
-				k.Key = k.Char
-				if k.Char == " " {
-					k.Key = "Space"
-				}
-				if mods.Ctrl || mods.Alt || mods.Meta {
-					k.Char = "" // a chord, not text
-				}
-			} else if name, ok := namedKeys[code]; ok {
-				k.Key = name
-			} else {
-				k.Key = fmt.Sprintf("Unidentified(%d)", code)
 			}
 			if debug {
-				fmt.Printf("[keyboard] key=%q char=%q code=%d repeat=%v shift=%v ctrl=%v\n", k.Key, k.Char, k.Code, k.Repeat, mods.Shift, mods.Ctrl)
+				fmt.Printf("[keyboard] key=%q char=%q code=%d repeat=%v shift=%v ctrl=%v\n", k.Key, k.Char, k.Code, k.Repeat, k.Mods.Shift, k.Mods.Ctrl)
 			}
 			select {
 			case out <- k:
 			default:
-				// nobody draining (disconnected); drop rather than block the reader
 			}
 		})
 	}
+}
+
+// nowMS is the wall clock in Unix ms.
+func nowMS() int64 { return time.Now().UnixMilli() }
+
+// ── decoding ────────────────────────────────────────────────────────────────
+
+// keyDecoder turns EV_KEY events into `key` messages, tracking modifiers and Caps Lock. Its zero
+// value is a keyboard with nothing held.
+type keyDecoder struct {
+	mods     keyMods
+	capsLock bool
+}
+
+// decode consumes one EV_KEY event (value 0 up, 1 down, 2 auto-repeat) and returns the message
+// for it, if any. Modifiers and Caps Lock only change state; key-ups produce nothing. now stamps
+// the message.
+func (d *keyDecoder) decode(code uint16, value int32, now func() int64) (outKey, bool) {
+	down := value != 0
+	switch code {
+	case KEY_LEFTSHIFT, KEY_RIGHTSHIFT:
+		d.mods.Shift = down
+		return outKey{}, false
+	case KEY_LEFTCTRL, KEY_RIGHTCTRL:
+		d.mods.Ctrl = down
+		return outKey{}, false
+	case KEY_LEFTALT, KEY_RIGHTALT:
+		d.mods.Alt = down
+		return outKey{}, false
+	case KEY_LEFTMETA, KEY_RIGHTMETA:
+		d.mods.Meta = down
+		return outKey{}, false
+	case KEY_CAPSLOCK:
+		if value == 1 {
+			d.capsLock = !d.capsLock
+		}
+		return outKey{}, false
+	}
+	if value == 0 {
+		return outKey{}, false // key-up carries no text
+	}
+	k := outKey{T: "key", Code: code, Repeat: value == 2, Mods: d.mods, TS: now()}
+	if pair, ok := usKeymap[code]; ok {
+		upper := d.mods.Shift
+		if d.capsLock && len(pair[0]) == 1 && pair[0][0] >= 'a' && pair[0][0] <= 'z' {
+			upper = !upper // Caps Lock inverts Shift for letters only
+		}
+		if upper {
+			k.Char = pair[1]
+		} else {
+			k.Char = pair[0]
+		}
+		k.Key = k.Char
+		if k.Char == " " {
+			k.Key = "Space"
+		}
+		if d.mods.Ctrl || d.mods.Alt || d.mods.Meta {
+			k.Char = "" // a chord, not text
+		}
+	} else if name, ok := namedKeys[code]; ok {
+		k.Key = name
+	} else {
+		k.Key = fmt.Sprintf("Unidentified(%d)", code)
+	}
+	return k, true
 }

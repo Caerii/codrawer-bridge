@@ -1,16 +1,17 @@
 package main
 
-// Virtual keyboard (Linux uinput) for typing text INTO the tablet.
+// A virtual keyboard (Linux uinput) for typing text INTO the tablet.
 //
-// The reMarkable UI accepts keyboard input into its text boxes (notebook text
-// layers, the Type Folio flow). By registering a virtual keyboard we can type
-// terminal / AI replies into whatever field the user has focused, so a
-// `/term` question typed on the paired keyboard and its answer both end up in
-// the tablet's own document. Nothing touches the display driver.
+// The reMarkable UI accepts keyboard input into its text boxes (notebook text layers, the Type
+// Folio flow). By registering a virtual keyboard the bridge can type replies into whatever field
+// the user has focused (typer.go). Nothing touches the display driver, and xochitl cannot tell
+// the device from a real keyboard.
 //
-// Wire format: input_event on aarch64 is 24 bytes (timeval 16 + type 2 +
-// code 2 + value 4). Setup uses UI_SET_EVBIT / UI_SET_KEYBIT / UI_DEV_SETUP /
-// UI_DEV_CREATE (input-event-codes and uinput.h constants inlined below).
+// Setup is UI_SET_EVBIT / UI_SET_KEYBIT / UI_DEV_SETUP / UI_DEV_CREATE (uinput.h constants
+// inlined below). Events are written as raw input_event records of 24 bytes (aarch64 timeval 16 +
+// type 2 + code 2 + value 4); the kernel stamps the time itself, so it is left zero. The device
+// registers on BUS_VIRTUAL under virtualKeyboardName, which is how the keyboard finder
+// (keyboard.go) knows to skip it.
 
 import (
 	"encoding/binary"
@@ -22,6 +23,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"codrawer-bridge-native/pen"
 )
 
 const (
@@ -32,6 +35,12 @@ const (
 	busVirtual  = 0x06
 )
 
+// Key codes the typer produces outside the US keymap.
+const (
+	keyEnter = 28
+	keyTab   = 15
+)
+
 // uinputSetup mirrors struct uinput_setup: input_id (4×u16), name[80], ff_effects_max u32.
 type uinputSetup struct {
 	Bustype, Vendor, Product, Version uint16
@@ -39,11 +48,125 @@ type uinputSetup struct {
 	FFEffectsMax                      uint32
 }
 
+// VirtualKeyboard is an open uinput keyboard device.
 type VirtualKeyboard struct {
 	f *os.File
 }
 
-// charToKey inverts usKeymap: character → (code, shift).
+// OpenVirtualKeyboard creates a keyboard named name that can press every ordinary key (codes
+// 1–127). It waits 300 ms before returning, because the kernel needs a moment to register the new
+// input node before it delivers events.
+func OpenVirtualKeyboard(name string) (*VirtualKeyboard, error) {
+	f, err := os.OpenFile("/dev/uinput", os.O_WRONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fd := f.Fd()
+	if err := ioctlInt(fd, uiSetEvBit, pen.EvKey); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("UI_SET_EVBIT: %w", err)
+	}
+	if err := ioctlInt(fd, uiSetEvBit, pen.EvSyn); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("UI_SET_EVBIT syn: %w", err)
+	}
+	for code := 1; code < 128; code++ { // every ordinary keyboard key
+		if err := ioctlInt(fd, uiSetKeyBit, code); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("UI_SET_KEYBIT %d: %w", code, err)
+		}
+	}
+	var setup uinputSetup
+	setup.Bustype = busVirtual
+	setup.Vendor = 0x5349  // "SI"
+	setup.Product = 0x4742 // "GB"
+	setup.Version = 1
+	copy(setup.Name[:], name)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uiDevSetup, uintptr(unsafe.Pointer(&setup))); errno != 0 {
+		f.Close()
+		return nil, fmt.Errorf("UI_DEV_SETUP: %w", errno)
+	}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uiDevCreate, 0); errno != 0 {
+		f.Close()
+		return nil, fmt.Errorf("UI_DEV_CREATE: %w", errno)
+	}
+	time.Sleep(300 * time.Millisecond)
+	return &VirtualKeyboard{f: f}, nil
+}
+
+func ioctlInt(fd uintptr, req uintptr, val int) error {
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, req, uintptr(val))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// TypeText types s, pausing perChar after every keystroke so the UI keeps up. Newlines become
+// Enter, tabs Tab; see keystrokes for what else is substituted or dropped.
+func (k *VirtualKeyboard) TypeText(s string, perChar time.Duration) error {
+	for _, ks := range keystrokes(s) {
+		if err := k.press(ks.code, ks.shift); err != nil {
+			return err
+		}
+		time.Sleep(perChar)
+	}
+	return nil
+}
+
+// Close removes the virtual keyboard.
+func (k *VirtualKeyboard) Close() error {
+	if k == nil || k.f == nil {
+		return errors.New("closed")
+	}
+	return k.f.Close()
+}
+
+// press sends one key press and release (with Shift held around it if asked), each half closed
+// by a SYN_REPORT.
+func (k *VirtualKeyboard) press(code int, shift bool) error {
+	if shift {
+		if err := k.emit(pen.EvKey, KEY_LEFTSHIFT, 1); err != nil {
+			return err
+		}
+	}
+	if err := k.emit(pen.EvKey, uint16(code), 1); err != nil {
+		return err
+	}
+	if err := k.emit(pen.EvSyn, pen.SynReport, 0); err != nil {
+		return err
+	}
+	if err := k.emit(pen.EvKey, uint16(code), 0); err != nil {
+		return err
+	}
+	if shift {
+		if err := k.emit(pen.EvKey, KEY_LEFTSHIFT, 0); err != nil {
+			return err
+		}
+	}
+	return k.emit(pen.EvSyn, pen.SynReport, 0)
+}
+
+// emit writes one input_event record.
+func (k *VirtualKeyboard) emit(etype, code uint16, value int32) error {
+	var ev [24]byte
+	binary.LittleEndian.PutUint16(ev[16:18], etype)
+	binary.LittleEndian.PutUint16(ev[18:20], code)
+	binary.LittleEndian.PutUint32(ev[20:24], uint32(value))
+	_, err := k.f.Write(ev[:])
+	return err
+}
+
+// ── text → keystrokes ───────────────────────────────────────────────────────
+
+// keystroke is one key to press, with or without Shift.
+type keystroke struct {
+	code  int
+	shift bool
+}
+
+// charToKey inverts usKeymap: character → (code, shift index). Where a character is on two keys
+// (the digits and the keypad), an unshifted mapping wins.
 var charToKey = func() map[rune][2]int {
 	m := map[rune][2]int{}
 	for code, pair := range usKeymap {
@@ -58,127 +181,38 @@ var charToKey = func() map[rune][2]int {
 	return m
 }()
 
-func OpenVirtualKeyboard(name string) (*VirtualKeyboard, error) {
-	f, err := os.OpenFile("/dev/uinput", os.O_WRONLY|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	fd := f.Fd()
-	if err := ioctlInt(fd, uiSetEvBit, EV_KEY); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("UI_SET_EVBIT: %w", err)
-	}
-	if err := ioctlInt(fd, uiSetEvBit, EV_SYN); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("UI_SET_EVBIT syn: %w", err)
-	}
-	for code := 1; code < 128; code++ { // every ordinary keyboard key
-		if err := ioctlInt(fd, uiSetKeyBit, code); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("UI_SET_KEYBIT %d: %w", code, err)
-		}
-	}
-	var setup uinputSetup
-	setup.Bustype = busVirtual
-	setup.Vendor = 0x5349 // "SI"
-	setup.Product = 0x4742 // "GB"
-	setup.Version = 1
-	copy(setup.Name[:], name)
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uiDevSetup, uintptr(unsafe.Pointer(&setup))); errno != 0 {
-		f.Close()
-		return nil, fmt.Errorf("UI_DEV_SETUP: %w", errno)
-	}
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uiDevCreate, 0); errno != 0 {
-		f.Close()
-		return nil, fmt.Errorf("UI_DEV_CREATE: %w", errno)
-	}
-	// The kernel needs a moment to register the new input node before it delivers events.
-	time.Sleep(300 * time.Millisecond)
-	return &VirtualKeyboard{f: f}, nil
-}
-
-func ioctlInt(fd uintptr, req uintptr, val int) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, req, uintptr(val))
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
-func (k *VirtualKeyboard) emit(etype, code uint16, value int32) error {
-	var ev [24]byte
-	binary.LittleEndian.PutUint16(ev[16:18], etype)
-	binary.LittleEndian.PutUint16(ev[18:20], code)
-	binary.LittleEndian.PutUint32(ev[20:24], uint32(value))
-	_, err := k.f.Write(ev[:])
-	return err
-}
-
-func (k *VirtualKeyboard) press(code int, shift bool) error {
-	if shift {
-		if err := k.emit(EV_KEY, KEY_LEFTSHIFT, 1); err != nil {
-			return err
-		}
-	}
-	if err := k.emit(EV_KEY, uint16(code), 1); err != nil {
-		return err
-	}
-	if err := k.emit(EV_SYN, SYN_REPORT, 0); err != nil {
-		return err
-	}
-	if err := k.emit(EV_KEY, uint16(code), 0); err != nil {
-		return err
-	}
-	if shift {
-		if err := k.emit(EV_KEY, KEY_LEFTSHIFT, 0); err != nil {
-			return err
-		}
-	}
-	return k.emit(EV_SYN, SYN_REPORT, 0)
-}
-
-// TypeText types s, mapping newlines to Enter and dropping characters the US
-// layout cannot produce. perChar paces the keystrokes so the UI keeps up.
-func (k *VirtualKeyboard) TypeText(s string, perChar time.Duration) error {
+// keystrokes maps text to the keys a US layout needs for it. CRLF and LF are Enter, tab is Tab.
+// Typography the model likes is folded to ASCII (dashes to '-', curly quotes to straight ones,
+// '…' to "..."), and any other character the layout cannot produce is dropped.
+func keystrokes(s string) []keystroke {
+	var out []keystroke
 	for _, r := range strings.ReplaceAll(s, "\r\n", "\n") {
-		var code, shift int
 		switch r {
 		case '\n':
-			code = 28
+			out = append(out, keystroke{keyEnter, false})
+			continue
 		case '\t':
-			code = 15
-		default:
-			pair, ok := charToKey[r]
-			if !ok {
-				if r == '—' || r == '–' {
-					pair, ok = charToKey['-']
-				} else if r == '‘' || r == '’' {
-					pair, ok = charToKey['\'']
-				} else if r == '“' || r == '”' {
-					pair, ok = charToKey['"']
-				} else if r == '…' {
-					if err := k.TypeText("...", perChar); err != nil {
-						return err
-					}
-					continue
-				}
-			}
-			if !ok {
-				continue
-			}
-			code, shift = pair[0], pair[1]
+			out = append(out, keystroke{keyTab, false})
+			continue
+		case '…':
+			out = append(out, keystrokes("...")...)
+			continue
 		}
-		if err := k.press(code, shift == 1); err != nil {
-			return err
+		pair, ok := charToKey[r]
+		if !ok {
+			switch r {
+			case '—', '–':
+				pair, ok = charToKey['-']
+			case '‘', '’':
+				pair, ok = charToKey['\'']
+			case '“', '”':
+				pair, ok = charToKey['"']
+			}
 		}
-		time.Sleep(perChar)
+		if !ok {
+			continue
+		}
+		out = append(out, keystroke{pair[0], pair[1] == 1})
 	}
-	return nil
-}
-
-func (k *VirtualKeyboard) Close() error {
-	if k == nil || k.f == nil {
-		return errors.New("closed")
-	}
-	return k.f.Close()
+	return out
 }
