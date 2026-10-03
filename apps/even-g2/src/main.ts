@@ -139,10 +139,39 @@ let loupeZoom = Number(cfg('loupe_zoom', '1')) || 1
 function loupeBase(): number {
   return opts.window * 0.45 * (LOUPE_W / 128) * loupeZoom
 }
+// The writing the loupe should keep in view: recent user strokes (last dozen, within ~12 s or still
+// being drawn) near the pen, as one bounding box. null when there is none.
+function writingContext(base: number): [number, number, number, number] | null {
+  const pen = store.lastPoint
+  if (!pen) return null
+  const strokes = store.all()
+  const now = Date.now()
+  const reach = base * 2.5 // anything farther is a different place on the page
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  let seen = 0
+  for (let i = strokes.length - 1; i >= 0 && seen < 12; i--) {
+    const s = strokes[i]
+    if (s.layer !== 'user' || s.pts.length === 0 || s.brush === 'eraser') continue
+    seen++
+    if (s.done && now - s.endedAt > 12_000) break // older than the current burst of writing
+    const cx = (s.box[0] + s.box[2]) / 2
+    const cy = (s.box[1] + s.box[3]) / 2
+    if (Math.abs(cx - pen[0]) > reach || Math.abs(cy - pen[1]) > reach * 1.5) continue
+    x0 = Math.min(x0, s.box[0])
+    y0 = Math.min(y0, s.box[1])
+    x1 = Math.max(x1, s.box[2])
+    y1 = Math.max(y1, s.box[3])
+  }
+  return isFinite(x0) ? [x0, y0, x1, y1] : null
+}
+
 function loupeOpts(): RasterOptions {
   const base = loupeBase()
   if (!LOUPE_CAM) return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: base }
-  const cam = loupeCam.update(store.lastPoint, base, performance.now())
+  const cam = loupeCam.update(store.lastPoint, base, performance.now(), writingContext(base))
   return { ...opts, width: LOUPE_W, height: LOUPE_H, mode: 'follow', window: cam.window, center: cam.center }
 }
 

@@ -106,3 +106,19 @@ test('loupe window keeps the loupe proportions on the page (no squashing)', asyn
   const physical = ((x1 - x0) * pageW) / ((y1 - y0) * pageH)
   assert.ok(Math.abs(physical - 2) < 1e-9, `128x64 loupe frames a 2:1 patch of paper, got ${physical}`)
 })
+
+test('loupe widens to keep the recent writing in view, within limits', async () => {
+  const { LoupeCamera } = await import('../src/strokes')
+  const base = 0.1
+  const settle = (cam: InstanceType<typeof LoupeCamera>, ctx: [number, number, number, number] | null) => {
+    let v = cam.update([0.5, 0.5], base, 0, ctx)
+    for (let t = 1; t <= 40; t++) v = cam.update([0.5, 0.5], base, t * 1000, ctx) // still pen: no speed zoom
+    return v.window
+  }
+  const word: [number, number, number, number] = [0.44, 0.49, 0.6, 0.52] // a word 0.16 wide
+  assert.ok(Math.abs(settle(new LoupeCamera(0.5, 0.75), null) - base) < 1e-3, 'no context: base zoom')
+  const w = settle(new LoupeCamera(0.5, 0.75), word)
+  assert.ok(Math.abs(w - 0.16 * 1.3) < 1e-3, `holds the word with a margin, got ${w}`)
+  const page: [number, number, number, number] = [0, 0, 1, 1]
+  assert.ok(Math.abs(settle(new LoupeCamera(0.5, 0.75), page) - base * 2.5) < 1e-3, 'capped at 2.5x the base')
+})

@@ -430,6 +430,9 @@ export function toPng1Bytes(ctx: CanvasRenderingContext2D, width: number, height
  * - Lines: a return to the left on a lower line (a new line of writing) re-frames at the start
  *   of that line instead of panning back across.
  * - Speed zoom: fast strokes widen the window; slow, careful writing returns to the base zoom.
+ * - Context zoom: given the recent writing near the pen (the word or phrase being formed), the
+ *   window widens just enough to keep it in view, up to 2.5× the base; with no nearby recent ink
+ *   it returns to the base zoom for detail. The wider of speed and context wins.
  */
 export class LoupeCamera {
   private cx = 0.5
@@ -454,7 +457,12 @@ export class LoupeCamera {
   }
 
   /** Advance the camera to the pen; returns the window centre and width to render with. */
-  update(pen: [number, number] | null, baseWin: number, now: number): { center: [number, number]; window: number } {
+  update(
+    pen: [number, number] | null,
+    baseWin: number,
+    now: number,
+    context: [number, number, number, number] | null = null, // recent nearby ink, normalized
+  ): { center: [number, number]; window: number } {
     if (!this.win) this.win = baseWin
     if (!pen) return { center: [this.cx, this.cy], window: this.win }
     if (!this.last) {
@@ -476,7 +484,14 @@ export class LoupeCamera {
     this.last = pen
     this.lastT = now
 
-    const target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
+    let target = baseWin * Math.min(2.2, 1 + this.speed / 0.6)
+    if (context) {
+      // widen to hold the recent writing with a margin: by its width, and by its height through
+      // the window's proportions (height = width × aspect × pageAspect in page coords)
+      const needW = (context[2] - context[0]) * 1.3
+      const needH = (context[3] - context[1]) * 1.3 / (this.aspect * this.pageAspect)
+      target = Math.max(target, Math.min(baseWin * 2.5, Math.max(needW, needH)))
+    }
     this.win += (target - this.win) * 0.35
     const winH = this.win * this.aspect * this.pageAspect // normalized page height
     const relX = (pen[0] - this.cx) / this.win // -0.5 .. 0.5 inside the frame
