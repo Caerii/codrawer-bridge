@@ -1,7 +1,12 @@
 #!/bin/sh
 # Load the NXP Bluetooth driver, start bluetoothd, then hand over to the keyboard keeper.
+# Run by codrawer-bluetooth.service at every boot (docs/remarkable_bluetooth.md).
+#
+# The Paper Pro ships the radio (NXP IW612, UART on /dev/ttymxc1) and BlueZ, but never loads
+# the driver (btnxpuart); bluetooth.service then waits for /sys/class/bluetooth to exist.
 # Codex autosleeps (/sys/power/autosleep = mem) and a suspend during firmware load wedges the
-# chip ("FW already running" + HCI Reset timeouts) until the next reboot, so hold a wake lock.
+# chip ("FW already running" + HCI Reset timeouts) until the next reboot, so hold a wake lock
+# for the bring-up. Up to three attempts, reloading the driver between them.
 DIR=$(cd "$(dirname "$0")" && pwd)
 LOCK=codrawer-bt
 up() { hciconfig hci0 2>/dev/null | grep -qw UP; }

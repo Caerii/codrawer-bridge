@@ -3,6 +3,8 @@
 # Both binaries ship in every release; they take the same flags and environment, so switching is
 #   sed -i 's/^ENGINE=.*/ENGINE=rust/' /home/root/codrawer/bridge.env && systemctl restart codrawer-bridge
 # A release without the chosen binary falls back to Go (and says so in the journal).
+# Run by codrawer-bridge.service, whose EnvironmentFiles (bridge.env, /run/codrawer/env) supply
+# ENGINE and every bridge setting; exec keeps the engine as the unit's main process.
 DIR=$(cd "$(dirname "$0")" && pwd)
 case "${ENGINE:-go}" in
   rust)

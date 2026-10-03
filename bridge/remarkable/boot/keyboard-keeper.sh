@@ -5,7 +5,8 @@
 #
 # A connect attempt pages the radio for up to 15 s, so while a keyboard stays off the keeper
 # backs off (8 s doubling to 32 s) instead of paging every 8 s; a keyboard that wakes on a
-# keypress usually reconnects by itself well within that.
+# keypress usually reconnects by itself well within that. The bridge's keyboard reader
+# (native/keyboard.go) reopens the input node whenever the keyboard comes back.
 wait=8
 while true; do
   bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' || bluetoothctl power on >/dev/null 2>&1

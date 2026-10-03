@@ -1,6 +1,8 @@
 # The pen + keyboard bridge and the stroke router. Installed into /run/systemd/system by boot.sh
 # at every boot. Settings: /home/root/codrawer/bridge.env; /run/codrawer/env carries what boot.sh
 # derives (OS version, whether it is a tested one) for the bridge's compatibility gating.
+# Restarts quickly forever; past the start limit systemd gives up until boot.sh start (boot,
+# activate, rollback) clears it with reset-failed. Logs: journalctl -u codrawer-bridge.
 [Unit]
 Description=codrawer: pen + keyboard bridge and stroke router
 After=network-online.target codrawer-bluetooth.service

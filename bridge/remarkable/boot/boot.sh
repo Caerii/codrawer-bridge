@@ -9,9 +9,20 @@
 #   rollback          switch current and previous, restart
 #   ack-os            forget the "OS changed" notice (after the app showed it)
 #
-# Layout (docs/investigations/durable-install.md §4):
+# Layout (docs/investigations/durable-install.md §6.1):
 #   /home/root/codrawer/{bridge.env,release.pub,DISABLED?,state/,current,previous,releases/<ver>/}
 # Nothing here writes to the root partition; only install.sh does (the stub unit).
+#
+# Why it is shaped this way:
+#   - An OS update replaces the whole root partition and leaves only /home (durable-install.md
+#     §2), and /etc is an overlay on tmpfs. So every codrawer file lives in /home, and the units
+#     are copied into the volatile /run/systemd/system at each start: a release can change its
+#     units freely, and nothing has to survive in /etc.
+#   - Releases are switched with the current/previous symlinks and verified before a switch
+#     (package release, the bridge's `release verify`); a release that is not healthy within
+#     60 s is rolled back by itself.
+#   - The bridge gates fragile features (the page watcher) on the OS version being one this
+#     release was tested on (compat.conf), which start exports as CODRAWER_OS_TESTED (§6.6).
 set -u
 ROOT=/home/root/codrawer
 REL=$(cd "$(dirname "$0")" && pwd)
@@ -19,9 +30,13 @@ STATE=$ROOT/state
 UNITS="codrawer-bluetooth.service codrawer-bridge.service"
 mkdir -p "$STATE"
 
+# os_version: the reMarkable release (IMG_VERSION, e.g. 3.29.0.149), else the Codex base version.
 os_version() { (. /etc/os-release 2>/dev/null; echo "${IMG_VERSION:-${VERSION_ID:-unknown}}"); }
+# version_of <release dir>: the version line of its MANIFEST (empty if none).
 version_of() { sed -n '1s/^version //p' "$1/MANIFEST" 2>/dev/null; }
 
+# start: honour the kill switch, record OS changes, write /run/codrawer/env (read by
+# codrawer-bridge.service as a second EnvironmentFile), install the units into /run, start them.
 start() {
   if [ -e "$ROOT/DISABLED" ]; then
     echo "codrawer: disabled (remove $ROOT/DISABLED to enable)"
@@ -84,6 +99,7 @@ wait_healthy() {
   return 1
 }
 
+# doctor: one key=value line per fact, for humans and scripts (install.sh ends with it).
 doctor() {
   echo "release=$(version_of "$ROOT/current")"
   echo "previous=$(version_of "$ROOT/previous")"
@@ -97,6 +113,8 @@ doctor() {
   echo "healthy=$(healthy && echo 1 || echo 0)"
 }
 
+# rollback [--no-check]: swap current and previous, restart, and (unless --no-check, as when
+# activate is already failing) health-check the result.
 rollback() {
   prev=$(readlink "$ROOT/previous" 2>/dev/null) || { echo "no previous release"; return 1; }
   cur=$(readlink "$ROOT/current" 2>/dev/null || true)
@@ -120,6 +138,8 @@ prune() {
   done
 }
 
+# activate <ver>: verify releases/<ver> (when release.pub exists), make it current with the old
+# current as previous, start it, and keep it only if it is healthy within 60 s.
 activate() {
   new="$ROOT/releases/$1"
   [ -d "$new" ] || { echo "no release $1"; return 1; }

@@ -12,6 +12,12 @@
 # or from Vellum's post-OS-upgrade hook (VELLUM_REENABLE=1: / is already writable and Vellum
 # restores it, so we leave the mount state alone). Never `umount -R /etc` (it drops the
 # /etc/dropbear bind and can break SSH); we reach the rootfs's own /etc through a bind of /.
+#
+# Facts (docs/investigations/durable-install.md §2, §6.2): the rootfs is read-only and /etc is an
+# overlay whose upper dir is tmpfs, so a unit written to the live /etc is gone after a reboot. A
+# file must land in the rootfs's own /etc (the overlay's lower dir) to survive a reboot, and even
+# that is lost when an OS update swaps the root partition; hence one tiny stub that never
+# changes between codrawer versions, and this script to re-add it.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=/home/root/codrawer
@@ -20,6 +26,7 @@ LEGACY="codrawer-bluetooth.service codrawer-bridge.service" # rootfs units befor
 LOWER=/tmp/codrawer-rootfs
 MODE=${1:---if-needed}
 
+# stub_installed: the live /etc has this release's stub, byte for byte, and it is enabled.
 stub_installed() {
   cmp -s "$HERE/$STUB" "/etc/systemd/system/$STUB" && [ -L "/etc/systemd/system/multi-user.target.wants/$STUB" ]
 }
@@ -46,6 +53,8 @@ with_rootfs() {
   "$@"
 }
 
+# put_stub / drop_stub (run under with_rootfs): add or remove the stub and its enable link in the
+# rootfs's /etc, and remove the pre-stub units codrawer used to install there.
 put_stub() {
   cp "$HERE/$STUB" "$LOWER/etc/systemd/system/$STUB"
   ln -sf "../$STUB" "$LOWER/etc/systemd/system/multi-user.target.wants/$STUB"

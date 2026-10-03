@@ -1,5 +1,7 @@
 # Bluetooth radio + keyboard keeper. Installed into /run/systemd/system by boot.sh at every boot
-# (never into the rootfs), so a codrawer update can change it freely.
+# (never into the rootfs), so a codrawer update can change it freely. bt-up.sh brings the radio
+# up (docs/remarkable_bluetooth.md) and then becomes the keyboard keeper, so the unit stays
+# running; /var/lib/bluetooth (the pairings) is bind-mounted from /home and must be up first.
 [Unit]
 Description=codrawer: Bluetooth radio + keyboard keeper
 After=var-lib-bluetooth.mount
