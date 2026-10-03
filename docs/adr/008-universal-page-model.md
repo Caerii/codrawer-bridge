@@ -42,7 +42,7 @@ A **stroke** is immutable once committed:
 | `deleted` | tombstone (erase, undo, lasso delete, ink_reject) |
 
 The page is a Yjs document — the mechanism already shipped for shared text (`doc_update`,
-compaction, replay; `apps/even-g2/src/collab.ts`, the Go router's doc log): strokes are added
+compaction, replay; `apps/even-g2/src/doc/collab.ts`, the Go router's doc log): strokes are added
 once, deletions are tombstones, devices merge without conflicts and offline edits sync on
 reconnect. Per-author undo follows from authorship. The routers stay dumb: relay, log, compact,
 replay.

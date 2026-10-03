@@ -21,7 +21,7 @@ import {
   TextContainerUpgrade,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { packGray4, toBase64, toPngBase64, toPngBytes } from './strokes'
+import { packGray4, toBase64, toPngBase64, toPngBytes } from '../strokes'
 
 interface Config {
   label: string

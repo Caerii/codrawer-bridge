@@ -36,7 +36,7 @@ word; Ctrl+Home/End to the ends. `Ctrl+K` opens the command line over the docume
 then back), `Ctrl+S` saves and shares it with the session (`doc` message), `Ctrl+E` leaves.
 A ring click in the editor saves; the ring scrolls by line.
 
-**Shared live editing.** The document is a Yjs CRDT (`src/collab.ts`): every keystroke reaches
+**Shared live editing.** The document is a Yjs CRDT (`src/doc/collab.ts`): every keystroke reaches
 everyone else editing the session's document within ~40 ms (`doc_update`), concurrent edits
 merge without conflicts, and your cursor stays put while others type. The header shows
 `live`/`offline`; edits made offline merge on reconnect, and a client that joins late gets the
@@ -106,6 +106,43 @@ Text updates follow keystrokes at a 150 ms floor while typing, then fall back to
 | click | toggle follow (crop around the pen) / full page |
 | double click | cycle emphasis: all → user → ai |
 | scroll up / down | zoom the follow window in / out |
+
+## Code map
+
+Every module opens with a prose overview (what it is for, the facts it is built on, how data
+flows through it); start with `src/main.ts`, which wires the rest and reads as a table of contents.
+Handlers only change state and raise dirty flags; the 50 ms render loop turns flags into frames and
+text and hands them to the glasses at the pace the link allows (ADR 006).
+
+| Module | Owns |
+| --- | --- |
+| `main.ts` | wiring: phone setup, the router message → handler table, startup and the Even bridge |
+| `config.ts` | every query parameter / remembered setting, with defaults and the measurements behind them |
+| `state.ts` | the shared mutable state: stroke store, glasses view, dirty flags, ink activity, HUD, glasses device |
+| `protocol.ts` | inbound router message types (docs/protocol.md) |
+| `link.ts`, `reconnect.ts` | the router WebSocket: reconnect/backoff, liveness, pairing code, typed dispatcher |
+| `session.ts` | ink, `page`, `clear`, `cursor`, `ai_*` → the store, the phone stage and dirty flags |
+| `actions.ts` | the app's verbs (follow/fit, emphasis, zoom, AI layer, new drawing, layout switches) |
+| `loop.ts` | the render loop |
+| `strokes.ts` | stroke store, rasterizer, loupe camera, PNG/Gray encoders |
+| `glasses/layout.ts` | container sets for the canvas / text / edit layouts, menu ids |
+| `glasses/page.ts` | create / rebuild / retry the page, layout switches, `?probe=1`, stale-copy release |
+| `glasses/input.ts` | touchpad, ring and menu events → actions |
+| `glasses/display.ts` | the two drawing surfaces, loupe framing, the frame and text queues |
+| `glasses/scheduler.ts` | latest-wins frame slots, just-in-time recipes, dedupe, pacing, perf stats |
+| `glasses/text.ts`, `glasses/encode.ts`, `glasses/loupe.ts` | text pacing; frame encoding; loupe geometry |
+| `glasses/bench.ts`, `glasses/probe.ts` | `?bench=1` and `?probe=1` |
+| `hud/render.ts` | the text container's content for each layout |
+| `hud/keyboard.ts`, `hud/commands.ts`, `hud/completion.ts` | key routing; what a committed line does; the `/` popup |
+| `hud/terminal.ts`, `hud/transcript.ts`, `hud/wrap.ts` | even-terminal relay; the transcript; wrapping for the glasses |
+| `doc/document.ts`, `doc/editor.ts`, `doc/collab.ts` | the shared document: persistence and saving; editor model; Yjs sync |
+| `phone/stage.ts`, `phone/screen.ts` | the phone's full-resolution page renderer and its instance |
+| `phone/toolbar.ts`, `phone/views.ts`, `phone/mirror.ts` | connection chip, theme, Glasses panel; Follow/Fit/Page and the loupe box; mirroring the ring |
+| `phone/draw.ts`, `phone/camera.ts`, `phone/notices.ts` | drawing as a participant; camera backdrop; tablet notices and the pairing prompt |
+| `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
+
+Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text
+pacing, reconnect policy, loupe geometry, view mirroring and the HUD text helpers.
 
 ## What the SDK actually does (learned in the simulator)
 

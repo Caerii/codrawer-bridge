@@ -1,8 +1,8 @@
 // Run: pnpm test  (node:test via tsx). Two editors converge through an ordered relay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Editor } from '../src/editor'
-import { CollabDoc } from '../src/collab'
+import { Editor } from '../src/doc/editor'
+import { CollabDoc } from '../src/doc/collab'
 
 /** A tiny in-memory router: ordered log, relay to others, replay to joiners. */
 function hub() {

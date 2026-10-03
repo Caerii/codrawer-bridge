@@ -18,8 +18,8 @@
  * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
  *   is then the background (paper or video), one blit, and the strokes still being drawn.
  */
-import type { Stroke, StrokeStore } from './strokes'
-import { ERASER_TOOLS, WASH_TOOLS } from './strokes'
+import type { Stroke, StrokeStore } from '../strokes'
+import { ERASER_TOOLS, WASH_TOOLS } from '../strokes'
 
 /** "#rrggbbaa" or "#rrggbb" → [r, g, b, a] (0..255); black when missing or malformed. */
 export function parseRgba(c: string | undefined): [number, number, number, number] {

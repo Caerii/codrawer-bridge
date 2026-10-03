@@ -7,7 +7,7 @@
  * to the status callback. Each case: min / median / p90 ms over N calls.
  */
 import { ImageRawDataUpdate, TextContainerUpgrade, type EvenAppBridge } from '@evenrealities/even_hub_sdk'
-import { toPng1Bytes, toPngBytes } from './strokes'
+import { toPng1Bytes, toPngBytes } from '../strokes'
 
 interface Target {
   id: number
