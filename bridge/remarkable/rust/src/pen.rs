@@ -11,6 +11,8 @@
 use std::fmt::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::util::push_rounded;
+
 // Linux input constants this module interprets.
 pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
@@ -267,9 +269,9 @@ impl Machine {
         (self.hover_x, self.hover_y, self.hovering) = (x, y, true);
         let mut msg = String::with_capacity(96);
         msg.push_str(r#"{"t":"cursor","who":"pen","x":"#);
-        push_fixed(&mut msg, x, 4);
+        push_rounded(&mut msg, x, 4);
         msg.push_str(r#","y":"#);
-        push_fixed(&mut msg, y, 4);
+        push_rounded(&mut msg, y, 4);
         msg.push_str(if self.tool_rubber { r#","tool":"eraser""# } else { r#","tool":"pen""# });
         let _ = write!(msg, r#","ts":{ts_ms}}}"#);
         let _ = (self.emit)(msg);
@@ -375,11 +377,11 @@ impl Machine {
         }
         // 4 decimals ≈ 0.2 px on the 2160-px axis; about half the bytes of full float output.
         self.batch.push('[');
-        push_fixed(&mut self.batch, x, 4);
+        push_rounded(&mut self.batch, x, 4);
         self.batch.push(',');
-        push_fixed(&mut self.batch, y, 4);
+        push_rounded(&mut self.batch, y, 4);
         self.batch.push(',');
-        push_fixed(&mut self.batch, norm(self.p, self.rng.p_min, self.rng.p_max), 3);
+        push_rounded(&mut self.batch, norm(self.p, self.rng.p_min, self.rng.p_max), 3);
         let _ = write!(self.batch, ",{ts_ms}]");
         self.batch_n += 1;
         self.flush(false);
@@ -391,15 +393,6 @@ fn norm(v: i32, lo: i32, hi: i32) -> f64 {
         return 0.0;
     }
     ((v as f64 - lo as f64) / (hi as f64 - lo as f64)).clamp(0.0, 1.0)
-}
-
-/// Writes `v` rounded to `n` decimals without trailing zeros (0.1235, 1, 0), like Go's
-/// `strconv.AppendFloat(b, math.Round(v*s)/s, 'f', -1, 64)`.
-fn push_fixed(out: &mut String, v: f64, n: i32) {
-    let s = 10f64.powi(n);
-    let r = (v * s).round() / s;
-    let r = if r == 0.0 { 0.0 } else { r }; // never "-0"
-    let _ = write!(out, "{r}");
 }
 
 fn json_string(s: &str) -> String {
@@ -661,7 +654,7 @@ mod tests {
     fn number_encoding_matches_go() {
         let mut s = String::new();
         for (v, n) in [(0.0, 4), (1.0, 4), (0.12345, 4), (0.5, 3), (0.10000001, 4), (0.00004, 4)] {
-            push_fixed(&mut s, v, n);
+            push_rounded(&mut s, v, n);
             s.push(' ');
         }
         assert_eq!(s, "0 1 0.1235 0.5 0.1 0 ");

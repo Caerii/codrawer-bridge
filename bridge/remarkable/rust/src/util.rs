@@ -9,6 +9,32 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Go's `t.UnixMilli()`: milliseconds since the Unix epoch, negative before it.
+pub fn unix_millis(t: SystemTime) -> i64 {
+    match t.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_millis() as i64,
+        Err(e) => -(e.duration().as_millis() as i64),
+    }
+}
+
+/// Writes `v` rounded to `decimals` places in the shortest form (`0.1235`, `1`, `0`), like Go's
+/// `strconv.AppendFloat(b, math.Round(v*s)/s, 'f', -1, 64)`: Rust's `Display` for `f64` is the
+/// shortest round-trip form and never uses an exponent, as Go's `'f', -1`. Never writes `-0`;
+/// NaN and infinities are written as `0`.
+pub fn push_rounded(out: &mut String, v: f64, decimals: i32) {
+    use std::fmt::Write as _;
+    if !v.is_finite() {
+        out.push('0');
+        return;
+    }
+    let scale = 10f64.powi(decimals);
+    let mut r = (v * scale).round() / scale;
+    if r == 0.0 {
+        r = 0.0; // turns -0 into 0
+    }
+    let _ = write!(out, "{r}");
+}
+
 pub fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

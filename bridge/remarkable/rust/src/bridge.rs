@@ -10,6 +10,8 @@
 //!   encoded messages on the outbox. A full outbox skips whole strokes, never single events.
 //! - The keyboard reader thread does the same for a keyboard, producing `key` messages.
 //! - The typer thread owns the virtual keyboard and types `term` replies into the tablet.
+//! - The page thread ([`crate::page_watch`]) publishes xochitl's saved page as `page` snapshots
+//!   (read-only); the latest one is sent on every connection.
 //! - [`run_connections`] dials the router and writes the outbox (and keys) until the socket dies,
 //!   then reconnects. It also notices a suspend/resume and reconnects at once instead of writing
 //!   into a socket that died while the tablet slept.
@@ -23,6 +25,7 @@ use tokio::time::Instant;
 use crate::flags::Config;
 use crate::input::{AbsRanges, RawEvent};
 use crate::keymap::OutKey;
+use crate::page_watch::PageFeed;
 use crate::pen;
 use crate::util::{go_duration, now_nanos};
 use crate::ws_client::{self, OnMessage, WsConn};
@@ -111,6 +114,8 @@ pub struct Sources {
     /// Encoded stroke messages from the pen machine.
     pub out_rx: mpsc::Receiver<String>,
     pub key_rx: Option<mpsc::Receiver<OutKey>>,
+    /// The latest `page` snapshot, when the page watcher runs.
+    pub pages: Option<PageFeed>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -170,6 +175,9 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         None
     };
 
+    // xochitl's saved page as `page` snapshots, when enabled for this OS (logs either way).
+    let pages = crate::page_watch::start_if_enabled(&cfg)?;
+
     // Terminal replies typed into the tablet (uinput).
     let on_message: Option<OnMessage> = if cfg.type_replies {
         let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1024);
@@ -187,7 +195,7 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         None
     };
 
-    run_connections(cfg, Sources { out_rx, key_rx }, on_message).await
+    run_connections(cfg, Sources { out_rx, key_rx, pages }, on_message).await
 }
 
 /// Runs the stroke state machine for the life of the process: drains pen events into encoded
@@ -270,6 +278,21 @@ async fn recv_opt<T>(rx: &mut Option<mpsc::Receiver<T>>) -> Option<T> {
     }
 }
 
+/// Waits for a page snapshot this connection has not sent yet. Snapshots published while the
+/// socket was busy collapse into the latest (the watch channel keeps only one). Never resolves
+/// without a feed, or once the watcher thread is gone.
+async fn next_page(pages: &mut Option<PageFeed>) -> String {
+    let Some(rx) = pages else { return std::future::pending().await };
+    loop {
+        if rx.changed().await.is_err() {
+            return std::future::pending().await;
+        }
+        if let Some(page) = rx.borrow_and_update().clone() {
+            return page;
+        }
+    }
+}
+
 /// How long the system slept between two clock readings: wall time that passed beyond the
 /// monotonic time (which stops during suspend). `None` if the wall clock went backwards.
 pub fn suspend_gap(wall_elapsed: Option<Duration>, mono_elapsed: Duration) -> Option<Duration> {
@@ -282,6 +305,11 @@ pub fn suspend_gap(wall_elapsed: Option<Duration>, mono_elapsed: Duration) -> Op
 pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Receiver<String>) -> String {
     let mut check = tokio::time::interval_at(Instant::now() + Duration::from_secs(1), Duration::from_secs(1));
     let (mut last_wall, mut last_mono) = (SystemTime::now(), std::time::Instant::now());
+    // A new socket may lead to a new router (restarted, or the desktop instead of the tablet's
+    // own): it gets the latest page snapshot first, as Go's pumpPages does.
+    if let Some(pages) = &mut src.pages {
+        pages.mark_changed();
+    }
     loop {
         tokio::select! {
             e = err_rx.recv() => {
@@ -301,6 +329,11 @@ pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Rec
                     if let Err(e) = ws.write_text(msg).await {
                         return e;
                     }
+                }
+            }
+            page = next_page(&mut src.pages) => {
+                if let Err(e) = ws.write_text(page).await {
+                    return e;
                 }
             }
             _ = check.tick() => {
@@ -350,6 +383,50 @@ mod tests {
         assert_eq!(suspend_gap(Some(s(1)), s(1)), Some(s(0)));
         assert_eq!(suspend_gap(None, s(1)), None); // wall clock stepped back
         assert_eq!(suspend_gap(Some(s(0)), s(1)), None);
+    }
+
+    type ServerWs = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+    /// Accepts the bridge's next connection (within 10 s).
+    async fn accept_ws(listener: &tokio::net::TcpListener) -> ServerWs {
+        let accept = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        };
+        tokio::time::timeout(Duration::from_secs(10), accept).await.expect("the bridge did not connect")
+    }
+
+    /// The next text message on a connection (within 10 s).
+    async fn next_text(ws: &mut ServerWs) -> String {
+        use futures_util::StreamExt;
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("timeout");
+            if let tokio_tungstenite::tungstenite::Message::Text(t) = msg.expect("closed").expect("ws error") {
+                return t.to_string();
+            }
+        }
+    }
+
+    /// Go's pumpPages: the latest snapshot goes out on every new connection, then each new one.
+    #[tokio::test]
+    async fn the_latest_page_is_sent_on_every_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut cfg = Config::from_env();
+        cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
+        let (_out_tx, out_rx) = mpsc::channel(8);
+        let (page_tx, page_rx) = tokio::sync::watch::channel(Some(r#"{"t":"page","rev":1}"#.to_string()));
+        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx) };
+        tokio::spawn(run_connections(cfg, src, None));
+
+        let mut first = accept_ws(&listener).await;
+        assert_eq!(next_text(&mut first).await, r#"{"t":"page","rev":1}"#);
+        drop(first); // the router goes away; the bridge reconnects and resends the page
+        let mut second = accept_ws(&listener).await;
+        assert_eq!(next_text(&mut second).await, r#"{"t":"page","rev":1}"#);
+
+        // a new snapshot reaches the live connection
+        page_tx.send_replace(Some(r#"{"t":"page","rev":2}"#.to_string()));
+        assert_eq!(next_text(&mut second).await, r#"{"t":"page","rev":2}"#);
     }
 
     fn cfg() -> pen::Config {

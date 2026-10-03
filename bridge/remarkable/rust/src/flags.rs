@@ -42,6 +42,14 @@ pub struct Config {
     /// Run the stroke router in this process; `router_only` skips the pen and keyboard.
     pub serve_addr: String,
     pub router_only: bool,
+
+    /// Page watcher (page_watch.rs): `auto`, `on` or `off`; xochitl's data directory (read-only);
+    /// how often it is checked (ms).
+    pub page_watch: String,
+    pub xochitl_dir: String,
+    pub page_poll_ms: i64,
+    /// `-page-dump`: print the open page's `page` message and exit (no env var, as in Go).
+    pub page_dump: bool,
 }
 
 impl Config {
@@ -71,6 +79,10 @@ impl Config {
             hover_hz: getenv_int_default("HOVER_HZ", 30),
             serve_addr: std::env::var("SERVE_ADDR").unwrap_or_default(),
             router_only: getenv_bool_default("ROUTER_ONLY", false),
+            page_watch: getenv_default("PAGE_WATCH", "auto"),
+            xochitl_dir: getenv_default("XOCHITL_DIR", crate::pagewatch::DEFAULT_DIR),
+            page_poll_ms: getenv_int_default("PAGE_POLL_MS", 1000),
+            page_dump: false,
         }
     }
 }
@@ -111,6 +123,10 @@ const FLAGS: &[FlagDef] = &[
     FlagDef { name: "hover-hz", usage: "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables" },
     FlagDef { name: "serve", usage: "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>" },
     FlagDef { name: "router-only", usage: "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)" },
+    FlagDef { name: "page-watch", usage: "Send xochitl's saved page as `page` snapshots: auto (only on an OS boot.sh lists as tested), on, off" },
+    FlagDef { name: "xochitl-dir", usage: "xochitl's data directory (read-only)" },
+    FlagDef { name: "page-poll-ms", usage: "How often the page watcher checks xochitl's files (ms)" },
+    FlagDef { name: "page-dump", usage: "Print the `page` message for the open document and page, then exit (read-only)" },
 ];
 
 fn slot<'a>(cfg: &'a mut Config, name: &str) -> Option<Slot<'a>> {
@@ -138,6 +154,10 @@ fn slot<'a>(cfg: &'a mut Config, name: &str) -> Option<Slot<'a>> {
         "hover-hz" => Slot::Int(&mut cfg.hover_hz),
         "serve" => Slot::Str(&mut cfg.serve_addr),
         "router-only" => Slot::Bool(&mut cfg.router_only),
+        "page-watch" => Slot::Str(&mut cfg.page_watch),
+        "xochitl-dir" => Slot::Str(&mut cfg.xochitl_dir),
+        "page-poll-ms" => Slot::Int(&mut cfg.page_poll_ms),
+        "page-dump" => Slot::Bool(&mut cfg.page_dump),
         _ => return None,
     })
 }
@@ -243,6 +263,20 @@ pub fn parse_args(cfg: &mut Config, args: &[String]) -> Result<(), FlagExit> {
     Ok(())
 }
 
+/// Go's `flag.UnquoteUsage`: the first back-quoted word in a usage string names the flag's
+/// argument and loses its quotes (`"as `page` snapshots"` → `("page", "as page snapshots")`);
+/// otherwise the argument is named after its type (`kind`, empty for bools).
+fn unquote_usage(usage: &str, kind: &str) -> (String, String) {
+    if let Some(start) = usage.find('`') {
+        if let Some(len) = usage[start + 1..].find('`') {
+            let name = &usage[start + 1..start + 1 + len];
+            let text = format!("{}{}{}", &usage[..start], name, &usage[start + 2 + len..]);
+            return (name.to_string(), text);
+        }
+    }
+    (kind.to_string(), usage.to_string())
+}
+
 /// Usage text in the shape Go's `flag.PrintDefaults` prints.
 pub fn usage(prog: &str, defaults: &Config) -> String {
     let mut d = defaults.clone();
@@ -256,13 +290,14 @@ pub fn usage(prog: &str, defaults: &Config) -> String {
             Slot::Float(x) => ("float", if *x == 0.0 { None } else { Some(x.to_string()) }),
             Slot::Bool(b) => ("", if *b { Some("true".into()) } else { None }),
         };
+        let (arg_name, text) = unquote_usage(f.usage, kind);
         out.push_str(&format!("  -{}", f.name));
-        if !kind.is_empty() {
+        if !arg_name.is_empty() {
             out.push(' ');
-            out.push_str(kind);
+            out.push_str(&arg_name);
         }
         out.push_str("\n    \t");
-        out.push_str(f.usage);
+        out.push_str(&text);
         if let Some(def) = def {
             out.push_str(&format!(" (default {def})"));
         }
@@ -332,5 +367,62 @@ mod tests {
         for f in FLAGS {
             assert!(u.contains(&format!("  -{}", f.name)), "{}", f.name);
         }
+    }
+
+    #[test]
+    fn page_watch_flags_and_go_style_usage() {
+        let mut c = base();
+        parse_args(&mut c, &args(&["-page-watch", "on", "-xochitl-dir=/tmp/x", "-page-poll-ms", "250", "-page-dump"])).unwrap();
+        assert_eq!((c.page_watch.as_str(), c.xochitl_dir.as_str(), c.page_poll_ms, c.page_dump), ("on", "/tmp/x", 250, true));
+
+        let mut d = base();
+        d.page_watch = "auto".into();
+        let u = usage("p", &d);
+        // a back-quoted word names the argument, as Go's flag.UnquoteUsage does
+        assert!(u.contains("  -page-watch page\n    \tSend xochitl's saved page as page snapshots: auto"), "{u}");
+        assert!(u.contains("on, off (default \"auto\")\n"), "{u}");
+        assert!(u.contains("  -page-dump page\n    \tPrint the page message"), "{u}");
+        assert!(u.contains("  -page-poll-ms int\n"), "{u}");
+        assert_eq!(unquote_usage("no quotes", "int"), ("int".to_string(), "no quotes".to_string()));
+        assert_eq!(unquote_usage("one ` only", ""), (String::new(), "one ` only".to_string()));
+    }
+
+    /// The flags match Go's main.go: every `flag.XxxVar(&v, "name", default, "usage")` there is
+    /// defined here with the same usage text, and none other.
+    #[test]
+    fn same_flags_as_go() {
+        let go = include_str!("../../native/main.go");
+        let mut go_flags: Vec<(&str, &str)> = Vec::new();
+        for line in go.lines().filter(|l| l.trim_start().starts_with("flag.") && l.contains("Var(")) {
+            let parts: Vec<&str> = line.split('"').collect();
+            go_flags.push((parts[1], parts[parts.len() - 2]));
+        }
+        go_flags.sort();
+        let mut ours: Vec<(&str, &str)> = FLAGS.iter().map(|f| (f.name, f.usage)).collect();
+        ours.sort();
+        assert_eq!(ours, go_flags);
+    }
+
+    /// The environment variables read for the config match the ones Go's main.go reads.
+    #[test]
+    fn same_env_vars_as_go() {
+        fn env_names(src: &str, markers: &[&str]) -> Vec<String> {
+            let mut names = Vec::new();
+            for marker in markers {
+                for piece in src.split(marker).skip(1) {
+                    if let Some(name) = piece.split('"').next() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+            names.sort();
+            names.dedup();
+            names
+        }
+        let go = include_str!("../../native/main.go");
+        let ours = include_str!("flags.rs").split("#[cfg(test)]").next().unwrap();
+        let go_names = env_names(go, &["Default(\"", "os.Getenv(\""]);
+        let our_names = env_names(ours, &["_default(\"", "env::var(\""]);
+        assert_eq!(our_names, go_names);
     }
 }

@@ -105,6 +105,11 @@ pub const ROOT_ID: CrdtId = CrdtId { author: 0, counter: 1 };
 /// the stored integers: `speed` and `width` are in quarter units (`width / 4` is the stroke width
 /// in page pixels), `direction` 0..255 is a full turn, `pressure` 0..255. Version-1 points (old
 /// firmware, six floats) are converted the way rmscene does.
+///
+/// `x` and `y` are page units: `x` is centred on the page (−W/2..W/2), `y` runs down from the
+/// top and grows past H on a scrolled page. The quarter-pixel width follows from rmscene's v1
+/// conversion (`width_v2 = round(width_v1 × 4)`); a fineliner at size 2 stores 16, i.e. 4 px
+/// (docs/investigations/xochitl-pen-data.md, "Built").
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Point {
     pub x: f32,
@@ -258,4 +263,4 @@ fn read_block(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -16,6 +16,8 @@
 //! - [`router`]: the stroke-only session router (router/router.go, serve.go), split into
 //!   `http`, `messages`, `session` and `client` submodules
 //! - [`rmlines`]: reader for xochitl's v6 `.rm` page files (package rmlines)
+//! - [`pagewatch`]: finds xochitl's open page and builds the `page` snapshot (package pagewatch)
+//! - [`page_watch`]: the watcher thread, its gating and its feed into the bridge (page_watch.go)
 //! - [`release`]: build, sign and verify tablet releases (package release, release_cmd.go)
 //! - `linux` (Linux only): evdev ioctls, device probing, pen/keyboard readers, uinput (linux_input.go,
 //!   device_select.go, keyboard.go, uinput.go)
@@ -25,6 +27,8 @@ pub mod devices;
 pub mod flags;
 pub mod input;
 pub mod keymap;
+pub mod page_watch;
+pub mod pagewatch;
 pub mod pen;
 pub mod release;
 pub mod rmlines;

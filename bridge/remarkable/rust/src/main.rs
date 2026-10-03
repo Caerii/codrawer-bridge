@@ -27,6 +27,18 @@ fn main() {
         }
     }
 
+    // A safe one-off check on the tablet: read the open page, print its message, touch nothing.
+    if cfg.page_dump {
+        match codrawer_bridge::page_watch::dump(&cfg.xochitl_dir) {
+            Ok(msg) => println!("{msg}"),
+            Err(e) => {
+                eprintln!("page-dump: {e} (no page found)");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // One thread runs the sockets; the pen, keyboard and typer get their own blocking threads.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
