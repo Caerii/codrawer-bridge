@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,13 +226,17 @@ func TestBigPageReplayDoesNotDropJoiner(t *testing.T) {
 	const strokes = 600 // 1800 replay messages, well past sendQueue
 	// The watcher drains while the tablet sends (a live client keeps up); it also tells us when
 	// the router has processed everything.
+	// The tablet waits for the watcher every 100 strokes so a slow CI machine never lets the
+	// watcher's backlog reach the stalled-client limit.
 	drained := make(chan error, 1)
+	var seen atomic.Int64
 	go func() {
 		for range strokes * 3 {
 			if _, _, err := watcher.ReadMessage(); err != nil {
 				drained <- err
 				return
 			}
+			seen.Add(1)
 		}
 		drained <- nil
 	}()
@@ -240,6 +245,12 @@ func TestBigPageReplayDoesNotDropJoiner(t *testing.T) {
 		send(t, tablet, `{"t":"stroke_begin","id":"`+id+`"}`)
 		send(t, tablet, `{"t":"stroke_pts","id":"`+id+`","pts":[[0.5,0.5,0.5,1]]}`)
 		send(t, tablet, `{"t":"stroke_end","id":"`+id+`"}`)
+		if (i+1)%100 == 0 {
+			deadline := time.Now().Add(5 * time.Second)
+			for seen.Load() < int64((i+1)*3) && time.Now().Before(deadline) {
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
 	}
 	if err := <-drained; err != nil {
 		t.Fatalf("watcher: %v", err)

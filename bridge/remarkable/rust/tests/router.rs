@@ -249,11 +249,15 @@ async fn big_page_replay_does_not_drop_joiner() {
     let mut tablet = dial(&srv, "s1").await;
     let mut watcher = dial(&srv, "s1").await;
     const STROKES: usize = 600; // 1800 replay messages, well past SEND_QUEUE
-    // The watcher drains while the tablet sends (a live client keeps up); it also tells us when
-    // the router has processed everything.
+    // The watcher drains while the tablet sends, like a live client; it also tells us when the
+    // router has processed everything. The tablet waits for it every 100 strokes so a slow CI
+    // machine never lets the watcher's backlog reach the stalled-client limit.
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen_w = seen.clone();
     let drained = tokio::spawn(async move {
         for _ in 0..STROKES * 3 {
             read(&mut watcher).await;
+            seen_w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         watcher
     });
@@ -262,6 +266,11 @@ async fn big_page_replay_does_not_drop_joiner() {
         send(&mut tablet, &format!(r#"{{"t":"stroke_begin","id":"{id}"}}"#)).await;
         send(&mut tablet, &format!(r#"{{"t":"stroke_pts","id":"{id}","pts":[[0.5,0.5,0.5,1]]}}"#)).await;
         send(&mut tablet, &format!(r#"{{"t":"stroke_end","id":"{id}"}}"#)).await;
+        if (i + 1) % 100 == 0 {
+            while seen.load(std::sync::atomic::Ordering::SeqCst) < (i + 1) * 3 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
     }
     let _watcher = drained.await.expect("watcher");
     let mut late = dial(&srv, "s1").await;
