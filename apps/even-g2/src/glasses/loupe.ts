@@ -22,11 +22,12 @@ export function loupeBaseWindow(viewWindow: number, loupeW: number, zoom: number
 
 /**
  * The new loupe zoom after the phone's loupe box was dragged to `boxWidth`: the box width over
- * the current base window (which already includes the current zoom), clamped to 0.15..6. The box
- * is drawn at the camera's window (base × speed zoom), so at zoom 1 this lands the base there.
+ * the base window at zoom 1 (`unzoomedBase`), clamped to 0.15..6, so the base window lands at the
+ * dragged width whatever the zoom was before. (The box shows the camera's window, which may also
+ * carry a transient speed/context widening; that settles back once the pen slows.)
  */
-export function zoomForBoxWidth(boxWidth: number, baseWindow: number): number {
-  return Math.min(6, Math.max(0.15, boxWidth / baseWindow))
+export function zoomForBoxWidth(boxWidth: number, unzoomedBase: number): number {
+  return Math.min(6, Math.max(0.15, boxWidth / unzoomedBase))
 }
 
 /**

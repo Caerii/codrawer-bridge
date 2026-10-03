@@ -34,12 +34,14 @@ test('refusals retry after 5 s per refusal in a row, up to 30 s, and opening doe
   assert.equal(p.delayAfterClose(), 800)
 })
 
-test('retrySoon shortens the delay, but a refusal streak still holds the next retry to 5 s', () => {
+test('a new pairing code is tried at once: retrySoon resets the refusal streak', () => {
   const p = new ReconnectPolicy()
   p.refused(0)
+  p.refused(5000)
   p.retrySoon()
-  // the close that follows still honours the refusal streak (5 s), as the app always did
-  assert.equal(p.delayAfterClose(), 5000)
+  // the refusals were for the old code; the new one is tried after 300 ms, not 5 s+
+  assert.equal(p.delayAfterClose(), 300)
+  assert.equal(p.refusedStreak, 0)
   const q = new ReconnectPolicy()
   q.retrySoon()
   assert.equal(q.delayAfterClose(), 300)

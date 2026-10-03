@@ -58,7 +58,7 @@ function loupeBase(): number {
 
 /** The loupe box on the phone was dragged to `width` (fraction of the page width). */
 export function resizeLoupe(width: number) {
-  loupeZoom = zoomForBoxWidth(width, loupeBase())
+  loupeZoom = zoomForBoxWidth(width, loupeBaseWindow(view.window, LOUPE_W, 1))
   remember('loupe_zoom', loupeZoom.toFixed(3))
 }
 

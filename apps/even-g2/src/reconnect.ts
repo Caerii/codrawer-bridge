@@ -54,8 +54,14 @@ export class ReconnectPolicy {
     if (!this.refusedSince) this.refusedSince = now
   }
 
-  /** A new pairing code was entered: try it almost at once. */
+  /**
+   * A new pairing code was entered: try it almost at once. The earlier refusals were for the old
+   * (or missing) code, so the streak starts over — otherwise the refusal backoff would still hold
+   * the retry for 5 s or more.
+   */
   retrySoon() {
+    this.refusedStreak = 0
+    this.refusedSince = 0
     this.retryMs = 300
   }
 

@@ -21,6 +21,16 @@ test('the loupe base window scales with the follow window, the loupe width and t
   assert.equal(zoomForBoxWidth(0.001, 0.1), 0.15)
 })
 
+test('dragging the loupe box lands the base window at the dragged width, whatever the zoom was', () => {
+  const unzoomed = loupeBaseWindow(0.5, 192, 1)
+  for (const width of [0.1, 0.3, 0.5]) {
+    const zoom = zoomForBoxWidth(width, unzoomed)
+    assert.ok(Math.abs(loupeBaseWindow(0.5, 192, zoom) - width) < 1e-9)
+    // a second drag to the same width gives the same zoom (it used to compound)
+    assert.equal(zoomForBoxWidth(width, unzoomed), zoom)
+  }
+})
+
 /** A finished user stroke from (x0, y) to (x1, y), ended at `endedAt`. */
 function stroke(s: StrokeStore, id: string, x0: number, x1: number, y: number, endedAt: number, layer: 'user' | 'peer' = 'user'): Stroke {
   s.begin(id, layer)
