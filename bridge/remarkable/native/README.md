@@ -13,6 +13,16 @@ queue (a stalled phone is dropped and reconnects, instead of slowing the tablet)
 stay on the desktop Python router. `-router-only` runs just the router (e.g. on a desktop).
 Tests run anywhere: `go test ./router/`.
 
+## Page watcher (the tablet's saved page)
+
+The bridge reads xochitl's saved pages (read-only) and sends the open page as a `page` message
+(`docs/protocol.md`) on each save (~6–10 s after a pause) and page turn: exact tool, colour,
+per-point width, erases and undos. `rmlines/` parses `.rm` v6 files; `pagewatch/` finds the open
+page and builds the message. It is on when boot.sh marks the OS tested (`CODRAWER_OS_TESTED=1`);
+`PAGE_WATCH=on|off` (`-page-watch`) overrides, `XOCHITL_DIR` (`-xochitl-dir`) and
+`PAGE_POLL_MS` tune it. `codrawer_bridge_native -page-dump` prints the open page's message once
+and exits. Tests run anywhere: `go test ./rmlines/ ./pagewatch/`.
+
 ## Build (desktop)
 
 From repo root (Linux/ARM64 target for Paper Pro):

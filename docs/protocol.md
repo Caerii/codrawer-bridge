@@ -23,8 +23,9 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
 Two implementations speak this protocol: the desktop Python router (`src/codrawer_bridge/server`,
 everything below) and the stroke-only Go router inside the tablet bridge
 (`bridge/remarkable/native/router`, `-serve`), which drops `prompt`/`ai_*`, answers `term_*`
-with a `term` status, and **replays the current page** (`stroke_begin`/`stroke_pts`/`stroke_end`
-since the last `clear`) to a client right after its `hello`.
+with a `term` status, and **replays the current page** to a client right after its `hello`: the
+tablet's latest saved `page`, if any, then the live `stroke_begin`/`stroke_pts`/`stroke_end`
+recorded since it (or since the last `clear`). The Python router replays only the `page`.
 
 ## Message types
 
@@ -98,6 +99,54 @@ Nothing is persisted or replayed; clients own rendering.
 ```json
 {"t":"clear","ts":1730000003000}
 ```
+
+### `page` (tablet bridge → server → broadcast; replayed to joiners)
+
+The tablet's **saved page**, from the bridge's read-only page watcher (`bridge/remarkable/native/
+pagewatch`, ADR 008). xochitl writes a page's `.rm` about 6–10 s after the user pauses and when
+the page is left, and records page turns in `<doc>.content` within 1–2 s. The bridge sends a
+`page` whenever the open page's file is rewritten or the open page (or document) changes, and
+again on every reconnect. The snapshot is the page: erased and undone strokes are simply absent,
+and strokes on hidden layers are left out.
+
+```json
+{"t":"page","doc":"<doc uuid>","page":"<page uuid>","title":"Sketches","rev":1759406400123,"w":1620,"h":2160,
+ "strokes":[{"id":"1:42","tool":"calligraphy","color":0,"rgba":"#000000ff","size":2,"layer":"0:11",
+             "pts":[[0.52101,0.31388,0.502,0.00463],[0.52133,0.31402,0.533,0.00494]]}]}
+```
+
+Fields:
+- `doc`, `page`: xochitl's document and page ids; `title`: the document's name when known.
+- `rev`: Unix ms on the tablet's clock (the same clock as `stroke_begin.ts`). The snapshot holds
+  everything drawn on this page up to `rev`. It is the `.rm` mtime; on a page change it is the later
+  of that and the `.content` write that recorded the turn.
+- `w`, `h`: the page size in page units (Paper Pro 1620 × 2160).
+- `strokes[]`, in drawing order:
+  - `id`: xochitl's CRDT id (`author:counter`), stable across saves.
+  - `tool`: one of `fineliner`, `ballpoint`, `marker`, `pencil`, `mechanical_pencil`, `brush`,
+    `calligraphy`, `highlighter`, `shader`, `eraser`, `erase_area`, or `pen` when unknown. Clients
+    do not paint `eraser` or `erase_area`, because their effect is already in the snapshot.
+  - `color`: xochitl's palette id (0 black, 1 grey, 2 white, 3 yellow, 4 green, 5 pink, 6 blue,
+    7 red, 8 grey overlap, 9 highlight (see `rgba`), and the Paper Pro inks 10 green, 11 cyan,
+    12 magenta, 13 yellow).
+  - `rgba`: the resolved display colour `#rrggbbaa`: the stroke's own colour for Paper Pro
+    highlighter and shader, otherwise the palette's (Paper Pro ink values are approximations).
+    xochitl draws the highlighter translucent even though its alpha is stored as `ff`. The
+    shader's alpha is real.
+  - `size`: the tool's thickness setting (`thickness_scale`: 1, 2, 3, or fractions).
+  - `layer`: the layer id.
+  - `pts`: `[x, y, p, w]`. `x, y` are normalised to the page: `x = (x_rm + w/2) / w` (xochitl's x is
+    centred) and `y = y_rm / h`. Points on a scrolled page can fall outside 0..1. `p` is pressure
+    0..1. `w` is xochitl's computed stroke width at that point as a fraction of the page width (the
+    file stores quarter pixels: `w = width / 4 / 1620`).
+
+Routers keep the latest `page` per session and send it to a joiner right after `hello`. The Go
+router also uses it as the page's **base**: on a `page` it drops recorded live strokes whose
+`stroke_begin.ts` is not after `rev` (they are in the snapshot, or were erased), and replays the
+`page` first and then the live strokes recorded after it. `clear` drops the page.
+`?replay=0` sources get no replay. Clients do the same with their own copy. They replace
+earlier snapshot strokes with the new snapshot, keep live strokes whose `stroke_begin.ts > rev`,
+and on a different `page`/`doc` clear the view (AI layer included) and show the new page.
 
 ### `key` (keyboard bridge → server → broadcast)
 
@@ -183,7 +232,10 @@ SIG mode adds `participant_id` and `run_id` (see `docs/sig-integration.md`).
 
 - The server is a **router**; it does not render and should not send full canvas state.
 - Clients own rendering and any “virtual hand” animation.
-- Keep payloads small; do not resend the entire stroke history.
+- Keep payloads small; do not resend the entire stroke history. The exception is `page`, which
+  is the tablet's whole saved page, sent only on a save or a page change (about 3.7 bytes of
+  JSON per byte of `.rm`: a 45-stroke calligraphy page is 169 KB). The Go router accepts
+  messages up to 16 MB.
 
 ## Seeing the AI layer (important)
 

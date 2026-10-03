@@ -132,5 +132,12 @@ reconciliation recognises them instead of duplicating them.
 2. Page model v1: Yjs page document + participants with colours in the app and routers; the
    phone becomes a second input device (draw on the phone, see it on the glasses and stage).
 3. `.rm` watcher in the bridge (read-only) → exact tools/colours and erase/undo into the model.
+   **Built (2026-10-02)** as a snapshot, not yet as a CRDT. The bridge sends
+   `{"t":"page",…,"rev","strokes":[{id,tool,color,rgba,size,layer,pts:[[x,y,p,w]]}]}` (the tool
+   vocabulary above, `id` = the `.rm` CrdtId) on every save and page turn. Routers and the app
+   treat it as the page's base: earlier saved strokes are replaced, erased ones are absent, and
+   live strokes that began after `rev` are kept. See `docs/protocol.md` (`page`) and
+   `docs/investigations/xochitl-pen-data.md`, under "Built". Mapping these snapshots into the Yjs
+   page document is the remaining step.
 4. Native write-back probe with smart_remarkable: one stroke from the phone onto the tablet page.
 5. Display-buffer tiles for pixel-exact live rendering.

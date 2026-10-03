@@ -221,3 +221,78 @@ vector stream stays for geometry (hover, loupe camera, agent attachments, AI lay
 the per-stroke record (tool, colour). Open: picking the active buffer of the two (follow
 goMarkableStream's Paper Pro code), cropping UI, buffer discovery after OS updates (by size, fall
 back to vectors), CPU cost per tile.
+
+## Built: the tablet is the source of truth for the page (2026-10-02)
+
+The `.rm` reconciliation recommended above now exists end to end. The wire format is in
+`docs/protocol.md`, under `page`.
+
+- **Parser: `bridge/remarkable/native/rmlines`.** Pure Go, with no OS imports and no
+  dependencies, following rmscene's format. It returns the CRDT id, layer, tool, palette colour,
+  `color_rgba`, `thickness_scale` and per-point x, y, speed, direction, width and pressure. It
+  reports tombstones (erase and undo) and layers with label and visibility, and orders strokes
+  by the CRDT sequence with rmscene's tie-break. Unknown or newer blocks and fields are skipped by
+  length. A truncated file (one still being written) is an error, so the caller retries.
+  - We wrote our own parser instead of using **go-rmscene** (MIT, Alex Gorbatchev, 7 commits).
+    Its `go.mod` needs Go 1.26, while this module and CI use 1.22. It flattens blocks and builds
+    no scene tree, so it has no CRDT order or layers. It also finds the Paper Pro colour by
+    searching the bytes for `0x84 0x01`.
+  - **Cross-checked** stroke for stroke against Python rmscene 0.8.0 (`rmlines/testdata/
+    rmscene.json`, `TestMatchesRmscene`) on 8 files. One is the page copied read-only from our
+    Paper Pro earlier that day: 45 calligraphy strokes. The others are rmscene and rmc fixtures
+    covering Paper Pro inks 9–13, highlighter, shader, every tool, layers and erasers. The check
+    covers ids, layer, tool, colour, RGBA, thickness, point count, all six fields of the first and
+    last points, width and pressure sums, tombstones, drawing order and paper size, and all of
+    them match. The real page parses with no skipped blocks. rmscene's "newer format" warning on
+    it comes from trailing fields inside known blocks, which both parsers skip.
+  - **Width units confirmed.** rmscene converts v1 points with `width_v2 = round(width_v1 × 4)`,
+    so the v2 `width` is in quarter pixels. Fineliner at size 2 stores 16, which is 4 px.
+- **Watcher: `bridge/remarkable/native/pagewatch` plus `page_watch.go`.** It is read-only and
+  polls once a second with stat calls only. It parses a page only when something changed.
+  - It finds the open document from the newest `<doc>.content`. It finds the page from
+    `cPages.lastOpened.value`, then from `.metadata` `lastOpenedPage` as an index into the page
+    list, then from the newest `.rm`.
+  - It sends `page` on each `.rm` rewrite and on each page or document change, and resends the
+    latest one on every reconnect. `rev` is the `.rm` mtime; on a page change it is the later of
+    that and the `.content` mtime.
+  - It is on when `CODRAWER_OS_TESTED=1`. `PAGE_WATCH=on|off` or `-page-watch` overrides that.
+    `-page-dump` prints the open page's message once and exits, which makes a safe one-off check
+    on the tablet.
+  - **We used polling, not inotify.** Saves come seconds after a pause, so inotify would not
+    reduce the visible latency, and polling stays portable and testable on Windows.
+- **Routers.**
+  - The Go router keeps the latest `page` as the page's base. It drops live strokes whose
+    `stroke_begin.ts ≤ rev`, then replays the page followed by the newer live strokes.
+  - The Python router relays the latest `page` and replays it.
+- **App.**
+  - `StrokeStore.applyPage` applies the same merge rule as the Go router.
+  - The phone stage draws each stroke in its colour with the file's per-point width.
+    Highlighter is translucent with multiply blending. Shader uses the file's alpha. Pencils
+    are drawn lighter, and eraser strokes are not painted.
+  - The glasses rasteriser stays monochrome: highlighter and shader are faint and dashed.
+  - The stage was checked by sending the snapshots of three fixtures through the Python
+    router into the app in headless Chrome. Colours, washes, the per-tool widths of
+    `writing_tools.rm` and the calligraphy nib widths all render as expected.
+
+**Not verified on the device this session.** The tablet was asleep and unreachable over Wi-Fi
+and USB. The watcher's file discovery (`cPages.lastOpened` on Codex 6.0.105, mtimes, the timing
+of page turns) is tested on synthetic directories that follow the documented layout. Run
+`codrawer_bridge_native -page-dump` on the tablet to confirm it.
+
+Open issues:
+
+- **Zoom and scroll.** Points are page coordinates, and evdev live strokes are screen
+  coordinates. On a zoomed or scrolled page the snapshot and the live ink will not line up.
+  Read SceneInfo's viewport (fw 3.27+) when it is present.
+- **Layers.** Hidden layers are dropped and the rest are merged. The page model's layers
+  (ADR 008) do not carry layer ids yet beyond the `layer` field.
+- **Timing.**
+  - `rev` and `stroke_begin.ts` both come from the tablet's wall clock. A clock step between a
+    stroke and a save could keep or drop one stroke wrongly.
+  - Live strokes from other devices (no tablet `ts`) are dropped from the base at the next
+    snapshot. That is right for "the tablet's page", but phone ink needs its own layer once
+    phones draw.
+- **Not handled yet.**
+  - The Rust router does not relay `page`.
+  - Text (typed) blocks and PDF glyph highlights are ignored.
+  - A page message is about 3.7× the `.rm` size and is not thinned.
