@@ -79,8 +79,10 @@ const WS_URL = cfg('ws', defaultWs)
 const [IMG_W, IMG_H] = size('img', '288x144', 288, 144)
 // The phone converts every frame to an uncompressed 4-bpp bitmap for the glasses, so the cost
 // per send grows with the loupe's pixel area (~12 ms per KB of bitmap measured: 128x64 ≈ 4 KB ≈
-// 200 ms, 288x144 ≈ 20 KB ≈ 400 ms), not with our PNG size. Up to 272x144 fits beside the canvas.
-const [LOUPE_W, LOUPE_H] = size('loupe', '128x64', 272, 144)
+// 200 ms, 288x144 ≈ 20 KB ≈ 400 ms), not with our PNG size. Default 192x144: the full height of
+// the right column (~14 KB, ~290 ms, ~3.4 fps); ?loupe=128x64 is the fast small one, up to
+// 272x144 fits beside the canvas.
+const [LOUPE_W, LOUPE_H] = size('loupe', '192x144', 272, 144)
 const HAS_LOUPE = LOUPE_W > 0
 const SCREEN_W = 576
 const SCREEN_H = 288
