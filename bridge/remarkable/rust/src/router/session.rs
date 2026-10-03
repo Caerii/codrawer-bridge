@@ -58,6 +58,8 @@ pub(super) type Block = Arc<Vec<Box<RawValue>>>;
 pub(super) struct Stroke {
     /// The stroke_begin's `ts` (Unix ms; 0 when it had none, so a `page` always covers it).
     pub(super) ts: i64,
+    /// The stroke_begin's `layer`: empty or `"user"` is the tablet's own ink.
+    pub(super) layer: String,
     /// The stroke_begin message as received.
     pub(super) begin: Utf8Bytes,
     /// Every point as received (up to [`MAX_STROKE_POINTS`]), in blocks of [`REPLAY_PTS`]. A
@@ -69,6 +71,14 @@ pub(super) struct Stroke {
     pub(super) ended: bool,
     /// Who is drawing it (ended for everyone if they leave mid-stroke).
     pub(super) owner: u64,
+}
+
+impl Stroke {
+    /// Whether this is the tablet user's own ink (and so part of the tablet's saved page), as
+    /// opposed to another participant's (`peer`) or the AI's.
+    pub(super) fn is_tablet_ink(&self) -> bool {
+        self.layer.is_empty() || self.layer == "user"
+    }
 }
 
 /// The page at one instant, cheap to take under the lock: blocks are shared, not copied.
@@ -125,7 +135,7 @@ impl Session {
             return;
         }
         match m.t.as_str() {
-            "stroke_begin" => self.begin_stroke(&m.id, m.ts.unwrap_or(0), raw, from),
+            "stroke_begin" => self.begin_stroke(&m.id, m.ts.unwrap_or(0), &m.layer, raw, from),
             "stroke_pts" => self.append_points(&m.id, m.pts.as_deref().unwrap_or_default()),
             "stroke_end" => {
                 if let Some(st) = self.strokes.get_mut(&m.id) {
@@ -137,14 +147,15 @@ impl Session {
         self.drop_oldest_over_bounds();
     }
 
-    /// Starts (or restarts, replacing its points) the stroke `id`, begun at `ts` (Unix ms).
-    fn begin_stroke(&mut self, id: &str, ts: i64, raw: &Utf8Bytes, from: u64) {
+    /// Starts (or restarts, replacing its points) the stroke `id`, begun at `ts` (Unix ms), on
+    /// `layer` (see [`Stroke::layer`]).
+    fn begin_stroke(&mut self, id: &str, ts: i64, layer: &str, raw: &Utf8Bytes, from: u64) {
         if let Some(old) = self.strokes.get(id) {
             self.points -= old.n_pts;
         } else {
             self.order.push_back(id.to_string());
         }
-        let st = Stroke { ts, begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
+        let st = Stroke { ts, layer: layer.to_string(), begin: raw.clone(), blocks: Vec::new(), n_pts: 0, ended: false, owner: from };
         self.strokes.insert(id.to_string(), st);
     }
 
@@ -192,13 +203,14 @@ impl Session {
     /// tablet saved up to `rev` (erased ones are simply absent), so the live log keeps only
     /// strokes that began after `rev`: ink drawn since the save, not in any file yet. A page
     /// turn works the same way: the watcher's `rev` is then the time of the turn, so ink from
-    /// the previous page leaves the log too.
+    /// the previous page leaves the log too. Other participants' and the AI's strokes are in no
+    /// tablet file, so a snapshot never covers them: they stay (Go: `stroke.isTabletInk`).
     pub(super) fn set_page(&mut self, rev: i64, raw: &Utf8Bytes) {
         self.page = Some(raw.clone());
         let mut kept = VecDeque::with_capacity(self.order.len());
         for id in self.order.drain(..) {
             let covered = match self.strokes.get(&id) {
-                Some(st) => st.ts <= rev,
+                Some(st) => st.is_tablet_ink() && st.ts <= rev,
                 None => true,
             };
             if !covered {

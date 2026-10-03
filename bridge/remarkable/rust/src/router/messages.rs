@@ -29,6 +29,11 @@ pub(super) struct Envelope<'a> {
     /// clock, the same clock as the tablet's `stroke_begin.ts`).
     #[serde(default)]
     pub(super) rev: Option<i64>,
+    /// `stroke_begin`: whose ink it is — `"user"` (or absent) for the tablet's own pen,
+    /// `"peer"` for another participant, `"ai"` for agent ink. Only the tablet's own ink is
+    /// ever in its saved page, so only that is covered by a `page` snapshot.
+    #[serde(default)]
+    pub(super) layer: String,
 }
 
 /// `hello`, the first message on every connection.

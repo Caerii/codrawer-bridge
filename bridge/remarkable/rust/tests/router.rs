@@ -497,3 +497,28 @@ async fn big_page_message_is_accepted() {
     let Message::Text(raw) = msg else { panic!("not text: {msg:?}") };
     assert!(raw.len() >= 1 << 20, "big page: {} bytes", raw.len());
 }
+
+/// Go: TestPageSnapshotKeepsOtherParticipantsStrokes. A `page` snapshot covers only the tablet's
+/// own ink (it is the tablet's saved file); another participant's stroke is in no file and must
+/// survive it, so a late joiner sees the page and then the peer's stroke.
+#[tokio::test]
+async fn page_snapshot_keeps_other_participants_strokes() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut peer = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_1","layer":"user","ts":100}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_1"}"#).await;
+    send(&mut peer, r##"{"t":"stroke_begin","id":"p_1","layer":"peer","color":"#d6482a","ts":150}"##).await;
+    send(&mut peer, r#"{"t":"stroke_end","id":"p_1"}"#).await;
+    read(&mut tablet).await; // p_1 begin
+    read(&mut tablet).await; // p_1 end
+    send(&mut tablet, r#"{"t":"page","doc":"d","page":"p","rev":200,"strokes":[]}"#).await;
+    read(&mut peer).await; // u_1 begin
+    read(&mut peer).await; // u_1 end
+    read(&mut peer).await; // page
+    let mut late = dial(&srv, "s1").await;
+    let m = read(&mut late).await;
+    assert_eq!(m["t"], "page", "the page first: {m}");
+    let m = read(&mut late).await;
+    assert!(m["t"] == "stroke_begin" && m["id"] == "p_1", "peer stroke dropped by the snapshot: {m}");
+}
