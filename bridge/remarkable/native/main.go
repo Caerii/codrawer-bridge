@@ -18,6 +18,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"codrawer-bridge-native/pagewatch"
 )
 
 func main() {
@@ -48,7 +50,11 @@ func main() {
 		HoverHz:            getenvIntDefault("HOVER_HZ", 30),
 		ServeAddr:          os.Getenv("SERVE_ADDR"),
 		RouterOnly:         getenvBoolDefault("ROUTER_ONLY", false),
+		PageWatch:          getenvDefault("PAGE_WATCH", "auto"),
+		XochitlDir:         getenvDefault("XOCHITL_DIR", pagewatch.DefaultDir),
+		PagePollMs:         getenvIntDefault("PAGE_POLL_MS", 1000),
 	}
+	pageDump := false
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
 	flag.StringVar(&cfg.Brush, "brush", cfg.Brush, "Brush name for pen strokes (non-eraser)")
@@ -73,7 +79,21 @@ func main() {
 	flag.IntVar(&cfg.HoverHz, "hover-hz", cfg.HoverHz, "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables")
 	flag.StringVar(&cfg.ServeAddr, "serve", cfg.ServeAddr, "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>")
 	flag.BoolVar(&cfg.RouterOnly, "router-only", cfg.RouterOnly, "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)")
+	flag.StringVar(&cfg.PageWatch, "page-watch", cfg.PageWatch, "Send xochitl's saved page as `page` snapshots: auto (only on an OS boot.sh lists as tested), on, off")
+	flag.StringVar(&cfg.XochitlDir, "xochitl-dir", cfg.XochitlDir, "xochitl's data directory (read-only)")
+	flag.IntVar(&cfg.PagePollMs, "page-poll-ms", cfg.PagePollMs, "How often the page watcher checks xochitl's files (ms)")
+	flag.BoolVar(&pageDump, "page-dump", false, "Print the `page` message for the open document and page, then exit (read-only)")
 	flag.Parse()
+
+	if pageDump {
+		b, err := (&pagewatch.Watcher{Dir: cfg.XochitlDir}).Poll()
+		if err != nil || b == nil {
+			fmt.Fprintf(os.Stderr, "page-dump: %v (no page found)\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s\n", b)
+		return
+	}
 
 	if cfg.ServeAddr != "" {
 		go serveRouter(cfg.ServeAddr)

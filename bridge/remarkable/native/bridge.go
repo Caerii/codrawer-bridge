@@ -10,6 +10,7 @@ package main
 //     contact state is never lost while the network is down, and turns events into encoded
 //     messages on the outbox (outC). A full outbox skips whole strokes, never single events.
 //   - runKeyboardForever (keyboard.go): a keyboard paired to the tablet, producing `key`s.
+//   - runPageWatch (page_watch.go): xochitl's saved page as `page` snapshots (read-only).
 //   - RunBridgeForever: dials the router and writes the outbox until the socket dies, then
 //     reconnects. It also notices a suspend/resume and reconnects at once instead of writing
 //     into a socket that died while the tablet slept.
@@ -63,6 +64,12 @@ type BridgeConfig struct {
 	// can connect to the tablet directly. RouterOnly skips the pen and keyboard.
 	ServeAddr  string
 	RouterOnly bool
+
+	// PageWatch (page_watch.go): auto | on | off. XochitlDir is xochitl's data directory,
+	// PagePollMs how often it is checked.
+	PageWatch  string
+	XochitlDir string
+	PagePollMs int
 }
 
 // termMsg is the subset of a `term` broadcast the typer cares about.
@@ -117,6 +124,14 @@ func RunBridgeForever(cfg BridgeConfig) error {
 	// Terminal replies typed into the tablet (see uinput.go). Text arrives as
 	// coalesced chunks; notes get their own line; the prompt echo is skipped
 	// because the user typed it already.
+	var pages *pageFeed
+	if pageWatchEnabled(cfg.PageWatch, os.Getenv("CODRAWER_OS_TESTED")) {
+		pages = newPageFeed()
+		go runPageWatch(cfg.XochitlDir, time.Duration(max(100, cfg.PagePollMs))*time.Millisecond, pages, cfg.Debug)
+	} else {
+		fmt.Printf("[page] watcher off (PAGE_WATCH=%s, CODRAWER_OS_TESTED=%q)\n", cfg.PageWatch, os.Getenv("CODRAWER_OS_TESTED"))
+	}
+
 	var typeC chan string
 	if cfg.TypeReplies {
 		typeC = make(chan string, 1024)
@@ -166,6 +181,9 @@ func RunBridgeForever(cfg BridgeConfig) error {
 		stopPump := make(chan struct{})
 		if keyC != nil {
 			go pumpKeys(ws, keyC, stopPump)
+		}
+		if pages != nil {
+			go pumpPages(ws, pages, stopPump)
 		}
 		err = writeOutbox(ws, outC)
 		close(stopPump)
