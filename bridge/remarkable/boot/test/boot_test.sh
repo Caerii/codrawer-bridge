@@ -53,7 +53,7 @@ printf 'SERVE_ADDR=\n' > $R/bridge.env
 mkrel() { # mkrel <version> <bad?>
   d=$R/releases/$1
   mkdir -p "$d/units"
-  cp /work/boot/boot.sh /work/boot/install.sh /work/boot/bt-up.sh /work/boot/keyboard-keeper.sh \
+  cp /work/boot/boot.sh /work/boot/install.sh /work/boot/bt-up.sh /work/boot/keyboard-keeper.sh /work/boot/run-bridge.sh \
     /work/boot/bridge.env.example /work/boot/compat.conf /work/boot/codrawer-boot.service "$d/"
   cp /work/boot/units/*.service "$d/units/"
   cp /work/bridge "$d/codrawer_bridge_native"
@@ -130,7 +130,26 @@ sh $R/current/boot.sh rollback > /tmp/out 2>&1 || { cat /tmp/out; fail "rollback
 sh $R/current/boot.sh rollback > /dev/null 2>&1 || fail "roll forward again"
 pass "rollback works without executable bits"
 
-# 9. doctor reports
+# 9. engine switch: run-bridge.sh starts the chosen binary, falls back to go
+d=$R/current
+printf '#!/bin/sh
+echo GO "$@"
+' > /tmp/go.sh
+cp $d/codrawer_bridge_native /tmp/real_go
+cp /tmp/go.sh $d/codrawer_bridge_native; chmod +x $d/codrawer_bridge_native
+out=$(ENGINE= sh $d/run-bridge.sh -x)
+echo "$out" | grep -q '^GO -x$' || fail "default engine is go ($out)"
+out=$(ENGINE=rust sh $d/run-bridge.sh)
+echo "$out" | grep -q 'missing; using go' || fail "rust without its binary falls back ($out)"
+printf '#!/bin/sh
+echo RUST "$@"
+' > $d/codrawer_bridge_rs; chmod +x $d/codrawer_bridge_rs
+out=$(ENGINE=rust sh $d/run-bridge.sh -x)
+echo "$out" | grep -q '^RUST -x$' || fail "ENGINE=rust runs the rust binary ($out)"
+rm $d/codrawer_bridge_rs; cp /tmp/real_go $d/codrawer_bridge_native
+pass "engine switch"
+
+# 10. doctor reports
 sh $R/current/boot.sh doctor > /tmp/out
 grep -q '^release=v8$' /tmp/out && grep -q '^previous=v9$' /tmp/out && grep -q '^healthy=1$' /tmp/out || { cat /tmp/out; fail "doctor"; }
 pass "doctor"

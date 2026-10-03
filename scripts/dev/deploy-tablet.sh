@@ -22,10 +22,20 @@ STAGE="$ROOT/.codrawer/releases/$VERSION"
 echo "[deploy] building release $VERSION"
 mkdir -p "$KEYDIR" "$STAGE/units"
 (cd "$NATIVE" && GOOS=linux GOARCH=arm64 go build -o "$STAGE/codrawer_bridge_native" .)
+# The Rust engine ships alongside (ENGINE=go|rust in bridge.env picks one at start).
+# CODRAWER_SKIP_RUST=1 skips it; a failed Rust build only warns (Go stays the default engine).
+if [ "${CODRAWER_SKIP_RUST:-0}" != 1 ] && command -v cargo > /dev/null; then
+  echo "[deploy] building the rust engine (aarch64-unknown-linux-musl)"
+  if (cd "$ROOT/bridge/remarkable/rust" && cargo build --quiet --release --target aarch64-unknown-linux-musl); then
+    cp "$ROOT/bridge/remarkable/rust/target/aarch64-unknown-linux-musl/release/codrawer_bridge_rs" "$STAGE/"
+  else
+    echo "[deploy] WARN rust build failed; releasing the go engine only"
+  fi
+fi
 TOOL="$ROOT/.codrawer/codrawer-release.exe"
 (cd "$NATIVE" && go build -o "$TOOL" ./cmd/codrawer-release)
 B="$ROOT/bridge/remarkable/boot"
-cp "$B"/boot.sh "$B"/install.sh "$B"/bt-up.sh "$B"/keyboard-keeper.sh "$B"/bridge.env.example \
+cp "$B"/boot.sh "$B"/install.sh "$B"/bt-up.sh "$B"/keyboard-keeper.sh "$B"/run-bridge.sh "$B"/bridge.env.example \
   "$B"/compat.conf "$B"/codrawer-boot.service "$STAGE/"
 cp "$B"/units/*.service "$STAGE/units/"
 if [ ! -f "$KEYDIR/release.key" ]; then
@@ -70,6 +80,7 @@ timeout 200 "${SSH[@]}" "set -e
   cd /home/root/codrawer
   R=releases/$VERSION
   chmod +x \$R/codrawer_bridge_native \$R/*.sh   # scp from Windows drops the executable bit
+  [ -e \$R/codrawer_bridge_rs ] && chmod +x \$R/codrawer_bridge_rs
   [ -f bridge.env ] || cp \$R/bridge.env.example bridge.env
   $ENV_EDIT
   # leftovers of the flat layout (before releases/): scripts at the top level

@@ -397,6 +397,20 @@ function tabletNotice(t: Record<string, string>) {
   console.log('[codrawer] tablet notice:', text, t)
 }
 
+let refusedStreak = 0 // consecutive pairing refusals
+let refusedSince = 0 // performance.now() of the first one
+
+// A copy of this app that keeps being refused while in the background is almost always a stale
+// one (e.g. opened before a new QR with the pairing code), and it still holds the glasses display,
+// so the copy you are looking at cannot get it. Release it by closing this copy. Only when hidden:
+// the copy on screen asks for the code instead and never closes itself.
+function maybeReleaseGlasses() {
+  if (!bridge || document.visibilityState !== 'hidden') return
+  if (refusedStreak < 3 || performance.now() - refusedSince < 45_000) return
+  console.warn('[codrawer] refused while in the background; releasing the glasses for the active copy')
+  void bridge.shutDownPageContainer(0).catch(() => {})
+}
+
 // The router refused us (missing or wrong pairing code): ask once, remember it, reconnect.
 function askPairingCode() {
   if (document.getElementById('pairing')) return // already asking
@@ -953,8 +967,7 @@ function connect() {
   socket = ws
   ws.onopen = () => {
     connected = true
-    retryMs = 800
-    setConn(true)
+    retryMs = refusedStreak > 0 ? retryMs : 800
     lastHeardAt = performance.now()
     routerPings = false
     textDirty = true
@@ -963,6 +976,8 @@ function connect() {
   }
   ws.onclose = () => {
     if (socket !== ws) return
+    // refused for the pairing code: retry slowly (5 s, growing to 30 s) instead of every second
+    if (refusedStreak > 0) retryMs = Math.max(retryMs, Math.min(30_000, 5000 * refusedStreak))
     connected = false
     setConn(false)
     strokeActive = false // a stroke cut off by the disconnect must not hold text updates
@@ -982,6 +997,11 @@ function connect() {
     }
     switch (m.t) {
       case 'hello':
+        // accepted: the router let us in (with or without a code)
+        refusedStreak = 0
+        refusedSince = 0
+        retryMs = 800
+        setConn(true)
         if (m.tablet && typeof m.tablet === 'object') tabletNotice(m.tablet)
         // A router that replays the page (the tablet's) is the source of truth: start from its
         // replay instead of merging it into whatever we had before the disconnect.
@@ -993,7 +1013,12 @@ function connect() {
         }
         break
       case 'error':
-        if (m.code === 'unauthorized') askPairingCode()
+        if (m.code === 'unauthorized') {
+          refusedStreak++
+          if (!refusedSince) refusedSince = performance.now()
+          askPairingCode()
+          maybeReleaseGlasses()
+        }
         break
       case 'ping':
         routerPings = true

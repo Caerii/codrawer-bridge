@@ -45,7 +45,7 @@ start() {
   } > /run/codrawer/env
   # files copied from Windows (scp) arrive without the executable bit; every path through start
   # (first install, activate, rollback, boot) must be able to run them
-  chmod +x "$REL/codrawer_bridge_native" "$REL"/*.sh 2> /dev/null || true
+  chmod +x "$REL/codrawer_bridge_native" "$REL/codrawer_bridge_rs" "$REL"/*.sh 2> /dev/null || true
   for u in $UNITS; do
     cp "$REL/units/$u" "/run/systemd/system/$u"
   done
@@ -92,6 +92,7 @@ doctor() {
   echo "os_changed=$(cat "$STATE/os_changed" 2>/dev/null)"
   echo "stub=$([ -f /etc/systemd/system/codrawer-boot.service ] && echo installed || echo missing)"
   echo "disabled=$([ -e "$ROOT/DISABLED" ] && echo 1 || echo 0)"
+  echo "engine=$(sed -n 's/^ENGINE=//p' "$ROOT/bridge.env" 2>/dev/null | tail -n 1 | grep . || echo go) (rust binary $([ -e "$ROOT/current/codrawer_bridge_rs" ] && echo present || echo absent))"
   for u in $UNITS; do echo "${u%.service}=$(systemctl is-active "$u" 2>/dev/null)"; done
   echo "healthy=$(healthy && echo 1 || echo 0)"
 }
@@ -133,6 +134,7 @@ activate() {
     fi
   fi
   chmod +x "$new/codrawer_bridge_native" "$new"/*.sh
+  [ -e "$new/codrawer_bridge_rs" ] && chmod +x "$new/codrawer_bridge_rs"
   # stay awake through the switch and the health check (autosleep would stall it)
   { echo "codrawer-activate 120000000000" > /sys/power/wake_lock; } 2> /dev/null || true
   old=$(readlink "$ROOT/current" 2>/dev/null || true)
