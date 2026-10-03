@@ -44,6 +44,10 @@ class Session:
     # editing one); a long session just replays more small updates.
     doc_updates: list[str] = field(default_factory=list)
 
+    # The tablet's latest saved page (`page` message from the bridge's page watcher), raw JSON,
+    # replayed to joiners right after hello. This router keeps no live-stroke log to rebase.
+    page_msg: str | None = None
+
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None
 
@@ -69,8 +73,12 @@ async def get_session(session_id: str) -> Session:
 
 
 async def broadcast(session: Session, msg: dict, exclude: WebSocket | None = None) -> None:
+    await broadcast_raw(session, json.dumps(msg, separators=(",", ":"), ensure_ascii=False), exclude)
+
+
+async def broadcast_raw(session: Session, data: str, exclude: WebSocket | None = None) -> None:
+    """Send an already encoded message (e.g. a large `page` snapshot, relayed as received)."""
     dead: list[WebSocket] = []
-    data = json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
     for ws in list(session.clients):
         if exclude is ws:
             continue

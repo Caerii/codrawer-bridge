@@ -435,3 +435,79 @@ func TestPairingCodeRequiredOffMachine(t *testing.T) {
 		t.Fatalf("loopback: %v", m)
 	}
 }
+
+func TestPageSnapshotIsTheNewBase(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	viewer := dial(t, srv, "s1")
+
+	// u_old: drawn before the save (in the file, or erased); u_new: drawn after it
+	send(t, tablet, `{"t":"stroke_begin","id":"u_old","ts":1000}`)
+	send(t, tablet, `{"t":"stroke_pts","id":"u_old","pts":[[0.1,0.1,0.5,1000]]}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_old","ts":1100}`)
+	send(t, tablet, `{"t":"stroke_begin","id":"u_new","ts":3000}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_new","ts":3100}`)
+	page := `{"t":"page","doc":"d","page":"p1","rev":2000,"strokes":[{"id":"1:5","tool":"fineliner","pts":[[0.1,0.1,0.5,0.002]]}]}`
+	send(t, tablet, page)
+	for range 5 {
+		read(t, viewer)
+	}
+	if m := read(t, viewer); m["t"] != "page" || m["page"] != "p1" {
+		t.Fatalf("page not relayed: %v", m)
+	}
+
+	late := dial(t, srv, "s1")
+	got := []string{}
+	for range 3 {
+		m := read(t, late)
+		id, _ := m["id"].(string)
+		got = append(got, m["t"].(string)+":"+id)
+	}
+	if want := "page: stroke_begin:u_new stroke_end:u_new"; strings.Join(got, " ") != want {
+		t.Fatalf("replay\n got %s\nwant %s", strings.Join(got, " "), want)
+	}
+
+	// a page turn replaces the base; ink from before the turn is gone from the replay
+	send(t, tablet, `{"t":"page","doc":"d","page":"p2","rev":4000,"strokes":[]}`)
+	read(t, viewer)
+	late2 := dial(t, srv, "s1")
+	if m := read(t, late2); m["t"] != "page" || m["page"] != "p2" {
+		t.Fatalf("turn: %v", m)
+	}
+	expectQuiet(t, late2, 150*time.Millisecond)
+
+	// a pen source (?replay=0) gets no page either
+	src, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/s1?replay=0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if m := read(t, src); m["t"] != "hello" {
+		t.Fatalf("hello: %v", m)
+	}
+	expectQuiet(t, src, 150*time.Millisecond)
+}
+
+func TestClearDropsThePage(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	viewer := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"page","doc":"d","page":"p1","rev":5,"strokes":[]}`)
+	read(t, viewer)
+	send(t, viewer, `{"t":"clear","ts":6}`)
+	read(t, tablet)
+	expectQuiet(t, dial(t, srv, "s1"), 150*time.Millisecond)
+}
+
+func TestBigPageMessageIsAccepted(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	viewer := dial(t, srv, "s1")
+	pts := strings.Repeat(`[0.12345,0.12345,0.5,0.0025],`, 60000) // ~1.7 MB
+	send(t, tablet, `{"t":"page","doc":"d","page":"p","rev":1,"strokes":[{"id":"1:1","pts":[`+pts+`[0,0,0,0]]}]}`)
+	_ = viewer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, raw, err := viewer.ReadMessage()
+	if err != nil || len(raw) < 1<<20 {
+		t.Fatalf("big page: %d bytes, %v", len(raw), err)
+	}
+}

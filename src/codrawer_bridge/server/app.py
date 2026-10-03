@@ -31,7 +31,7 @@ from codrawer_bridge.protocol.constants import (
 from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
 from .rendering import render_context_patch_png_b64, render_page_png, simplify_polylines
-from .sessions import broadcast, get_session
+from .sessions import broadcast, broadcast_raw, get_session
 from .term_bridge import TermSettings, get_link
 from .viewer_page import render_viewer_html
 
@@ -540,6 +540,8 @@ async def ws(session_id: str, ws: WebSocket):
         asyncio.create_task(agentic_loop(session_id, session))
 
     await ws.send_text(json.dumps({"t": T_HELLO, "session": session_id}, separators=(",", ":")))
+    if session.page_msg is not None and ws.query_params.get("replay") != "0":
+        await ws.send_text(session.page_msg)
     for i in range(0, len(session.doc_updates), 256):
         await ws.send_text(
             json.dumps({"t": "doc_update", "us": session.doc_updates[i : i + 256]}, separators=(",", ":"))
@@ -693,6 +695,12 @@ async def ws(session_id: str, ws: WebSocket):
                         _spawn(link.answer(text))
                 continue
 
+            if t == "page":
+                # The tablet's saved page: keep the latest for joiners, relay as received.
+                session.page_msg = raw
+                await broadcast_raw(session, raw, exclude=ws)
+                continue
+
             if t == "doc_update":
                 u = msg.get("u")
                 if isinstance(u, str) and u:
@@ -721,6 +729,7 @@ async def ws(session_id: str, ws: WebSocket):
                 continue
 
             if t == T_CLEAR:
+                session.page_msg = None
                 session.stroke_points4.clear()
                 session.stroke_meta.clear()
                 session.stroke_last_point4.clear()

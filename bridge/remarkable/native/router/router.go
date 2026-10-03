@@ -1,7 +1,7 @@
 // Package router is the stroke-only session router (docs/protocol.md), small enough to run on
 // the Paper Pro inside the bridge binary so the glasses app can connect to the tablet directly.
 //
-// Scope: hello, stroke_*, key, cursor, clear, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
+// Scope: hello, stroke_*, key, cursor, clear, page, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
 // (term_prompt/term_answer) stay on the desktop Python router; here they are dropped, and a
 // term_* request gets a one-line `term` status so the client is not left waiting.
 //
@@ -15,6 +15,9 @@
 //     can detect a half-open socket on its side. hello carries "replay":true.
 //   - A replay is built outside the session lock; live messages for that client are held
 //     until its replay is queued, so a big page never freezes the stream for everyone else.
+//   - The tablet's saved page ({"t":"page"}, the bridge's page watcher) is the page's base: the
+//     router keeps the latest, drops live strokes that began before its rev (they are in it, or
+//     were erased), and replays it before the live strokes recorded after it.
 //   - A pen source can join with ?replay=0 (the bridge does). When a client leaves mid-stroke
 //     its open strokes are ended for everyone.
 //
@@ -47,9 +50,10 @@ const (
 	writeWait       = 5 * time.Second
 	replayPts       = 256 // points per replayed stroke_pts message
 	maxStrokes      = 4000
-	maxPoints       = 150_000 // page memory bound (~90 B/point, ~14 MB); oldest strokes go first
-	maxStrokePoints = 20_000  // one stroke never holds more (a pen resting on the glass)
-	maxMessage      = 1 << 20
+	maxPoints       = 150_000  // page memory bound (~90 B/point, ~14 MB); oldest strokes go first
+	maxStrokePoints = 20_000   // one stroke never holds more (a pen resting on the glass)
+	maxMessage      = 16 << 20 // a `page` snapshot of a dense page is a few MB
+
 	docCompactAt    = 256              // doc_update log entries before asking a client for a snapshot
 	docReplayN      = 256              // updates per replayed doc_update message
 	docCompactAfter = 10 * time.Second // re-ask another writer if the asked one never answers
@@ -203,6 +207,8 @@ type envelope struct {
 	ID  string            `json:"id"`
 	Pts []json.RawMessage `json:"pts"`
 	U   string            `json:"u"`
+	Ts  int64             `json:"ts"`  // stroke_begin: when the stroke started (ms)
+	Rev int64             `json:"rev"` // page: the snapshot covers everything up to this time (ms)
 }
 
 func (r *Router) readLoop(s *session, c *client) {
@@ -237,6 +243,12 @@ func (r *Router) readLoop(s *session, c *client) {
 		case "clear":
 			s.mu.Lock()
 			s.resetLocked()
+			s.page = nil
+			s.broadcastLocked(raw, c)
+			s.mu.Unlock()
+		case "page":
+			s.mu.Lock()
+			s.setPageLocked(m, raw)
 			s.broadcastLocked(raw, c)
 			s.mu.Unlock()
 		case "doc_update":
@@ -275,7 +287,9 @@ type session struct {
 	id      string
 	mu      sync.Mutex
 	clients map[*client]bool
-	// page: strokes since the last clear, in arrival order, for replay to late joiners.
+	// page: the tablet's latest saved page (a `page` snapshot, or nil), then the live strokes
+	// recorded after it, in arrival order, for replay to late joiners.
+	page    []byte
 	order   []string
 	strokes map[string]*stroke
 	points  int
@@ -287,6 +301,7 @@ type session struct {
 }
 
 type stroke struct {
+	ts    int64             // stroke_begin's ts (0 if it had none)
 	begin []byte            // the stroke_begin message as received
 	pts   []json.RawMessage // every point, as received
 	ended bool
@@ -304,7 +319,7 @@ func (s *session) recordLocked(m envelope, raw []byte, from *client) {
 		} else {
 			s.order = append(s.order, m.ID)
 		}
-		s.strokes[m.ID] = &stroke{begin: append([]byte(nil), raw...), owner: from}
+		s.strokes[m.ID] = &stroke{ts: m.Ts, begin: append([]byte(nil), raw...), owner: from}
 	case "stroke_pts":
 		st := s.strokes[m.ID]
 		if st == nil {
@@ -337,10 +352,31 @@ func (s *session) resetLocked() {
 	s.points = 0
 }
 
+// setPageLocked makes a `page` snapshot the page's new base. The snapshot already holds every
+// stroke the tablet saved up to its rev (erased ones are simply absent), so the live log keeps
+// only strokes that began after rev: ink drawn since the save, not yet in any file.
+func (s *session) setPageLocked(m envelope, raw []byte) {
+	s.page = append([]byte(nil), raw...)
+	order := s.order[:0:0]
+	for _, id := range s.order {
+		st := s.strokes[id]
+		if st != nil && st.ts > m.Rev {
+			order = append(order, id)
+			continue
+		}
+		if st != nil {
+			s.points -= len(st.pts)
+		}
+		delete(s.strokes, id)
+	}
+	s.order = order
+}
+
 // pageSnapshot is the page at one instant. It only copies slice headers: point slices are
 // append-only and a re-begun stroke gets a new struct, so the elements it covers never change
 // after the lock is released.
 type pageSnapshot struct {
+	page    []byte // the latest `page` message (never modified once stored), or nil
 	strokes []strokeSnap
 	doc     []string
 }
@@ -353,7 +389,7 @@ type strokeSnap struct {
 }
 
 func (s *session) snapshotLocked() pageSnapshot {
-	snap := pageSnapshot{doc: s.docLog[:len(s.docLog):len(s.docLog)]}
+	snap := pageSnapshot{page: s.page, doc: s.docLog[:len(s.docLog):len(s.docLog)]}
 	for _, id := range s.order {
 		if st := s.strokes[id]; st != nil {
 			snap.strokes = append(snap.strokes, strokeSnap{id, st.begin, st.pts[:len(st.pts):len(st.pts)], st.ended})
@@ -365,6 +401,9 @@ func (s *session) snapshotLocked() pageSnapshot {
 // messages renders the snapshot as the messages a client would have seen live.
 func (snap pageSnapshot) messages() [][]byte {
 	var out [][]byte
+	if snap.page != nil {
+		out = append(out, snap.page) // the base first, then the ink drawn since
+	}
 	for _, st := range snap.strokes {
 		out = append(out, st.begin)
 		for i := 0; i < len(st.pts); i += replayPts {
