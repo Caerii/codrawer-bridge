@@ -9,6 +9,10 @@
  *              │ canvas  288×144    │  │ loupe 192×144│   live ink in the loupe, the page in
  *              └────────────────────┘  └──────────────┘   the canvas, a 4-row status strip
  *              status / transcript (4 rows)                underneath
+ *     wide     ┌────────────────────┬────────────────────┐   the fit view across the full width:
+ *              │ canvas, left half  │ canvas, right half │   two 288×144 tiles (the loupe's
+ *              └────────────────────┴────────────────────┘   container carries the right one)
+ *              status / transcript (4 rows)
  *     text     one full-screen text container (9 rows): the transcript
  *     edit     the same full-screen text container, showing the document editor
  *
@@ -33,7 +37,10 @@ export const TEXT_ID = 2
 export const LOUPE_ID = 3
 
 /** Contextual-menu item ids (non-zero, unique); glasses/input.ts maps them to actions. */
-export const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10 } as const
+export const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10, wideFit: 11 } as const
+
+/** Width of each of the wide view's two tiles: the SDK's largest image container, half the screen. */
+export const WIDE_TILE_W = SCREEN_W / 2
 
 /** The contextual menu (long-press). Two entries name the layout they lead to. */
 function menu(mode: PageMode): MenuContainerProperty {
@@ -45,6 +52,7 @@ function menu(mode: PageMode): MenuContainerProperty {
       new MenuItemProperty({ itemName: mode === 'edit' ? 'Leave editor' : 'Edit document', itemID: MENU.editDoc }),
       new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
       new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
+      new MenuItemProperty({ itemName: 'Wide fit on / off', itemID: MENU.wideFit }),
       new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
       new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
       new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
@@ -56,10 +64,11 @@ function menu(mode: PageMode): MenuContainerProperty {
 /**
  * The container set for a layout, ready for `createStartUpPageContainer` or
  * `rebuildPageContainer`. `text` supplies the full-screen text's first content (text and edit
- * layouts only; it is called only for them). The canvas layout's status strip starts as
- * "codrawer: connecting…" until the render loop sends the real line.
+ * layouts only; it is called only for them). `wide` lays the canvas layout out as the wide fit
+ * view. The canvas layout's status strip starts as "codrawer: connecting…" until the render loop
+ * sends the real line.
  */
-export function buildPage(mode: PageMode, text: () => string) {
+export function buildPage(mode: PageMode, text: () => string, wide = false) {
   const menuObject = menu(mode)
   if (mode === 'text' || mode === 'edit') {
     const textObject = [
@@ -79,6 +88,7 @@ export function buildPage(mode: PageMode, text: () => string) {
   }
   // canvas layout: canvas on the left, loupe flush right, both at the top; status text below
   const top = 4
+  if (wide) return wideCanvasPage(top, menuObject)
   const imageObject = [
     new ImageContainerProperty({
       xPosition: 8,
@@ -104,6 +114,32 @@ export function buildPage(mode: PageMode, text: () => string) {
     )
   }
   const textTop = top + Math.max(IMG_H, HAS_LOUPE ? LOUPE_H : 0) + 8
+  const textObject = [
+    new TextContainerProperty({
+      xPosition: 8,
+      yPosition: textTop,
+      width: SCREEN_W - 16,
+      height: Math.max(24, SCREEN_H - textTop - 4),
+      containerID: TEXT_ID,
+      containerName: 'status',
+      content: 'codrawer: connecting…',
+      textColor: 3,
+      isEventCapture: 1,
+      zOrderIndex: 2,
+    }),
+  ]
+  return { containerTotalNum: imageObject.length + textObject.length, imageObject, textObject, menuObject }
+}
+
+/**
+ * The wide fit layout: two tiles edge to edge across the screen (canvas container on the left,
+ * the loupe's container on the right, so container ids stay fixed), the status strip below.
+ */
+function wideCanvasPage(top: number, menuObject: MenuContainerProperty) {
+  const tile = (x: number, containerID: number, containerName: string, zOrderIndex: number) =>
+    new ImageContainerProperty({ xPosition: x, yPosition: top, width: WIDE_TILE_W, height: IMG_H, containerID, containerName, zOrderIndex })
+  const imageObject = [tile(0, IMG_ID, 'canvas', 1), tile(WIDE_TILE_W, LOUPE_ID, 'loupe', 3)]
+  const textTop = top + IMG_H + 8
   const textObject = [
     new TextContainerProperty({
       xPosition: 8,

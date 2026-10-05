@@ -8,6 +8,7 @@
  *                           draws it on the current theme
  *   Copy invite link        this page joined to the same session (phone/invite.ts)
  *   Glasses diagnostics     the Glasses panel (also the toolbar's glasses button)
+ *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
  *   Dark theme              paper or dark (also the toolbar's moon/sun button)
  *
  * Not here yet: "Undo my last stroke" and "Clear my strokes". Removing a stroke for everyone needs
@@ -22,6 +23,7 @@
 import { applyAction } from '../actions'
 import { WS_URL } from '../config'
 import { link } from '../link'
+import { glasses } from '../state'
 import { myColor, setMyColor } from './draw'
 import { inviteUrl, isLoopback } from './invite'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
@@ -66,6 +68,7 @@ function focusables(): HTMLButtonElement[] {
 /** Sync the toggles and the colour swatches with the app's state. */
 function refresh() {
   item('diag').setAttribute('aria-checked', String(diagnosticsShown()))
+  item('wide').setAttribute('aria-checked', String(glasses.wideFit))
   item('dark').setAttribute('aria-checked', String(stage.theme === 'dark'))
   for (const s of Array.from(swatches.querySelectorAll<HTMLButtonElement>('.swatch'))) s.setAttribute('aria-checked', String(s.dataset.color === myColor()))
   const invite = inviteUrl(location.href, WS_URL, link.code)
@@ -178,6 +181,9 @@ export function setupMenu() {
     else if (act === 'invite') void copyInvite()
     else if (act === 'diag') {
       toggleDiagnostics()
+      refresh()
+    } else if (act === 'wide') {
+      applyAction('toggle-wide')
       refresh()
     } else if (act === 'dark') {
       toggleTheme()

@@ -31,6 +31,7 @@ const MENU_ACTION: Record<number, Action> = {
   [MENU.clearAi]: 'clear-ai',
   [MENU.toggleAi]: 'toggle-ai',
   [MENU.toggleMode]: 'toggle-mode',
+  [MENU.wideFit]: 'toggle-wide',
   [MENU.cycleHighlight]: 'cycle-highlight',
   [MENU.zoomIn]: 'zoom-in',
   [MENU.zoomOut]: 'zoom-out',

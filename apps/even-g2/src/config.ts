@@ -160,6 +160,15 @@ export const PAGE_ASPECT = 1620 / 2160
 
 /** Canvas framing (`?mode=follow|full`): crop around the pen, or the whole inked page. */
 export const INITIAL_MODE: ViewMode = (cfg('mode', 'follow') as ViewMode) === 'full' ? 'full' : 'follow'
+
+/**
+ * Wide fit (`?wide=1`): in the fit view the glasses canvas spans the screen's full width as two
+ * 288×144 image tiles side by side (288×144 is the SDK's largest image container, half the 576-px
+ * screen), and the loupe gives way. Twice the width costs twice the sends (~200 ms each, ADR 006),
+ * so it suits a page you look at more than one you write into. Remembered; toggled from the
+ * glasses' menu and the phone's ⋯ menu.
+ */
+export const INITIAL_WIDE_FIT = cfg('wide', '0') === '1'
 /** Emphasis (`?highlight=all|user|ai`). */
 export const INITIAL_HIGHLIGHT: Highlight = (cfg('highlight', 'all') as Highlight) || 'all'
 /** Follow window width as a fraction of the page width (`?window=`). */

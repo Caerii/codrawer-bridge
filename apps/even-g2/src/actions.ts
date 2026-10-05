@@ -13,7 +13,7 @@
  * (glasses/input.ts handles both).
  */
 import { remember } from './config'
-import { setPageMode } from './glasses/page'
+import { setPageMode, syncWideLayout } from './glasses/page'
 import { link } from './link'
 import { followGlasses } from './phone/views'
 import { stage } from './phone/screen'
@@ -27,6 +27,7 @@ export type Action =
   | 'clear-ai'
   | 'toggle-ai'
   | 'toggle-mode'
+  | 'toggle-wide'
   | 'cycle-highlight'
   | 'zoom-in'
   | 'zoom-out'
@@ -63,12 +64,19 @@ export function applyAction(action: Action) {
     if (glasses.bridge) void setPageMode(glasses.pageMode === 'text' ? 'canvas' : 'text')
     return
   } else if (action === 'toggle-mode') view.mode = view.mode === 'follow' ? 'full' : 'follow'
+  else if (action === 'toggle-wide') {
+    // turning wide fit on shows it: it is a way of fitting the page
+    glasses.wideFit = !glasses.wideFit
+    remember('wide', glasses.wideFit ? '1' : '0')
+    if (glasses.wideFit) view.mode = 'full'
+  }
   else if (action === 'cycle-highlight') view.highlight = view.highlight === 'all' ? 'user' : view.highlight === 'user' ? 'ai' : 'all'
   else if (action === 'zoom-in') view.window = Math.max(MIN_WINDOW, view.window * ZOOM_IN)
   else if (action === 'zoom-out') view.window = Math.min(MAX_WINDOW, view.window * ZOOM_OUT)
-  if (action === 'toggle-mode' || action === 'zoom-in' || action === 'zoom-out') {
+  if (action === 'toggle-mode' || action === 'toggle-wide' || action === 'zoom-in' || action === 'zoom-out') {
     followGlasses() // the phone follows the ring too
   }
+  if (action === 'toggle-mode' || action === 'toggle-wide') syncWideLayout()
   dirty.canvas = true
   dirty.loupe = true
   dirty.flushCanvas = true // force a canvas refresh for the new view

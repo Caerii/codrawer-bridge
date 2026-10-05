@@ -17,10 +17,10 @@
  */
 import { ImageRawDataUpdate, ImageRawDataUpdateResult, TextContainerUpgrade } from '@evenrealities/even_hub_sdk'
 import { BINARIZE, CANVAS_MIN_MS, ENC, FMT, HAS_LOUPE, IMG_H, IMG_W, INFLIGHT, INITIAL_LOUPE_ZOOM, LOUPE_CAM, LOUPE_H, LOUPE_MIN_MS, LOUPE_W, remember } from '../config'
-import { glasses, store, view } from '../state'
+import { glasses, isWide, store, view } from '../state'
 import { LoupeCamera, rasterize, type RasterOptions } from '../strokes'
 import { makeEncoder } from './encode'
-import { IMG_ID, LOUPE_ID, TEXT_ID } from './layout'
+import { IMG_ID, LOUPE_ID, TEXT_ID, WIDE_TILE_W } from './layout'
 import { loupeBaseWindow, writingContext, zoomForBoxWidth } from './loupe'
 import { FrameScheduler, type Frame, type Slot } from './scheduler'
 import { TextPusher } from './text'
@@ -38,8 +38,25 @@ function surface(id: string, w: number, h: number): CanvasRenderingContext2D {
   return c.getContext('2d', { willReadFrequently: true })!
 }
 
-/** The canvas container's surface. */
+/** The canvas container's surface (twice as wide in the wide fit view; see {@link drawCanvas}). */
 export const canvasCtx = surface('preview', IMG_W, IMG_H)
+
+/** Offscreen copies of the wide view's two halves, encoded as the two tiles. */
+function tileCtx(): CanvasRenderingContext2D {
+  const c = document.createElement('canvas')
+  c.width = WIDE_TILE_W
+  c.height = IMG_H
+  return c.getContext('2d', { willReadFrequently: true })!
+}
+const leftTile = tileCtx()
+const rightTile = tileCtx()
+
+/** Copy half of the wide canvas surface (`half` 0 left, 1 right) into its tile. */
+function cutTile(tile: CanvasRenderingContext2D, half: 0 | 1): CanvasRenderingContext2D {
+  tile.globalCompositeOperation = 'copy'
+  tile.drawImage(canvasCtx.canvas, half * WIDE_TILE_W, 0, WIDE_TILE_W, IMG_H, 0, 0, WIDE_TILE_W, IMG_H)
+  return tile
+}
 /** The loupe container's surface. */
 export const loupeCtx = surface('loupe', LOUPE_W, LOUPE_H)
 
@@ -85,6 +102,13 @@ const encode = makeEncoder({ fmt: FMT, enc: ENC, binarize: BINARIZE })
  * would show).
  */
 export function drawCanvas() {
+  if (isWide()) {
+    // the whole page across both tiles; no loupe, so no marker
+    if (canvasCtx.canvas.width !== 2 * WIDE_TILE_W) surface('preview', 2 * WIDE_TILE_W, IMG_H)
+    rasterize(canvasCtx, store, { ...view, width: 2 * WIDE_TILE_W })
+    return
+  }
+  if (canvasCtx.canvas.width !== IMG_W) surface('preview', IMG_W, IMG_H)
   const marked = HAS_LOUPE && LOUPE_CAM && view.mode === 'full'
   rasterize(canvasCtx, store, marked ? { ...view, marker: loupeCam.rect() } : view)
 }
@@ -94,9 +118,14 @@ export function drawLoupe() {
   rasterize(loupeCtx, store, loupeOpts())
 }
 
-/** The canvas surface, encoded. */
+/** The canvas surface, encoded (in the wide fit view, its left tile). */
 export function canvasFrame(): Frame {
-  return encode(canvasCtx, IMG_W, IMG_H)
+  return isWide() ? encode(cutTile(leftTile, 0), WIDE_TILE_W, IMG_H) : encode(canvasCtx, IMG_W, IMG_H)
+}
+
+/** The wide fit view's right tile, encoded; it goes to the loupe's container (glasses/layout.ts). */
+export function rightTileFrame(): Frame {
+  return encode(cutTile(rightTile, 1), WIDE_TILE_W, IMG_H)
 }
 
 /** A loupe frame drawn and encoded now (the scheduler's just-in-time recipe). */

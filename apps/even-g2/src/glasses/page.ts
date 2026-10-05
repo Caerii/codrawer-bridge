@@ -24,10 +24,13 @@ import { editor, saveDoc } from '../doc/document'
 import { renderText } from '../hud/render'
 import { link } from '../link'
 import { showStatus } from '../phone/panel'
-import { dirty, glasses, hud } from '../state'
+import { dirty, glasses, hud, isWide } from '../state'
 import { scheduler, textPusher } from './display'
 import { buildPage, IMG_ID, LOUPE_ID, TEXT_ID, type PageMode } from './layout'
 import { runProbe } from './probe'
+
+/** Whether the page on the glasses was built as the wide fit layout. */
+let builtWide = false
 
 /** Ask for a fresh canvas, loupe and status line (after the page was (re)built). */
 function redrawAll() {
@@ -42,8 +45,8 @@ function redrawAll() {
  * document first; leaving it saves unsaved edits and closes its command line. Without glasses the
  * mode still changes (the phone's Glasses panel shows its text).
  */
-export async function setPageMode(mode: PageMode) {
-  if (mode === glasses.pageMode) return
+export async function setPageMode(mode: PageMode, rebuild = false) {
+  if (mode === glasses.pageMode && !rebuild) return
   if (mode === 'edit' && glasses.pageMode !== 'edit') saveDoc('enter')
   if (glasses.pageMode === 'edit' && mode !== 'edit') {
     if (editor.dirty) saveDoc('leave')
@@ -60,7 +63,8 @@ export async function setPageMode(mode: PageMode) {
   // never rebuild the page under an image update that is still on the wire
   while (scheduler.busy) await new Promise((r) => setTimeout(r, 10))
   scheduler.forgetShown() // the rebuild blanks the containers
-  const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode, renderText)))
+  builtWide = isWide()
+  const ok = await b.rebuildPageContainer(new RebuildPageContainer(buildPage(mode, renderText, builtWide)))
   console.log('[codrawer] page mode', mode, ok ? 'ok' : 'rebuild failed')
   textPusher.forget() // the rebuild carried fresh content; resend on next change
   if (mode === 'canvas') {
@@ -72,12 +76,21 @@ export async function setPageMode(mode: PageMode) {
 }
 
 /**
+ * Rebuild the canvas page if the wide fit view should now show and the page was built without it,
+ * or the other way round (wide fit toggled, or the ring switched follow ↔ fit while it is on).
+ */
+export function syncWideLayout() {
+  if (glasses.bridge && glasses.pageMode === 'canvas' && isWide() !== builtWide) void setPageMode('canvas', true)
+}
+
+/**
  * Create our page (or rebuild the one left behind) and subscribe to glasses input. Resolves false
  * if the glasses would not take it. The first few raw events are logged: their shape is the SDK
  * fact most often needed when input misbehaves.
  */
 async function initGlasses(b: EvenAppBridge, onEvent: (event: EvenHubEvent) => void): Promise<boolean> {
-  const page = buildPage(glasses.pageMode, renderText)
+  builtWide = isWide()
+  const page = buildPage(glasses.pageMode, renderText, builtWide)
   const result = await b.createStartUpPageContainer(new CreateStartUpPageContainer(page))
   if (result !== StartUpPageCreateResult.success) {
     // A page already exists (reopened from the Even Hub tab, or a hot reload): rebuild it in

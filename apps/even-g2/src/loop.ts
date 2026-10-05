@@ -15,15 +15,18 @@
  * 4. Text: when dirty (or when the typing view just expired), render it, show it in the phone's
  *    Glasses panel and offer it to the glasses; a deferred offer stays dirty for the next tick.
  * 5. The document autosaves 2 s after its last edit.
+ *
+ * In the wide fit view (config.ts INITIAL_WIDE_FIT) there is no loupe: the canvas is the only view,
+ * so it goes as with no loupe, as two tiles (the right one through the loupe's container).
  */
 import { CANVAS_LULL_MS, CANVAS_MIN_MS, HAS_LOUPE } from './config'
 import { autosaveIfDue } from './doc/document'
-import { canvasFrame, drawCanvas, drawLoupe, loupeFrame, scheduler, textPusher } from './glasses/display'
+import { canvasFrame, drawCanvas, drawLoupe, loupeFrame, rightTileFrame, scheduler, textPusher } from './glasses/display'
 import { isTyping, renderText } from './hud/render'
 import { link } from './link'
 import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
-import { dirty, glasses, hud, ink, store } from './state'
+import { dirty, glasses, hud, ink, isWide, store } from './state'
 
 let wasTyping = false
 let canvasUnsent = false // the canvas surface changed since the glasses last got it
@@ -38,6 +41,8 @@ export function tick() {
   const now = performance.now()
   link.checkLiveness(now)
 
+  const wide = isWide() // the wide fit view: no loupe; the canvas is two tiles
+  if (wide) dirty.loupe = false
   if (HAS_LOUPE && dirty.loupe) {
     dirty.loupe = false
     if (glasses.bridge) scheduler.want('loupe', loupeFrame) // drawn and encoded when the link is free
@@ -49,13 +54,16 @@ export function tick() {
     drawCanvas()
     canvasUnsent = true
   }
-  const canvasDue = HAS_LOUPE
+  const canvasDue = HAS_LOUPE && !wide
     ? dirty.flushCanvas && !ink.active && now - ink.lastAt >= CANVAS_LULL_MS
     : dirty.flushCanvas || now - scheduler.startedAt('canvas') >= CANVAS_MIN_MS
   if (canvasUnsent && canvasDue) {
     canvasUnsent = false
     dirty.flushCanvas = false
-    if (glasses.bridge) scheduler.offer('canvas', canvasFrame())
+    if (glasses.bridge) {
+      scheduler.offer('canvas', canvasFrame())
+      if (wide) scheduler.offer('loupe', rightTileFrame()) // the right tile rides the loupe's container
+    }
   }
 
   const typingNow = isTyping()

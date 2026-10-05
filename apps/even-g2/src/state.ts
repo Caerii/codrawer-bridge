@@ -16,7 +16,7 @@
 import type { EvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { StrokeStore, type RasterOptions } from './strokes'
 import type { PageMode } from './glasses/layout'
-import { IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WINDOW, PAGE_ASPECT, SHOW_AI } from './config'
+import { IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WIDE_FIT, INITIAL_WINDOW, PAGE_ASPECT, SHOW_AI } from './config'
 
 /**
  * The session's page: every stroke we know of, on its layer (user, peer, ai). Written by the
@@ -98,6 +98,17 @@ export const glasses = {
   bridge: null as EvenAppBridge | null,
   /** The page layout: canvas + loupe + status strip, full-screen text, or the editor. */
   pageMode: INITIAL_PAGE_MODE as PageMode,
+  /** Wide fit is on (config.ts INITIAL_WIDE_FIT); it shows only in the fit view, see {@link isWide}. */
+  wideFit: INITIAL_WIDE_FIT,
   /** One line about the glasses for the phone's Glasses panel. */
   status: 'waiting for the Even bridge…',
+}
+
+/**
+ * Whether the glasses show the wide fit view now: wide fit is on, the canvas frames the whole page
+ * (fit), and the page is in the canvas layout. The layout, the render loop and the surfaces all
+ * follow this one predicate.
+ */
+export function isWide(): boolean {
+  return glasses.wideFit && view.mode === 'full' && glasses.pageMode === 'canvas'
 }
