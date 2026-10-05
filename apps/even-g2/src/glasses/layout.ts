@@ -37,28 +37,33 @@ export const TEXT_ID = 2
 export const LOUPE_ID = 3
 
 /** Contextual-menu item ids (non-zero, unique); glasses/input.ts maps them to actions. */
-export const MENU = { newDrawing: 1, toggleAi: 2, toggleMode: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10, wideFit: 11 } as const
+export const MENU = { newDrawing: 1, toggleAi: 2, cycleView: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10 } as const
+
+/**
+ * The host refuses a page whose menu has more than 10 items (`TOO_MANY_MENU_ITEMS`: create and
+ * rebuild both fail, so the glasses show nothing). Fold new entries into existing ones.
+ */
+export const MAX_MENU_ITEMS = 10
 
 /** Width of each of the wide view's two tiles: the SDK's largest image container, half the screen. */
 export const WIDE_TILE_W = SCREEN_W / 2
 
 /** The contextual menu (long-press). Two entries name the layout they lead to. */
 function menu(mode: PageMode): MenuContainerProperty {
-  return new MenuContainerProperty({
-    menuItems: [
-      new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
-      new MenuItemProperty({ itemName: 'Send drawing to agent', itemID: MENU.sendDrawing }),
-      new MenuItemProperty({ itemName: mode === 'text' ? 'Canvas view' : 'Text view', itemID: MENU.textView }),
-      new MenuItemProperty({ itemName: mode === 'edit' ? 'Leave editor' : 'Edit document', itemID: MENU.editDoc }),
-      new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
-      new MenuItemProperty({ itemName: 'Follow / fit page', itemID: MENU.toggleMode }),
-      new MenuItemProperty({ itemName: 'Wide fit on / off', itemID: MENU.wideFit }),
-      new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
-      new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
-      new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
-      new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
-    ],
-  })
+  const menuItems = [
+    new MenuItemProperty({ itemName: 'New drawing', itemID: MENU.newDrawing }),
+    new MenuItemProperty({ itemName: 'Send drawing to agent', itemID: MENU.sendDrawing }),
+    new MenuItemProperty({ itemName: mode === 'text' ? 'Canvas view' : 'Text view', itemID: MENU.textView }),
+    new MenuItemProperty({ itemName: mode === 'edit' ? 'Leave editor' : 'Edit document', itemID: MENU.editDoc }),
+    new MenuItemProperty({ itemName: 'Toggle AI ghost', itemID: MENU.toggleAi }),
+    new MenuItemProperty({ itemName: 'View: follow / fit / wide', itemID: MENU.cycleView }),
+    new MenuItemProperty({ itemName: 'Cycle emphasis', itemID: MENU.cycleHighlight }),
+    new MenuItemProperty({ itemName: 'Zoom in', itemID: MENU.zoomIn }),
+    new MenuItemProperty({ itemName: 'Zoom out', itemID: MENU.zoomOut }),
+    new MenuItemProperty({ itemName: 'Clear AI ink', itemID: MENU.clearAi }),
+  ]
+  if (menuItems.length > MAX_MENU_ITEMS) throw new Error(`glasses menu has ${menuItems.length} items; the host allows ${MAX_MENU_ITEMS}`)
+  return new MenuContainerProperty({ menuItems })
 }
 
 /**

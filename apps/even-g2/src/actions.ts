@@ -28,6 +28,7 @@ export type Action =
   | 'toggle-ai'
   | 'toggle-mode'
   | 'toggle-wide'
+  | 'cycle-view'
   | 'cycle-highlight'
   | 'zoom-in'
   | 'zoom-out'
@@ -64,7 +65,18 @@ export function applyAction(action: Action) {
     if (glasses.bridge) void setPageMode(glasses.pageMode === 'text' ? 'canvas' : 'text')
     return
   } else if (action === 'toggle-mode') view.mode = view.mode === 'follow' ? 'full' : 'follow'
-  else if (action === 'toggle-wide') {
+  else if (action === 'cycle-view') {
+    // the glasses menu's one view entry: follow → fit → wide fit → follow
+    if (view.mode === 'follow') {
+      view.mode = 'full'
+      glasses.wideFit = false
+    } else if (!glasses.wideFit) glasses.wideFit = true
+    else {
+      glasses.wideFit = false
+      view.mode = 'follow'
+    }
+    remember('wide', glasses.wideFit ? '1' : '0')
+  } else if (action === 'toggle-wide') {
     // turning wide fit on shows it: it is a way of fitting the page
     glasses.wideFit = !glasses.wideFit
     remember('wide', glasses.wideFit ? '1' : '0')
@@ -73,10 +85,10 @@ export function applyAction(action: Action) {
   else if (action === 'cycle-highlight') view.highlight = view.highlight === 'all' ? 'user' : view.highlight === 'user' ? 'ai' : 'all'
   else if (action === 'zoom-in') view.window = Math.max(MIN_WINDOW, view.window * ZOOM_IN)
   else if (action === 'zoom-out') view.window = Math.min(MAX_WINDOW, view.window * ZOOM_OUT)
-  if (action === 'toggle-mode' || action === 'toggle-wide' || action === 'zoom-in' || action === 'zoom-out') {
+  if (action === 'toggle-mode' || action === 'toggle-wide' || action === 'cycle-view' || action === 'zoom-in' || action === 'zoom-out') {
     followGlasses() // the phone follows the ring too
   }
-  if (action === 'toggle-mode' || action === 'toggle-wide') syncWideLayout()
+  if (action === 'toggle-mode' || action === 'toggle-wide' || action === 'cycle-view') syncWideLayout()
   dirty.canvas = true
   dirty.loupe = true
   dirty.flushCanvas = true // force a canvas refresh for the new view
