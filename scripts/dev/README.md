@@ -27,3 +27,10 @@ maintainer's LAN, so set both for yours:
 export CODRAWER_TABLET=192.168.1.20   # the tablet's Wi-Fi address (10.11.99.1 over USB)
 export CODRAWER_LAN_IP=192.168.1.10   # this PC's LAN address, which the phone loads the app from
 ```
+
+## Packaging the glasses app for your tablet
+
+`scripts/dev/pack.sh` builds `apps/even-g2/codrawer.ehpk` that starts on your tablet's router
+(`CODRAWER_TABLET`) and may also reach this PC's router (`CODRAWER_LAN_IP`). The Even app enforces
+a package's network whitelist, so a package only reaches the routers it was built for; the pairing
+code is asked for once on the phone and remembered.

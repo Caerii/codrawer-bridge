@@ -82,8 +82,10 @@ test('a recipe is run when the link frees up, not when it is queued', async () =
   assert.deepEqual(sends.map((x) => (x.frame as Uint8Array)[0]), [0, 3])
 })
 
+// Margins are wide (a 300 ms floor, checked at ~40 ms and again after 500 ms) so a busy machine's
+// late timers cannot flip the result; it used to fail now and then with a 60 ms floor.
 test('a slot waits its floor since its last send started', async () => {
-  const { s, sends } = rig({ minMs: { canvas: 60 } })
+  const { s, sends } = rig({ minMs: { canvas: 300 } })
   s.offer('canvas', bytes(1))
   await new Promise((r) => setTimeout(r, 5))
   s.offer('canvas', bytes(2))
@@ -91,7 +93,7 @@ test('a slot waits its floor since its last send started', async () => {
   assert.ok(s.msUntilReady() > 1 && s.msUntilReady() <= 50) // never a longer sleep than 50 ms
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(sends.length, 1)
-  await new Promise((r) => setTimeout(r, 60))
+  await new Promise((r) => setTimeout(r, 500))
   assert.equal(sends.length, 2)
   assert.equal(s.sent.canvas, 2)
   assert.ok(s.rt.canvas >= 0)
