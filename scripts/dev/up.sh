@@ -7,12 +7,14 @@
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT_WIN="$(cygpath -w "$ROOT" 2>/dev/null | sed 's#\\#/#g' || echo "$ROOT")"
+# CODRAWER_LAN_IP: this PC's LAN address (the phone loads the app from it). Maintainer's default.
 LAN_IP="${CODRAWER_LAN_IP:-192.168.50.2}"
 TERM_PORT="${CODRAWER_TERM_PORT:-3456}"
 TERM_TOKEN="${CODRAWER_TERM_TOKEN:-sig-glasses}"
 ROUTER_PORT="${CODRAWER_ROUTER_PORT:-8577}"
 APP_PORT="${CODRAWER_APP_PORT:-5188}"
 SIM_PORT="${CODRAWER_SIM_PORT:-9898}"
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
 LOGS="${CODRAWER_LOGS:-$ROOT/.codrawer/logs}"
 mkdir -p "$LOGS"

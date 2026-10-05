@@ -51,7 +51,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - name: build the Even Hub package
-        run: pnpm exec tsc -p . && pnpm exec vite build && npx --yes @evenrealities/evenhub-cli@0.1.14 pack app.json dist -o codrawer.ehpk
+        run: pnpm exec tsc -p . && pnpm exec vite build && node manifest.mjs && pnpm dlx @evenrealities/evenhub-cli@0.1.14 pack app.packed.json dist -o codrawer.ehpk
       - uses: actions/upload-artifact@v4
         with:
           name: codrawer-ehpk

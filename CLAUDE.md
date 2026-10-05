@@ -17,6 +17,9 @@ hardware half of SIG's GLASS-04 plan (`docs/sig-integration.md`). Decisions live
 
 ## Bring the stack up (desktop, Windows / Git Bash)
 
+`<lan-ip>` is this PC's LAN address and `<tablet-ip>` the tablet's Wi-Fi address. The scripts read
+them from `CODRAWER_LAN_IP` and `CODRAWER_TABLET`; their built-in defaults are the maintainer's LAN.
+
 `scripts/dev/up.sh` does all of this idempotently. By hand:
 
 ```bash
@@ -30,7 +33,7 @@ CODRAWER_MODEL_SERVER_URL= CODRAWER_AI_AUTO_ENABLED=0 CODRAWER_AGENTIC_ENABLED=0
 uv run uvicorn codrawer_bridge.server.app:app --host 0.0.0.0 --port 8577
 
 # 3. glasses app (port 5188; 5173 is another project's Vite). HMR host = this PC's LAN IP.
-cd apps/even-g2 && VITE_HMR_HOST=192.168.50.2 pnpm dev
+cd apps/even-g2 && VITE_HMR_HOST=<lan-ip> pnpm dev
 
 # 4. simulator on its OWN session so tests never touch the real one
 evenhub-simulator --automation-port 9898 "http://localhost:5188/?ws=ws://localhost:8577/ws/simtest"
@@ -38,13 +41,13 @@ evenhub-simulator --automation-port 9898 "http://localhost:5188/?ws=ws://localho
 
 Phone: Even app → Even Hub tab → developer section (top right; unlocked by signing in at
 hub.evenrealities.com with the same account, then force-quitting the app) → Scan QR of
-`http://192.168.50.2:5188` (`evenhub qr --url http://192.168.50.2:5188`).
+`http://<lan-ip>:5188` (`evenhub qr --url http://<lan-ip>:5188`, or `scripts/dev/qr.sh`).
 
-Tablet (`192.168.50.156` on Wi-Fi, `10.11.99.1` on USB, ssh key installed; it sleeps within
+Tablet (`<tablet-ip>` on Wi-Fi, `10.11.99.1` on USB, ssh key installed; it sleeps within
 ~2 minutes and drops SSH — wake it first):
 
-The tablet hosts the stroke router itself (`-serve :8577` in the bridge; the glasses app's packaged
-default is `ws://192.168.50.156:8577/ws/session1`); the desktop router is only needed for AI and
+The tablet hosts the stroke router itself (`-serve :8577` in the bridge; the glasses app connects to
+`ws://<tablet-ip>:8577/ws/session1`, from `?ws=`, a build with `CODRAWER_WS`, or its first-run prompt); the desktop router is only needed for AI and
 `/term` (`CODRAWER_TABLET_UPLINK=1 scripts/dev/up.sh --tablet` points the tablet back at it).
 The tablet autosleeps and drops Wi-Fi when idle, so the phone reconnects once you wake it.
 Everything codrawer runs on the tablet lives in `/home/root/codrawer` (signed releases under
@@ -54,9 +57,9 @@ a cold reboot 2026-10-02). See `docs/investigations/durable-install.md`.
 
 ```bash
 scripts/dev/deploy-tablet.sh            # build, sign, upload, activate (60 s health check, auto-rollback)
-ssh root@192.168.50.156 sh /home/root/codrawer/current/boot.sh doctor     # status
-ssh root@192.168.50.156 sh /home/root/codrawer/current/boot.sh rollback   # previous release
-ssh root@192.168.50.156 "journalctl -u codrawer-bridge -f"
+ssh root@<tablet-ip> sh /home/root/codrawer/current/boot.sh doctor     # status
+ssh root@<tablet-ip> sh /home/root/codrawer/current/boot.sh rollback   # previous release
+ssh root@<tablet-ip> "journalctl -u codrawer-bridge -f"
 ```
 
 After a reMarkable OS update the stub is gone (only `/home` survives): `scripts/dev/tablet-guard.sh`

@@ -80,12 +80,17 @@ function size(key: string, fallback: string, maxW: number, maxH: number): [numbe
 }
 
 // ── The router ────────────────────────────────────────────────────────────────────────────────
-// From the dev server (simulator, QR sideload) the router runs on the same host. A packaged .ehpk
-// has no meaningful host, so the address is baked in at build time (vite.config.ts).
+// From the dev server (simulator, QR sideload) the router is assumed on the same host. A packaged
+// .ehpk has no meaningful host: its default is whatever the build was given (CODRAWER_WS in
+// vite.config.ts), which is nothing unless the person building it set one. With no address at all
+// the phone asks for the tablet's (phone/notices.ts askRouterAddress) and remembers the answer.
 const defaultWs = import.meta.env.DEV ? `ws://${location.hostname || 'localhost'}:8577/ws/session1` : __CODRAWER_WS__
 
-/** The session's WebSocket URL, without the pairing code (`?ws=`). */
-export const WS_URL = cfg('ws', defaultWs)
+/**
+ * The session's WebSocket URL at load, without the pairing code (`?ws=`, else remembered, else the
+ * default above); '' when there is none yet. The link owns it from then on (link.ts `address`).
+ */
+export const INITIAL_WS_URL = cfg('ws', defaultWs)
 
 /**
  * The pairing code a router may require (the tablet's ROUTER_TOKEN): from `?token=` (the QR code

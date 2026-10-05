@@ -11,7 +11,7 @@
     "sim": "evenhub-simulator http://localhost:5188",
     "typecheck": "tsc -p . --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "ehpk": "tsc -p . && vite build && evenhub pack app.json dist -o codrawer.ehpk"
+    "ehpk": "tsc -p . && vite build && node manifest.mjs && evenhub pack app.packed.json dist -o codrawer.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16",

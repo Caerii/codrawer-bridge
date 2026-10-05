@@ -7,6 +7,7 @@
  *   Download page as PNG    the whole page at its own resolution (1620 px wide), as the phone
  *                           draws it on the current theme
  *   Copy invite link        this page joined to the same session (phone/invite.ts)
+ *   Tablet address…         change the router this page connects to (phone/notices.ts)
  *   Glasses diagnostics     the Glasses panel (also the toolbar's glasses button)
  *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
  *   Dark theme              paper or dark (also the toolbar's moon/sun button)
@@ -21,11 +22,11 @@
  * the toolbar or start a stroke on the page under it.
  */
 import { applyAction } from '../actions'
-import { WS_URL } from '../config'
 import { link } from '../link'
 import { glasses } from '../state'
 import { myColor, setMyColor } from './draw'
 import { inviteUrl, isLoopback } from './invite'
+import { askRouterAddress } from './notices'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
 import { stage } from './screen'
 import { diagnosticsShown, toggleDiagnostics, toggleTheme } from './toolbar'
@@ -71,10 +72,11 @@ function refresh() {
   item('wide').setAttribute('aria-checked', String(glasses.wideFit))
   item('dark').setAttribute('aria-checked', String(stage.theme === 'dark'))
   for (const s of Array.from(swatches.querySelectorAll<HTMLButtonElement>('.swatch'))) s.setAttribute('aria-checked', String(s.dataset.color === myColor()))
-  const invite = inviteUrl(location.href, WS_URL, link.code)
+  const invite = link.address ? inviteUrl(location.href, link.address, link.code) : null
   const inviteItem = item('invite')
   inviteItem.setAttribute('aria-disabled', String(invite === null))
-  inviteItem.title = invite === null ? 'Only from a page served over http(s), not the installed app' : isLoopback(WS_URL) ? 'The router is on localhost: the link works on this computer only' : invite
+  inviteItem.title = !link.address ? 'No tablet address yet' : invite === null ? 'Only from a page served over http(s), not the installed app' : isLoopback(link.address) ? 'The router is on localhost: the link works on this computer only' : invite
+  item('address').title = link.address || 'Not set'
 }
 
 // ── The actions ───────────────────────────────────────────────────────────────────────────────
@@ -139,7 +141,7 @@ async function copyText(text: string): Promise<boolean> {
 
 /** "Copy invite link": copy it and say so in the item itself for a moment. */
 async function copyInvite() {
-  const url = inviteUrl(location.href, WS_URL, link.code)
+  const url = link.address ? inviteUrl(location.href, link.address, link.code) : null
   if (!url) return
   const label = item('invite').querySelector('span') as HTMLSpanElement
   const ok = await copyText(url)
@@ -179,6 +181,10 @@ export function setupMenu() {
       item('new').focus()
     } else if (act === 'png') void downloadPng()
     else if (act === 'invite') void copyInvite()
+    else if (act === 'address') {
+      close()
+      askRouterAddress()
+    }
     else if (act === 'diag') {
       toggleDiagnostics()
       refresh()

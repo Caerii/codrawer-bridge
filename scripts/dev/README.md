@@ -16,3 +16,14 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 Simulator automation (`evenhub-simulator --automation-port 9898 …`):
 `curl http://127.0.0.1:9898/api/screenshot/glasses -o shot.png`,
 `curl -X POST http://127.0.0.1:9898/api/input -d '{"action":"click"}'`, `curl 'http://127.0.0.1:9898/api/console?since_id=0'`.
+
+## Addresses
+
+The shell scripts (`deploy-tablet.sh`, `qr.sh`, `up.sh`, `tablet-guard.sh`, `engine-bench.sh`,
+`make-repair-key.sh`) reach the tablet and this PC through two variables. Their defaults are the
+maintainer's LAN, so set both for yours:
+
+```bash
+export CODRAWER_TABLET=192.168.1.20   # the tablet's Wi-Fi address (10.11.99.1 over USB)
+export CODRAWER_LAN_IP=192.168.1.10   # this PC's LAN address, which the phone loads the app from
+```

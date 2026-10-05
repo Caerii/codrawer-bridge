@@ -4,7 +4,9 @@
 #   scripts/dev/qr.sh            # dev server on this PC (live reload)
 #   scripts/dev/qr.sh --probe    # same, running the one-shot link probe
 set -euo pipefail
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
+# CODRAWER_LAN_IP: this PC's LAN address (the phone loads the app from it). Maintainer's default.
 LAN_IP="${CODRAWER_LAN_IP:-192.168.50.2}"
 APP_PORT="${CODRAWER_APP_PORT:-5188}"
 TOKEN=$(timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET" "sed -n 's/^ROUTER_TOKEN=//p' /home/root/codrawer/bridge.env" 2>/dev/null || true)

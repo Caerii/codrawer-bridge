@@ -37,8 +37,8 @@ There is no toggle. Developer Mode is unlocked per account:
    (accounts are created in the phone app; the web hub has no sign-up).
 3. Force-quit the phone app and reopen it. A **developer section** appears in the **top-right of
    the Even Hub tab**; the **Scan QR** button lives there.
-4. Phone on the same Wi-Fi as this desktop (LAN IP `192.168.50.2`, no AP isolation), then
-   `evenhub qr --url http://192.168.50.2:5188` and scan it from the developer section.
+4. Phone on the same Wi-Fi as this desktop (note its LAN IP, `<lan-ip>`; no AP isolation), then
+   `evenhub qr --url http://<lan-ip>:5188` and scan it from the developer section.
 
 ### reMarkable Paper Pro — Developer mode (verified against developer.remarkable.com 2026-09-26)
 
@@ -57,7 +57,7 @@ There is no toggle. Developer Mode is unlocked per account:
 cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .
 scp codrawer_bridge_native root@<PAPER_PRO_IP>:/home/root/codrawer_bridge_native.new
 ssh root@<PAPER_PRO_IP> "chmod +x /home/root/codrawer_bridge_native.new && mv -f /home/root/codrawer_bridge_native.new /home/root/codrawer_bridge_native"
-ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://192.168.50.2:8577/ws/session1 -touch-mode auto"
+ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<lan-ip>:8577/ws/session1 -touch-mode auto"
 ```
 
 ### Desktop firewall (Windows, run once as Administrator)

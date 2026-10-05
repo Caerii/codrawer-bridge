@@ -27,6 +27,12 @@ evenhub-simulator --automation-port 9898 http://localhost:5188
 Config via query string once, then remembered in localStorage: `?ws=ws://<host>:8577/ws/session1`,
 `?mode=follow|full`, `?highlight=all|user|ai`, `?window=0.22`.
 
+When the app has no router address at all (a package built without one, opened without `?ws=`,
+nothing remembered), the phone asks for the tablet's address on first run. It takes an IP
+(`192.168.1.20`), `host:port`, or a full `ws://` URL, fills in the router's port (8577) and session
+(`/ws/session1`), remembers the result and connects. The ⋯ menu's **Tablet address…** changes it
+later. From the dev server the default is the dev server's own host.
+
 ## Editor
 
 `/edit` (or the menu's *Edit document*) opens a full-screen editor: a real buffer with a cursor
@@ -83,6 +89,8 @@ outside closes it and does nothing else):
 - **Copy invite link** copies this page's address with just `?ws=` and `?token=`, so another
   phone or browser joins the same session. Not offered in the packaged app (no address to share);
   a `localhost` router makes a link that works on this computer only.
+- **Tablet address…** asks for the router address again (the same prompt as the first run) and
+  reconnects to it at once.
 - **Glasses diagnostics** and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
@@ -142,6 +150,7 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `state.ts` | the shared mutable state: stroke store, glasses view, dirty flags, ink activity, HUD, glasses device |
 | `protocol.ts` | inbound router message types (docs/protocol.md) |
 | `link.ts`, `reconnect.ts` | the router WebSocket: reconnect/backoff, liveness, pairing code, typed dispatcher |
+| `address.ts` | a typed tablet address (IP, `host:port`, URL) → the router session URL |
 | `session.ts` | ink, `page`, `clear`, `cursor`, `ai_*` → the store, the phone stage and dirty flags |
 | `actions.ts` | the app's verbs (follow/fit, emphasis, zoom, AI layer, new drawing, layout switches) |
 | `loop.ts` | the render loop |
@@ -197,9 +206,13 @@ Two ways onto the glasses:
 
 - **Package** — `pnpm ehpk` builds `codrawer.ehpk`; drag it onto the Even Hub developer portal
   ("Drag and drop .ehpk file to create a project") to install it as a prototype app. The package has
-  no dev server to share a host with, so the router address is baked in at build time:
-  `ws://192.168.50.2:8577/ws/session1` by default, or `VITE_CODRAWER_WS=ws://<ip>:8577/ws/<session> pnpm ehpk`.
-  Its origin must be in `app.json`'s network whitelist. `edition` in `app.json` is the manifest
+  no dev server to share a host with, and the Even app only lets it reach origins listed in its
+  manifest's network whitelist (enforced in the WebView; full origins only, no wildcards or ranges).
+  So build it for your tablet: `CODRAWER_WS=ws://<tablet-ip>:8577/ws/session1 pnpm ehpk` starts the
+  app on that router and `manifest.mjs` whitelists its origin in the package
+  (`CODRAWER_WHITELIST=<url>,<url>` adds more). Built without `CODRAWER_WS`, the app asks for the
+  address on first run, but only addresses whitelisted at build time (localhost, by default) can
+  connect; the tracked `app.json` names no one's home network. `edition` in `app.json` is the manifest
   schema (`202601`), not a date: `evenhub pack` rejects anything else.
 - **Sideload** — `VITE_HMR_HOST=<lan-ip> pnpm dev`, then `evenhub qr --url http://<lan-ip>:5188`;
   the router is assumed on the same host as the dev server.

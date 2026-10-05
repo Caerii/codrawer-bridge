@@ -15,6 +15,7 @@
 # back to back, with the screen left alone; the tablet is held awake for the whole run.
 # Afterwards the engine that was active before the run is restored.
 set -euo pipefail
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
 SECS="${SECS:-90}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$TABLET")
