@@ -6,28 +6,59 @@ import asyncio
 import base64
 import io
 import json
+import os
 import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from PIL import Image, ImageDraw
 
 from codrawer_bridge.protocol.constants import (
+    T_CLEAR,
     T_CURSOR,
+    T_DOC,
     T_HELLO,
+    T_KEY,
     T_PROMPT,
     T_STROKE_BEGIN,
     T_STROKE_END,
     T_STROKE_PTS,
+    T_TERM_ANSWER,
+    T_TERM_PROMPT,
 )
 
 from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
-from .rendering import render_context_patch_png_b64
-from .sessions import broadcast, get_session
+from .rendering import render_context_patch_png_b64, render_page_png, simplify_polylines
+from .sessions import broadcast, broadcast_raw, get_session
+from .term_bridge import TermSettings, get_link
 from .viewer_page import render_viewer_html
 
 app = FastAPI()
+
+# Background tasks must stay referenced or the event loop may garbage-collect
+# them mid-flight (asyncio docs). Terminal prompts are launched from the socket
+# loop and outlive the message that started them.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+# Even Hub apps run inside the Even phone app WebView and must be granted CORS by the
+# server (the app.json network whitelist does not replace it). The router carries no
+# secrets, so allow any origin; identity arrives with SIG mode (docs/sig-integration.md).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    max_age=86400,
+)
 
 
 @app.get("/healthz")
@@ -509,6 +540,12 @@ async def ws(session_id: str, ws: WebSocket):
         asyncio.create_task(agentic_loop(session_id, session))
 
     await ws.send_text(json.dumps({"t": T_HELLO, "session": session_id}, separators=(",", ":")))
+    if session.page_msg is not None and ws.query_params.get("replay") != "0":
+        await ws.send_text(session.page_msg)
+    for i in range(0, len(session.doc_updates), 256):
+        await ws.send_text(
+            json.dumps({"t": "doc_update", "us": session.doc_updates[i : i + 256]}, separators=(",", ":"))
+        )
 
     try:
         while True:
@@ -519,7 +556,7 @@ async def ws(session_id: str, ws: WebSocket):
                 print(f"[ws:{session_id}] in t={t} from={getattr(ws.client,'host',None)}")
 
             # Track "activity" for auto AI behaviors (wait for user pause).
-            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT):
+            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT, T_KEY):
                 session.activity_seq += 1
                 session.last_activity_ts = time.perf_counter()
 
@@ -596,8 +633,114 @@ async def ws(session_id: str, ws: WebSocket):
                         session.stroke_last_point4[sid] = last
 
             # Broadcast all stroke_* and cursor events to other clients
-            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR):
+            if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_KEY):
                 await broadcast(session, msg, exclude=ws)
+
+            # New drawing: forget the session's rolling context and tell every
+            # other client to wipe its canvas. Clients own rendering, so this is
+            # a notification, not a canvas state transfer.
+            if t in (T_TERM_PROMPT, T_TERM_ANSWER):
+                # Route typed lines to the even-terminal session attached to this
+                # codrawer session; replies come back as `term` broadcasts.
+                st = get_settings()
+                link = get_link(
+                    session_id,
+                    TermSettings(
+                        url=st.term_url,
+                        token=st.term_token,
+                        provider=st.term_provider,
+                        session_id=st.term_session,
+                        cwd=st.term_cwd,
+                    ),
+                    lambda m, _s=session: broadcast(_s, m),
+                )
+                text = msg.get("text")
+                if isinstance(text, str):
+                    if t == T_TERM_PROMPT:
+                        # Attach the turn's ink by default ("turn"), the whole page on
+                        # request ("page"), or nothing ("none"). See ADR 002.
+                        attach = str(msg.get("attach") or "turn")
+                        attachment = None
+                        if attach == "page" and session.page_strokes:
+                            chosen = session.page_strokes
+                        elif attach == "turn" and session.turn_strokes:
+                            chosen = session.turn_strokes
+                        else:
+                            chosen = []
+                        if chosen:
+                            turn_ids = {str(s.get("id")) for s in session.turn_strokes}
+                            try:
+                                png = render_page_png(page_strokes=session.page_strokes, turn_ids=turn_ids)
+                                geometry = {
+                                    "page": {"aspect": 1620 / 2160, "coordinates": "normalized [x,y,pressure], origin top-left"},
+                                    "turn_ids": sorted(turn_ids),
+                                    "strokes": simplify_polylines(chosen),
+                                }
+                                attachment = {"png": png, "geometry": geometry, "n_strokes": len(chosen)}
+                            except Exception as e:  # rendering must never block the prompt
+                                if get_settings().debug_log_msgs:
+                                    print(f"[ws:{session_id}] attachment render failed: {e}")
+                        # A prompt sent from the editor carries the document as context.
+                        if str(msg.get("context") or "") == "doc" and session.doc_text.strip():
+                            text = (
+                                text
+                                + "\n\n[The user's document is in `.codrawer/doc.md` (markdown, "
+                                + f"{len(session.doc_text)} chars). Read it before answering; if you propose edits, "
+                                + "quote the exact lines to change.]"
+                            )
+                        session.turn_seq += 1
+                        session.turn_strokes = []  # a submitted line closes the ink turn (ADR 001)
+                        _spawn(link.prompt(text, attachment))
+                    else:
+                        _spawn(link.answer(text))
+                continue
+
+            if t == "page":
+                # The tablet's saved page: keep the latest for joiners, relay as received.
+                session.page_msg = raw
+                await broadcast_raw(session, raw, exclude=ws)
+                continue
+
+            if t == "doc_update":
+                u = msg.get("u")
+                if isinstance(u, str) and u:
+                    session.doc_updates.append(u)
+                    await broadcast(session, msg, exclude=ws)
+                continue
+            if t in ("doc_state", "doc_compact"):
+                continue
+
+            if t == T_DOC:
+                # Keep the latest shared document, forward it to everyone else, and
+                # write it where the terminal agent can Read it (<term cwd>/.codrawer/doc.md).
+                doc_text = msg.get("text")
+                if isinstance(doc_text, str):
+                    session.doc_text = doc_text[:200_000]
+                    st = get_settings()
+                    if st.term_cwd:
+                        try:
+                            folder = os.path.join(st.term_cwd, ".codrawer")
+                            os.makedirs(folder, exist_ok=True)
+                            with open(os.path.join(folder, "doc.md"), "w", encoding="utf-8") as f:
+                                f.write(session.doc_text)
+                        except OSError:
+                            pass
+                    await broadcast(session, msg, exclude=ws)
+                continue
+
+            if t == T_CLEAR:
+                session.page_msg = None
+                session.stroke_points4.clear()
+                session.stroke_meta.clear()
+                session.stroke_last_point4.clear()
+                session.recent_user_strokes = []
+                session.recent_prompts = []
+                session.recent_ai_plans = []
+                session.last_cursor_xy = None
+                session.page_strokes = []
+                session.turn_strokes = []
+                await broadcast(session, {"t": T_CLEAR, "ts": msg.get("ts")}, exclude=ws)
+                continue
 
             # Trigger AI only on stroke_end (debounced + rate-limited in worker)
             if t == T_STROKE_END:
@@ -628,6 +771,18 @@ async def ws(session_id: str, ws: WebSocket):
                     # Keep bounded.
                     session.recent_user_strokes = session.recent_user_strokes[-12:]
                     msg["_recent_user_strokes"] = session.recent_user_strokes
+
+                    # Page + turn ink for attachments (ADR 001/002).
+                    full = {
+                        "id": sid,
+                        "brush": (msg["_stroke_meta"] or {}).get("brush"),
+                        "color": (msg["_stroke_meta"] or {}).get("color"),
+                        "pts": [[p[0], p[1], p[2]] for p in msg["_stroke_points4"] if isinstance(p, list) and len(p) >= 3],
+                    }
+                    session.page_strokes.append(full)
+                    session.page_strokes = session.page_strokes[-2000:]
+                    session.turn_strokes.append(full)
+                    session.turn_strokes = session.turn_strokes[-400:]
                     msg["_activity_seq"] = session.activity_seq
 
                     # Optional: attach a local rendered patch image for multimodal models.

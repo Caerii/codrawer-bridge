@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en" data-theme="paper">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>codrawer</title>
+    <style>
+      :root[data-theme='paper'] { --bg: #e4e1d8; --bar: rgba(246,244,238,0.86); --fg: #1d1d1b; --muted: #77746c; --line: rgba(29,29,27,0.12); --chip: rgba(29,29,27,0.06); --chip-on: #1d1d1b; --chip-on-fg: #f6f4ee; --accent: #2f805f; --live: #2f9e44; --off: #c2410c; }
+      :root[data-theme='dark'] { --bg: #060806; --bar: rgba(16,20,16,0.86); --fg: #d8f5dc; --muted: #6f8f74; --line: rgba(126,231,135,0.16); --chip: rgba(126,231,135,0.08); --chip-on: #7ee787; --chip-on-fg: #0a0d0a; --accent: #7ee787; --live: #7ee787; --off: #f59e0b; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+      body { display: flex; flex-direction: column; overflow: hidden; }
+      #bar { display: flex; align-items: center; gap: 8px; padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); background: var(--bar); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid var(--line); transition: margin-top 0.25s ease; z-index: 2; }
+      body.chromeless #bar { margin-top: -96px; }
+      #brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -0.01em; }
+      #brand svg { width: 20px; height: 20px; }
+      #conn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12px; font-weight: 500; }
+      #conn::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--off); box-shadow: 0 0 0 3px color-mix(in srgb, var(--off) 25%, transparent); }
+      #conn.live::before { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+      .spacer { flex: 1; }
+      .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--chip); }
+      .seg button { height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; transition: background 0.15s, color 0.15s; }
+      .seg button[aria-pressed='true'] { background: var(--chip-on); color: var(--chip-on-fg); }
+      .icon { width: 36px; height: 36px; display: inline-grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--fg); cursor: pointer; transition: background 0.15s; }
+      .icon:hover, .seg button:hover { background: var(--chip); }
+      .icon[aria-pressed='true'] { background: var(--chip-on); color: var(--chip-on-fg); }
+      .icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .icon[hidden] { display: none; }
+      @media (max-width: 480px) { #conn span { display: none; } #conn { padding: 3px; } .seg button { padding: 0 9px; } }
+      #banner { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--bar); border-bottom: 1px solid var(--line); font-size: 13px; }
+      #banner[hidden] { display: none; }
+      #banner span { flex: 1; }
+      #banner button { font: inherit; font-weight: 600; color: var(--chip-on-fg); background: var(--chip-on); border: 0; border-radius: 8px; padding: 5px 12px; }
+      #menuBtn[aria-expanded='true'] { background: var(--chip); }
+      /* narrow phones: theme and the Glasses panel live in the menu only */
+      @media (max-width: 480px) { #themeBtn, #debugBtn { display: none; } }
+      #menu { position: fixed; top: calc(max(8px, env(safe-area-inset-top)) + 46px); right: max(12px, env(safe-area-inset-right)); width: 264px; max-width: calc(100vw - 24px); max-height: calc(100vh - 80px); overflow-y: auto; padding: 6px; background: var(--bar); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); z-index: 3; }
+      #menu[hidden] { display: none; }
+      #menu .item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+      #menu .item:hover, #menu .item:focus-visible, #menu .swatch:focus-visible, #menu .confirm button:focus-visible { background: var(--chip); outline: none; }
+      #menu .item svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); }
+      #menu .item[role='menuitemcheckbox']::after { content: ''; margin-left: auto; width: 30px; height: 18px; border-radius: 999px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--line); transition: background 0.15s; }
+      #menu .item[aria-checked='true']::after { background: var(--accent); }
+      #menu .item[aria-disabled='true'] { color: var(--muted); cursor: default; }
+      #menu .note { margin-left: auto; color: var(--muted); font-size: 12px; }
+      #menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+      #menu .label { padding: 6px 10px 2px; color: var(--muted); font-size: 12px; font-weight: 550; }
+      #menu .swatches { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 10px 8px; }
+      #menu .swatch { width: 30px; height: 30px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; box-shadow: 0 0 0 2px var(--bar), 0 0 0 3px transparent; }
+      #menu .swatch[aria-checked='true'] { box-shadow: 0 0 0 2px var(--bar), 0 0 0 4px var(--fg); }
+      #menu .confirm { padding: 8px 10px; border-radius: 8px; background: var(--chip); }
+      #menu .confirm[hidden] { display: none; }
+      #menu .confirm p { margin: 0 0 8px; }
+      #menu .confirm button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 6px 12px; cursor: pointer; background: transparent; color: var(--fg); }
+      #menu .confirm .danger { background: var(--off); color: #fff; }
+      #stage { flex: 1; width: 100%; min-height: 0; display: block; touch-action: manipulation; }
+      #debug { display: none; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, SFMono-Regular, monospace; }
+      body.debug #debug { display: block; }
+      #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; background: #000; }
+      #status { margin-top: 6px; white-space: pre-wrap; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <span id="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20c3-1 4-4 6-8s4-7 8-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="18" cy="4" r="2" fill="currentColor"/></svg>codrawer</span>
+      <span id="conn"><span>connecting</span></span>
+      <span class="spacer"></span>
+      <span class="seg" role="group" aria-label="View">
+        <button type="button" data-view="follow" aria-pressed="false" title="Follow the pen at the glasses' scale">Follow</button>
+        <button type="button" data-view="focus" aria-pressed="false" title="Fit the writing">Fit</button>
+        <button type="button" data-view="page" aria-pressed="false" title="The whole page">Page</button>
+      </span>
+      <button id="drawBtn" class="icon" type="button" aria-pressed="false" aria-label="Draw" title="Draw here (shared with everyone in the session)"><svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg></button>
+      <button id="camBtn" class="icon" type="button" aria-pressed="false" aria-label="Camera" title="Draw over the camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+      <button id="freezeBtn" class="icon" type="button" aria-pressed="false" aria-label="Freeze frame" title="Freeze the camera frame" hidden><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg></button>
+      <button id="themeBtn" class="icon" type="button" aria-label="Theme" title="Paper or dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+      <button id="debugBtn" class="icon" type="button" aria-pressed="false" aria-label="Glasses" title="Glasses previews and status"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4M3 14l1.5-6M21 14l-1.5-6"/></svg></button>
+      <button id="menuBtn" class="icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="Menu" title="More"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+    </div>
+    <div id="menu" role="menu" aria-label="codrawer" hidden>
+      <button class="item" type="button" role="menuitem" data-act="new"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>New drawing…</button>
+      <div class="confirm" id="confirmNew" hidden><p>Clear the page for everyone?</p><button type="button" class="danger" data-act="new-yes">Clear</button> <button type="button" data-act="new-no">Cancel</button></div>
+      <hr />
+      <div class="label" id="colorLabel">My colour</div>
+      <div class="swatches" role="group" aria-labelledby="colorLabel"></div>
+      <hr />
+      <button class="item" type="button" role="menuitem" data-act="png"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Download page as PNG</button>
+      <button class="item" type="button" role="menuitem" data-act="invite"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Copy invite link</span></button>
+      <hr />
+      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="wide"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M12 7v10"/></svg>Glasses: wide fit view</button>
+      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="diag"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4"/></svg>Glasses diagnostics</button>
+      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>Dark theme</button>
+    </div>
+    <div id="banner" hidden><span id="bannerText"></span><button id="bannerOk" type="button">OK</button></div>
+    <canvas id="stage"></canvas>
+    <video id="camera" playsinline muted autoplay hidden></video>
+    <div id="debug">
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <canvas id="preview" width="288" height="144"></canvas>
+        <canvas id="loupe" width="192" height="144"></canvas>
+      </div>
+      <div id="status">starting…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

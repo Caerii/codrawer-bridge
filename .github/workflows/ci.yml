@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go bridge + router
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge/remarkable/native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/remarkable/native/go.mod
+          cache-dependency-path: bridge/remarkable/native/go.sum
+      - name: vet (tablet target)
+        run: GOOS=linux GOARCH=arm64 go vet ./...
+      - name: test
+        run: go test -count=1 . ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/   # . = main package (Linux-only, fine on the runner)
+      - name: router ordering tests, repeated
+        run: go test -count=20 -run 'LiveMessagesDuringReplay|LeavingMidStroke|BigPage|HelloSays' ./router/
+      - name: build for the Paper Pro
+        run: GOOS=linux GOARCH=arm64 go build -o /tmp/codrawer_bridge_native . && ls -l /tmp/codrawer_bridge_native
+
+  app:
+    name: Glasses app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/even-g2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/even-g2/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: build the Even Hub package
+        run: pnpm exec tsc -p . && pnpm exec vite build && npx --yes @evenrealities/evenhub-cli@0.1.14 pack app.json dist -o codrawer.ehpk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codrawer-ehpk
+          path: apps/even-g2/codrawer.ehpk
+
+  rust:
+    name: Rust bridge (parallel port)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge/remarkable/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge/remarkable/rust
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: static build for the Paper Pro
+        run: cargo build --release --target aarch64-unknown-linux-musl
+
+  boot:
+    name: Tablet boot scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/remarkable/native/go.mod
+          cache-dependency-path: bridge/remarkable/native/go.sum
+      - name: shell syntax
+        run: |
+          for f in bridge/remarkable/boot/*.sh bridge/remarkable/boot/test/*.sh scripts/dev/*.sh; do
+            sh -n "$f" 2>/dev/null || bash -n "$f"
+          done
+      - name: boot.sh scenarios (Docker, fake systemctl)
+        run: bash bridge/remarkable/boot/test/run.sh

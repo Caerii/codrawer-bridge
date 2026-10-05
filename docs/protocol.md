@@ -18,6 +18,15 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
 - `layer="user"`: user ink (from Paper Pro).
 - `layer="ai"`: AI ghost ink (server→clients). **AI never overwrites user ink**.
 
+## Routers
+
+Two implementations speak this protocol: the desktop Python router (`src/codrawer_bridge/server`,
+everything below) and the stroke-only Go router inside the tablet bridge
+(`bridge/remarkable/native/router`, `-serve`), which drops `prompt`/`ai_*`, answers `term_*`
+with a `term` status, and **replays the current page** to a client right after its `hello`: the
+tablet's latest saved `page`, if any, then the live `stroke_begin`/`stroke_pts`/`stroke_end`
+recorded since it (or since the last `clear`). The Python router replays only the `page`.
+
 ## Message types
 
 ### `hello` (server → client)
@@ -81,6 +90,121 @@ Fields:
 - `x`,`y` (optional): normalized anchor point for placing the output (otherwise the server uses last cursor or center)
 - `ts` (optional): ms timestamp
 
+### `clear` (any client → server → broadcast)
+
+Start a new drawing. The server forgets its rolling context for the session (recent strokes,
+prompts, AI plans) and forwards the message to every other client, which wipes its canvas.
+Nothing is persisted or replayed; clients own rendering.
+
+```json
+{"t":"clear","ts":1730000003000}
+```
+
+### `page` (tablet bridge → server → broadcast; replayed to joiners)
+
+The tablet's **saved page**, from the bridge's read-only page watcher (`bridge/remarkable/native/
+pagewatch`, ADR 008). xochitl writes a page's `.rm` about 6–10 s after the user pauses and when
+the page is left, and records page turns in `<doc>.content` within 1–2 s. The bridge sends a
+`page` whenever the open page's file is rewritten or the open page (or document) changes, and
+again on every reconnect. The snapshot is the page: erased and undone strokes are simply absent,
+and strokes on hidden layers are left out.
+
+```json
+{"t":"page","doc":"<doc uuid>","page":"<page uuid>","title":"Sketches","rev":1759406400123,"w":1620,"h":2160,
+ "strokes":[{"id":"1:42","tool":"calligraphy","color":0,"rgba":"#000000ff","size":2,"layer":"0:11",
+             "pts":[[0.52101,0.31388,0.502,0.00463],[0.52133,0.31402,0.533,0.00494]]}]}
+```
+
+Fields:
+- `doc`, `page`: xochitl's document and page ids; `title`: the document's name when known.
+- `rev`: Unix ms on the tablet's clock (the same clock as `stroke_begin.ts`). The snapshot holds
+  everything drawn on this page up to `rev`. It is the `.rm` mtime; on a page change it is the later
+  of that and the `.content` write that recorded the turn.
+- `w`, `h`: the page size in page units (Paper Pro 1620 × 2160).
+- `strokes[]`, in drawing order:
+  - `id`: xochitl's CRDT id (`author:counter`), stable across saves.
+  - `tool`: one of `fineliner`, `ballpoint`, `marker`, `pencil`, `mechanical_pencil`, `brush`,
+    `calligraphy`, `highlighter`, `shader`, `eraser`, `erase_area`, or `pen` when unknown. Clients
+    do not paint `eraser` or `erase_area`, because their effect is already in the snapshot.
+  - `color`: xochitl's palette id (0 black, 1 grey, 2 white, 3 yellow, 4 green, 5 pink, 6 blue,
+    7 red, 8 grey overlap, 9 highlight (see `rgba`), and the Paper Pro inks 10 green, 11 cyan,
+    12 magenta, 13 yellow).
+  - `rgba`: the resolved display colour `#rrggbbaa`: the stroke's own colour for Paper Pro
+    highlighter and shader, otherwise the palette's (Paper Pro ink values are approximations).
+    xochitl draws the highlighter translucent even though its alpha is stored as `ff`. The
+    shader's alpha is real.
+  - `size`: the tool's thickness setting (`thickness_scale`: 1, 2, 3, or fractions).
+  - `layer`: the layer id.
+  - `pts`: `[x, y, p, w]`. `x, y` are normalised to the page: `x = (x_rm + w/2) / w` (xochitl's x is
+    centred) and `y = y_rm / h`. Points on a scrolled page can fall outside 0..1. `p` is pressure
+    0..1. `w` is xochitl's computed stroke width at that point as a fraction of the page width (the
+    file stores quarter pixels: `w = width / 4 / 1620`).
+
+Routers keep the latest `page` per session and send it to a joiner right after `hello`. The Go
+router also uses it as the page's **base**: on a `page` it drops recorded live strokes whose
+`stroke_begin.ts` is not after `rev` (they are in the snapshot, or were erased), and replays the
+`page` first and then the live strokes recorded after it. `clear` drops the page.
+`?replay=0` sources get no replay. Clients do the same with their own copy. They replace
+earlier snapshot strokes with the new snapshot, keep live strokes whose `stroke_begin.ts > rev`,
+and on a different `page`/`doc` clear the view (AI layer included) and show the new page.
+
+### `key` (keyboard bridge → server → broadcast)
+
+One key-down (or auto-repeat) from a keyboard paired to the tablet. `char` is present only for
+text-producing keys with no Ctrl/Alt/Meta held; `key` uses browser-style names for the rest
+(`Enter`, `Backspace`, `ArrowUp`, `F3`, …). Clients own line editing and any command syntax.
+
+```json
+{"t":"key","key":"A","char":"A","code":30,"repeat":false,"mods":{"shift":true,"ctrl":false,"alt":false,"meta":false},"ts":1730000004000}
+```
+
+### `doc` (client → server → broadcast)
+
+A participant shares the document it is editing (plain text / markdown). The router keeps the
+latest, forwards it to every other client, and writes it to `<term cwd>/.codrawer/doc.md` so
+the terminal agent can Read it. A `term_prompt` with `"context":"doc"` gets a trailer pointing
+the agent at that file. Last writer wins; clients adopt an incoming document only when they
+have no unsaved edits (a CRDT is deferred, see the SIG IDE-CRDT ladder).
+
+```json
+{"t":"doc","text":"# Notes\n- first line","cursor":{"line":2,"col":13},"reason":"auto|save|share|prompt"}
+```
+
+### `doc_update` / `doc_state` / `doc_compact` (shared live editing)
+
+Clients keep the document as a [Yjs](https://yjs.dev) CRDT and send each batch of local edits as
+`{"t":"doc_update","u":"<base64 Yjs update>"}`. Routers relay it to every other client, keep the
+log, and replay it to a joiner right after `hello` as `{"t":"doc_update","us":["…","…"]}`.
+Updates are idempotent and commutative, so a client resends its full state on every connect.
+The Go router compacts: past 256 entries it sends `{"t":"doc_compact"}` to the client that just
+wrote, which answers `{"t":"doc_state","u":"<full state>"}`; the log becomes that state plus
+whatever arrived after the request. `clear` does not touch the document. Live-editing clients
+mark their plain-text `doc` copies `"crdt":true` and ignore such copies from others.
+
+### `term_prompt` / `term_answer` (client → server) and `term` (server → clients)
+
+The router can attach an [even-terminal](https://www.npmjs.com/package/@evenrealities/even-terminal)
+session (Claude Code / Codex) to a codrawer session. Configure `CODRAWER_TERM_URL` and
+`CODRAWER_TERM_TOKEN` on the router; clients never hold the token or a second connection.
+
+```json
+{"t":"term_prompt","text":"list the failing tests"}
+{"t":"term_answer","text":"y"}
+{"t":"term","kind":"text","text":"bridge online"}
+{"t":"term","kind":"note","text":"— done (1 turns, $0.0100) —"}
+{"t":"term","kind":"permission","text":"⚠ Bash — run pytest  y / a / n ?"}
+```
+
+`term_prompt` may carry `attach`: `"turn"` (default: the ink drawn since the last submitted line),
+`"page"` (everything on the page) or `"none"`. The router renders the drawing to
+`<term cwd>/.codrawer/turns/turn-N.png` plus a geometry JSON and appends a trailer asking the
+agent to read it (ADR 002); a `term` status `✎ attached N strokes` confirms.
+
+`term_answer` resolves a pending permission (`y` allow, `a` always, anything else deny) or
+question; with nothing pending it is a prompt. Streamed assistant text is coalesced (~150 ms)
+into `kind:"text"` chunks; tool starts/ends, progress, results and errors are `kind:"note"`;
+`kind:"status"` reports the bridge itself (attached, dropped, misconfigured).
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.
@@ -93,11 +217,25 @@ AI strokes are streamed in a separate layer and **never** replace user strokes.
 
 AI points are `[x, y, p]` (no timestamps; clients animate as desired).
 
+### `ai_intent` (server → clients)
+
+Emitted before a group of `ai_stroke_*` messages when the model states what it is about to draw.
+Clients may show `plan` as a status line; it never carries ink.
+
+```json
+{"t":"ai_intent","plan":"add a small roof line over the box"}
+```
+
+SIG mode adds `participant_id` and `run_id` (see `docs/sig-integration.md`).
+
 ## Compatibility notes
 
 - The server is a **router**; it does not render and should not send full canvas state.
 - Clients own rendering and any “virtual hand” animation.
-- Keep payloads small; do not resend the entire stroke history.
+- Keep payloads small; do not resend the entire stroke history. The exception is `page`, which
+  is the tablet's whole saved page, sent only on a save or a page change (about 3.7 bytes of
+  JSON per byte of `.rm`: a 45-stroke calligraphy page is 169 KB). The Go router accepts
+  messages up to 16 MB.
 
 ## Seeing the AI layer (important)
 
