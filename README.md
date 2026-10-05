@@ -1,159 +1,151 @@
-# codrawer-bridge
+<p align="center"><img src="logo.svg" alt="codrawer" width="96"></p>
 
-Core infrastructure for a low-latency “co-drawer” system:
+<h1 align="center">codrawer-bridge</h1>
 
-- **Paper Pro** streams stylus strokes (stroke-native input events)
-- **Desktop server** routes those events over WebSocket and triggers an AI worker
-- **AI** emits **ghost-layer vector strokes** (`layer="ai"`)
-- **Clients render** and animate (server/bridge never render)
+<p align="center">
+Stroke-native co-drawing. A reMarkable Paper Pro streams your pen as vector strokes; glasses,
+phones, browsers and agents join the same page in real time.
+</p>
 
-This repo is **infra-first** (not a product demo yet). It is also the stroke-native surface of
-Superintelligent Group's fluid-interface direction: SIG agents (local and cloud) join a session as
-participants, and the Even Realities G2 glasses show a glanceable crop of the same canvas. See
-`docs/sig-integration.md` for the SIG plan and protocol extensions.
+<p align="center">
+<a href="https://github.com/Caerii/codrawer-bridge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Caerii/codrawer-bridge/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+<a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+</p>
 
-## One command to bring the desktop half up
+---
 
-```bash
-scripts/dev/up.sh            # even-terminal + router (:8577) + glasses app (:5188) + simulator (own session)
-scripts/dev/up.sh --tablet   # also restart the bridge + keyboard keeper on the Paper Pro
-```
+Most tablet tools mirror pixels: a screen stream, or an export after you save. codrawer carries
+**strokes**, the way the pen made them, with pressure and timing, from the tablet's digitizer to every
+participant in a session, in a few tens of milliseconds. That makes the page a shared, live object:
 
-Parameters, ports and the traps are in `CLAUDE.md`; device steps in `docs/even-g2-testing.md`.
+- **Glanceable:** your writing appears on Even Realities G2 glasses, with a loupe that follows the pen.
+- **Presentable:** a phone or browser shows the page full resolution, paper or dark, for a projector.
+- **Multiplayer:** other people draw onto the same page from a browser or phone, each in their own colour.
+- **Agent-native:** an AI or a Claude Code session joins as a participant, sees the turn's ink and
+  answers on its own layer (desktop router; see [ADR 003](docs/adr/003-agent-ink-as-governed-action.md)).
 
-## Repo layout
+It is the hardware half of Superintelligent Group's fluid-interface plan
+([`docs/sig-integration.md`](docs/sig-integration.md)).
 
-| Path | Role |
+## What works today
+
+| Capability | Status |
 | --- | --- |
-| `src/codrawer_bridge/` | Desktop server: FastAPI WebSocket router, AI worker, dev viewer, record/replay tools |
-| `bridge/remarkable/native/` | Paper Pro device bridge (Go, single static binary, no Python on the device) |
-| `bridge/remarkable/codrawer_bridge.py` | Older Python device bridge (evdev); kept for reference |
-| `model-server/` | Local OpenAI-compatible model gateway (Vercel AI SDK): Cerebras fast path, Bedrock, Together |
-| `codrawer-ipad/` | iPad client (SwiftUI + PencilKit) with a Rocq prover pane |
-| `experimental/even-g2-codrawer-viewer/` | Even Realities G2 viewer: rasterizes the live canvas to 640×350 HUD frames (mock-tested; Even Hub bridge is a stub) |
-| `docs/` | Protocol (canonical), architecture, latency budget, device setup, SIG integration |
+| Paper Pro pen → router → glasses and phone, live | Verified on hardware |
+| Router hosted on the tablet itself (no desktop needed) | Verified on hardware |
+| Bluetooth keyboard on the tablet: keystrokes streamed, replies typed back into xochitl | Verified on hardware |
+| Survives reboots and OS updates (signed releases, health check, auto-rollback) | Verified on hardware |
+| Pairing code for anyone joining the tablet's router | Verified on hardware |
+| Tablet's saved page (`.rm` v6) streamed as a base for late joiners | Verified on hardware |
+| Multiplayer participants with their own colours | Verified (browser ↔ tablet router) |
+| Glasses loupe camera, follow/fit/page views mirrored between ring and phone | Verified on hardware |
+| Phone camera backdrop (draw over the real world) | Built; phone testing in progress |
+| Rust engine at parity with Go (1.3 MB vs 6.1 MB) | Tests and CI; Go is the default on device |
+| Other participants' ink written natively into a tablet layer (XOVI) | Feasibility done, probe built, not yet run ([report](docs/investigations/native-multiplayer-layer.md)) |
+| Shared markdown editor (Yjs) on the glasses | Simulator only |
 
-Not tracked on purpose: compiled device binaries (build from source), `*.jsonl` stroke recordings,
-`mock_output*/` frames, `node_modules/`, and every `.env`. Copy `env.example` and
-`model-server/.env.example` instead.
+## How it fits together
 
-## Key rules (non-negotiable)
-
-- **AI never overwrites user ink**: AI output is always separate `layer="ai"`.
-- **No per-point model calls**: trigger AI only on `stroke_end` (micro-pauses later).
-- **Server routes, clients render**: keep payloads incremental and small.
-- **Rate limit**: design for **~50 RPM** model caps (throttle + debounce).
-
-## Docs
-
-- `docs/protocol.md` (canonical protocol)
-- `docs/architecture.md`
-- `docs/latency_budget.md`
-- `docs/remarkable_setup.md` (connect + install on Paper Pro)
-- `docs/sig-integration.md` (how SIG agents, identity, and the Even G2 attach to a session)
-- `docs/adr/` (decisions: turn as unit of record, image attachment path, agent ink governance, multiplayer terminal, reply sinks, latency budgets)
-- `docs/even-g2-testing.md` (simulator, developer mode, QR sideload, manifest and CORS rules)
-- `docs/remarkable_bluetooth.md` (bring up the Paper Pro's dormant Bluetooth; keyboard pairing; glasses-direct notes)
-
-## Desktop setup (uv)
-
-Requirements:
-
-- Python 3.11+
-- `uv`
-
-Install and run:
-
-```bash
-uv sync
-uv pip install -e .
-uv run uvicorn codrawer_bridge.server.app:app --reload --host 0.0.0.0 --port 8000
+```
+ reMarkable Paper Pro                                  participants
+ ┌──────────────────────────────────────┐
+ │ pen (evdev) ─┐                       │   ws://tablet:8577/ws/<session>
+ │ keyboard  ───┼─▶ bridge ─▶ router ◀──┼──────────────┬──────────────┬───────────────┐
+ │ saved page ──┘   (Go or Rust)        │              │              │               │
+ │ typed replies ◀──                    │        Even G2 glasses   phone / browser   desktop router
+ └──────────────────────────────────────┘        (apps/even-g2)    (same app)       (AI, /term)
 ```
 
-Optional config:
+- **The bridge** reads the pen with kernel timestamps, batches points at 60 Hz, and runs an
+  in-process **router**: one WebSocket session per page, bounded per-client queues, replay to late
+  joiners (saved page first, then live ink). Wire format: [`docs/protocol.md`](docs/protocol.md).
+- **Clients render; the router never does.** Coordinates are normalized page units, so any surface
+  draws at its own resolution.
+- **The glasses** cost ~200 ms per image update whatever its size, so the app sends just-in-time
+  loupe frames and the full canvas after a writing lull ([ADR 006](docs/adr/006-latency-budget-per-surface.md)).
+- **One page model** for every participant: the tablet's own ink, other people's, and the AI's are
+  layers of the same page ([ADR 008](docs/adr/008-universal-page-model.md)).
 
-- Copy `env.example` → `.env` and edit values (AI throttle knobs, future model keys).
+## Quick start
 
-## Optional: local Node model-server (Cerebras / Vercel AI SDK)
-
-This repo includes a fast local model gateway in `model-server/` (OpenAI-compatible).
-
-- Start it:
-
-```bash
-cd model-server
-pnpm install
-pnpm dev
-```
-
-- Configure Cerebras (in `model-server/.env`, not committed):
+You need a Paper Pro with developer mode and SSH ([`docs/remarkable_setup.md`](docs/remarkable_setup.md)),
+Go 1.22+, and `pnpm`.
 
 ```bash
-CEREBRAS_API_KEY=...
+# 1. Build, sign and install the bridge on the tablet (once; it then starts at every boot).
+#    Generates the release key and the router's pairing code on first run.
+scripts/dev/deploy-tablet.sh
+
+# 2. Run the glasses/phone app and open a QR code that points it at the tablet.
+cd apps/even-g2 && pnpm install && pnpm dev
+scripts/dev/qr.sh
 ```
 
-- Point the desktop server at it (in `.env`):
+Scan the QR from the Even app (Even Hub → developer → Scan QR), or open the URL in any browser.
+To install the app without a dev server, `pnpm ehpk` in `apps/even-g2` builds `codrawer.ehpk` for
+the Even Hub.
+
+The tablet sleeps after a couple of minutes idle and drops Wi-Fi; clients reconnect on wake.
+Status and recovery:
 
 ```bash
-CODRAWER_MODEL_SERVER_URL=http://127.0.0.1:3100
-CODRAWER_MODEL_SERVER_MODEL=blazing_fast
+ssh root@<tablet> sh /home/root/codrawer/current/boot.sh doctor     # health, engine, OS compatibility
+ssh root@<tablet> sh /home/root/codrawer/current/boot.sh rollback   # previous release
 ```
 
-### Optional: add a local context image patch (multimodal)
+For AI ink and Claude Code turns, run the desktop router as well: `scripts/dev/up.sh` (see
+[`CLAUDE.md`](CLAUDE.md) for ports and environment).
 
-If your model supports vision, you can attach a small rendered PNG patch (local area around the stroke)
-to improve “what’s on the page” awareness:
+## Repository
+
+| Path | What it is |
+| --- | --- |
+| [`bridge/remarkable/native/`](bridge/remarkable/native/README.md) | The tablet bridge and router in Go, written as literate code; start at its reading order |
+| [`bridge/remarkable/rust/`](bridge/remarkable/rust/README.md) | The same bridge in Rust, at parity, selectable with `ENGINE=rust` |
+| [`bridge/remarkable/boot/`](bridge/remarkable/boot) | Durable install: boot stub, signed releases, health check, rollback, Bluetooth bring-up |
+| [`apps/even-g2/`](apps/even-g2/README.md) | Even G2 glasses app and phone/browser stage (TypeScript, Even Hub SDK) |
+| [`src/codrawer_bridge/`](src/codrawer_bridge) | Desktop router (Python, FastAPI): AI worker, `/term` to Claude Code, record/replay tools |
+| [`model-server/`](model-server) | OpenAI-compatible model gateway for the AI worker (Cerebras, Bedrock, Together) |
+| [`codrawer-ipad/`](codrawer-ipad) | iPad client (SwiftUI + PencilKit) |
+| [`scripts/dev/`](scripts/dev/README.md) | Deploy, QR, engine benchmark, keyboard and replay harnesses |
+| [`docs/`](docs) | Protocol, decisions (`adr/`), device investigations (`investigations/`) |
+
+## Design decisions
+
+| ADR | Decision |
+| --- | --- |
+| [001](docs/adr/001-turn-as-unit-of-record.md) | A turn (a submitted line and the agent's answer, with its ink) is the unit of record |
+| [002](docs/adr/002-image-attachment-path.md) | How a drawing reaches the model: first as files it reads |
+| [003](docs/adr/003-agent-ink-as-governed-action.md) | Agent ink is a governed action, through a codrawer MCP server, on its own layer |
+| [004](docs/adr/004-terminal-session-keying-and-arbitration.md) | One shared terminal session per room, with private sessions on request |
+| [005](docs/adr/005-reply-sinks-and-virtual-keyboard.md) | Where replies land (glasses, tablet via a virtual keyboard, or both) |
+| [006](docs/adr/006-latency-budget-per-surface.md) | Latency budgets per surface, from measurements |
+| [007](docs/adr/007-surface-composition.md) | How tablet, glasses, desktop and agents compose |
+| [008](docs/adr/008-universal-page-model.md) | One page model for every participant |
+
+Device research that shaped them, with the evidence, is in [`docs/investigations/`](docs/investigations):
+xochitl's pen data and page files, durable installs across OS updates, direct BLE to the glasses,
+smart_remarkable, and writing native layers through XOVI.
+
+## Development
 
 ```bash
-CODRAWER_MODEL_SERVER_USE_CONTEXT_IMAGE=1
-CODRAWER_MODEL_SERVER_CONTEXT_IMAGE_PX=256
-CODRAWER_MODEL_SERVER_CONTEXT_IMAGE_WINDOW=0.22
+cd bridge/remarkable/native && go test ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/
+cd bridge/remarkable/rust   && cargo test
+cd apps/even-g2             && pnpm typecheck && pnpm test
+bash bridge/remarkable/boot/test/run.sh                       # boot scripts (Docker)
+uv run pytest -q && uv run ruff check . && uv run mypy .      # desktop router
 ```
 
-Notes:
+CI runs the Go, Rust, app and boot-script suites on every push. Code is written in a literate
+style: every module opens with the problem it solves and the measured facts it rests on.
 
-- This adds a bit of CPU + payload size (still small at 256×256).
-- If the model doesn’t support images, leave it off.
+Ground rules that hold across the codebase:
 
-Endpoints:
-
-- **Health**: `GET http://localhost:8000/healthz`
-- **WebSocket**: `ws://<desktop-ip>:8000/ws/<session_id>`
-- **Viewer**: `http://<desktop-ip>:8000/viewer/<session_id>` (renders user vs AI layers)
-
-## Paper Pro bridge
-
-Use the native Go bridge (`bridge/remarkable/native/README.md`; build with `GOOS=linux GOARCH=arm64`). The Python bridge in `bridge/remarkable/README.md` is the older path.
-
-## iPad and Even G2 clients
-
-- iPad: `codrawer-ipad/README.md` (`run_ipad.sh` has one developer's simulator ids hardcoded; edit before use).
-- Even G2: `experimental/even-g2-codrawer-viewer/README.md` (`pnpm install && pnpm test` renders mock frames without hardware).
-
-## Record/replay harness (no hardware)
-
-Recordings are `*.jsonl` and gitignored; keep them out of commits.
-
-Record:
-
-```bash
-uv run python -m codrawer_bridge.tools.stroke_sim.record_jsonl --ws ws://127.0.0.1:8000/ws/session1 --out out.jsonl
-```
-
-Replay:
-
-```bash
-uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://127.0.0.1:8000/ws/session1 --in out.jsonl --speed 1.0
-```
-
-## Dev commands (always `uv run` on desktop)
-
-```bash
-uv run ruff check .
-uv run mypy .
-uv run pytest -q
-```
+- **Nobody else's ink is ever overwritten.** Each participant and the AI draw on their own layer.
+- **Never touch xochitl's data** except through documented, reversible paths.
+- **Keep reMarkable OS updates on.** codrawer lives in `/home` and reinstalls its one boot stub.
 
 ## License
 
-Apache License 2.0. See `LICENSE`.
+Apache License 2.0. See [`LICENSE`](LICENSE).
