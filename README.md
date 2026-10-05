@@ -69,7 +69,9 @@ It is the hardware half of Superintelligent Group's fluid-interface plan
 ## Quick start
 
 You need a Paper Pro with developer mode and SSH ([`docs/remarkable_setup.md`](docs/remarkable_setup.md)),
-Go 1.22+, and `pnpm`.
+Go 1.22+, and `pnpm`. Before installing, read
+[what codrawer changes on your tablet](docs/what-codrawer-changes.md): one boot stub on the root
+partition, everything else in `/home/root/codrawer`, and how to remove it all.
 
 ```bash
 # 0. Where things are on your network (the scripts' defaults are the maintainer's LAN).
