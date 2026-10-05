@@ -69,9 +69,14 @@ It is the hardware half of Superintelligent Group's fluid-interface plan
 ## Quick start
 
 You need a Paper Pro with developer mode and SSH ([`docs/remarkable_setup.md`](docs/remarkable_setup.md)),
-Go 1.22+, and `pnpm`.
+Go 1.22+, and `pnpm`. Before installing, read
+[what codrawer changes on your tablet](docs/what-codrawer-changes.md): one boot stub on the root
+partition, everything else in `/home/root/codrawer`, and how to remove it all.
 
 ```bash
+# 0. Where things are on your network (the scripts' defaults are the maintainer's LAN).
+export CODRAWER_TABLET=<tablet-ip> CODRAWER_LAN_IP=<this-pc-ip>
+
 # 1. Build, sign and install the bridge on the tablet (once; it then starts at every boot).
 #    Generates the release key and the router's pairing code on first run.
 scripts/dev/deploy-tablet.sh
@@ -82,8 +87,10 @@ scripts/dev/qr.sh
 ```
 
 Scan the QR from the Even app (Even Hub → developer → Scan QR), or open the URL in any browser.
-To install the app without a dev server, `pnpm ehpk` in `apps/even-g2` builds `codrawer.ehpk` for
-the Even Hub.
+To install the app without a dev server, `CODRAWER_WS=ws://<tablet-ip>:8577/ws/session1 pnpm ehpk`
+in `apps/even-g2` builds `codrawer.ehpk` for the Even Hub; the Even app only lets a package reach
+the router origins it was built with ([details](apps/even-g2/README.md#device)). Opened without an
+address, the app asks for the tablet's.
 
 The tablet sleeps after a couple of minutes idle and drops Wi-Fi; clients reconnect on wake.
 Status and recovery:

@@ -250,7 +250,7 @@ xochitl scene  →  layer "codrawer: <name>",  addDrawingLine(Line)
 
 ## Appendix: evidence trail (read-only, this session)
 
-- `scp root@192.168.50.156:/usr/bin/xochitl` → local inspection (Codex 6.0.105, Qt 6.10.3, PIE,
+- `scp root@<tablet-ip>:/usr/bin/xochitl` → local inspection (Codex 6.0.105, Qt 6.10.3, PIE,
   own symbols stripped; 215 exported dynamic syms, all Qt/stdc++).
 - `SceneController` meta-object: `addDrawingLine`, `highlightWithLine`, `eraseWithLine`,
   `selectWithLine`, `createImageSnippetFromStroke`, `addLayer`, `deleteLayer`, `setCurrentLayer`,

@@ -30,7 +30,7 @@ the virtual keyboard · 006 latency budget per surface · 007 surface compositio
 | Governed agents | anonymous local AI worker, no budget or audit | the worker runs inside a SIG compute envelope (reserve → meter per `stroke_end` → settle); cloud pod agents join as `kind=agent` participants over the same WebSocket |
 | Durability + presence | in-memory sessions; late joiners see a blank page | router writes strokes through to SIG (`ink_strokes`, append-only) and hydrates joiners; `presence` roster |
 | Human verdict on agent ink | none | `ink_accept` / `ink_reject` → tombstone + audit row (`approved_via=ipad|web|even_g2`) |
-| Glasses | mock-only G2 viewer in `experimental/` | promoted into the SIG Pager as a view: follow-crop + agent intent line; ring = accept / reject / next |
+| Glasses | the G2 app in `apps/even-g2/` (loupe, follow/fit views, ring menu; verified on hardware) | promoted into the SIG Pager as a view: follow-crop + agent intent line; ring = accept / reject / next |
 | Tablet render-back | Paper Pro is input-only | Phase 5: draw accepted agent ink on the e-paper |
 
 Nothing above changes the three non-negotiables in the README. Per-point model calls stay
@@ -87,4 +87,4 @@ scoped session token, never a service key.
 - `docs/plans/GLASS-01` — the reserve → meter → settle envelope the agent worker reuses.
 - `docs/plans/GLASS-02` — Pager auth (`pair-device` handoff), ring input (F9), crowd awareness (F10).
 - `docs/plans/GLASS-03` — Walking Deliberation, the voice loop that pairs with this canvas.
-- `packages/glasses-pager/` — the Even G2 app the `experimental/` viewer folds into.
+- `packages/glasses-pager/` — the Even G2 app that `apps/even-g2/` folds into.

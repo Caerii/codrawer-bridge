@@ -29,3 +29,7 @@ It features a split-view interface with a Rocq (Coq) Prover IDE and an infinite 
 
 ## Configuration
 The app attempts to connect to `ws://localhost:8000/ws` by default. Change the URL in `ConnectionManager.swift` or the UI if testing on a real device (use your computer's LAN IP).
+
+### Option C: Simulator from the command line
+`IPAD_SIM_ID=<udid> ./run_ipad.sh` from the repository root generates the project, builds it and
+launches it in that simulator (`xcrun simctl list devices available` lists UDIDs).

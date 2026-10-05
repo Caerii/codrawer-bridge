@@ -83,7 +83,7 @@ ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<D
 All flags have equivalent env vars (env is the default, flags override).
 
 - **WebSocket**
-  - `-ws` / `DESKTOP_WS`: e.g. `ws://192.168.50.2:8000/ws/session1`
+  - `-ws` / `DESKTOP_WS`: e.g. `ws://<lan-ip>:8577/ws/session1`
   - `-ping-seconds` / `PING_SECONDS` (default: `2`)
   - `-pong-timeout-seconds` / `PONG_TIMEOUT_SECONDS` (default: `8`)
 

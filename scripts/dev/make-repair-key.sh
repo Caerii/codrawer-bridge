@@ -4,6 +4,7 @@
 # iOS Shortcuts, or Termux) to restore codrawer after a reMarkable update with one tap, no
 # computer. authorized_keys and SSH over Wi-Fi survive OS updates; the key cannot open a shell.
 set -euo pipefail
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
 KEYDIR="${CODRAWER_KEYDIR:-$HOME/.codrawer}"
 mkdir -p "$KEYDIR"

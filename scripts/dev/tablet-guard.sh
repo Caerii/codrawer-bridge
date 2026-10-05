@@ -6,6 +6,7 @@
 # lives in /home and survives. When the tablet is reachable and the stub is missing, this re-adds
 # it with install.sh (the same repair as `vellum reenable` or the phone repair key) and logs it.
 set -uo pipefail
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET")
 check() {

@@ -10,7 +10,7 @@ Verified against hub.evenrealities.com/docs on 2026-09-26. Re-check versions bef
 | reMarkable native bridge | Paper Pro (ssh root) | Build from source: `cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .` (binary is gitignored). Setup: `docs/remarkable_setup.md`. |
 | Desktop router | laptop, `:8000` | `uv sync && uv run uvicorn codrawer_bridge.server.app:app --host 0.0.0.0 --port 8000`. Web viewer at `/viewer/session1`. |
 | model-server | laptop, `:3100` | Optional; needed for ghost ink. `cd model-server && pnpm dev`. |
-| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | **`apps/even-g2/`** (Vite + `@evenrealities/even_hub_sdk`), verified in the simulator 2026-09-26. The Node viewer in `experimental/even-g2-codrawer-viewer/` is the older mock harness. |
+| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | **`apps/even-g2/`** (Vite + `@evenrealities/even_hub_sdk`), verified in the simulator 2026-09-26. |
 | Even Hub simulator | laptop | `npm i -g @evenrealities/evenhub-simulator`, then `evenhub-simulator http://localhost:5173`. Emulates containers, text, input events (up/down/click/double-click/long-press), 16 kHz PCM audio. Not frame pacing, BLE timing or LZ4 image validation. |
 
 ## Tooling to install once
@@ -37,8 +37,8 @@ There is no toggle. Developer Mode is unlocked per account:
    (accounts are created in the phone app; the web hub has no sign-up).
 3. Force-quit the phone app and reopen it. A **developer section** appears in the **top-right of
    the Even Hub tab**; the **Scan QR** button lives there.
-4. Phone on the same Wi-Fi as this desktop (LAN IP `192.168.50.2`, no AP isolation), then
-   `evenhub qr --url http://192.168.50.2:5188` and scan it from the developer section.
+4. Phone on the same Wi-Fi as this desktop (note its LAN IP, `<lan-ip>`; no AP isolation), then
+   `evenhub qr --url http://<lan-ip>:5188` and scan it from the developer section.
 
 ### reMarkable Paper Pro — Developer mode (verified against developer.remarkable.com 2026-09-26)
 
@@ -57,7 +57,7 @@ There is no toggle. Developer Mode is unlocked per account:
 cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .
 scp codrawer_bridge_native root@<PAPER_PRO_IP>:/home/root/codrawer_bridge_native.new
 ssh root@<PAPER_PRO_IP> "chmod +x /home/root/codrawer_bridge_native.new && mv -f /home/root/codrawer_bridge_native.new /home/root/codrawer_bridge_native"
-ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://192.168.50.2:8577/ws/session1 -touch-mode auto"
+ssh root@<PAPER_PRO_IP> "NO_GRAB=1 /home/root/codrawer_bridge_native -ws ws://<lan-ip>:8577/ws/session1 -touch-mode auto"
 ```
 
 ### Desktop firewall (Windows, run once as Administrator)

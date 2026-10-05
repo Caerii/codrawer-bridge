@@ -22,11 +22,12 @@ const phoneLog: Plugin = {
 
 // HMR must point at an address the phone can reach; set VITE_HMR_HOST=<lan-ip> for device testing.
 const hmrHost = process.env.VITE_HMR_HOST
-// A packaged .ehpk has no dev server to share a host with, so the production build bakes in the
-// router address. Override with VITE_CODRAWER_WS=ws://<router-ip>:8577/ws/<session> pnpm ehpk;
-// the origin must also be whitelisted in app.json. ?ws= still wins at runtime.
-// Default: the router inside the tablet's bridge (bridge/remarkable/boot/bridge.env.example).
-const routerWs = process.env.VITE_CODRAWER_WS ?? 'ws://192.168.50.156:8577/ws/session1'
+// A packaged .ehpk has no dev server to share a host with, so a production build may carry a
+// router address: CODRAWER_WS=ws://<tablet-ip>:8577/ws/session1 pnpm ehpk (VITE_CODRAWER_WS is
+// the older name). manifest.mjs whitelists the same origin in the package. By default there is
+// none: the app then asks for the tablet's address on first run (src/phone/notices.ts).
+// ?ws= and a remembered address still win at runtime.
+const routerWs = process.env.CODRAWER_WS ?? process.env.VITE_CODRAWER_WS ?? ''
 export default defineConfig({
   plugins: [phoneLog],
   // relative asset paths: the Even app serves the package from its own location

@@ -28,7 +28,7 @@
  * the glasses would.
  */
 import { TextContainerUpgrade, waitForEvenAppBridge, type EvenAppBridge } from '@evenrealities/even_hub_sdk'
-import { BENCH, HAS_LOUPE, RENDER_INTERVAL_MS, WS_URL } from './config'
+import { BENCH, HAS_LOUPE, RENDER_INTERVAL_MS } from './config'
 import { collab, loadDocument, onDocCompact, onDocUpdate, onPlainDoc } from './doc/document'
 import { runBench } from './glasses/bench'
 import { drawCanvas, drawLoupe } from './glasses/display'
@@ -44,7 +44,7 @@ import { setupCamera } from './phone/camera'
 import { installDevLog } from './phone/devlog'
 import { setupDrawing } from './phone/draw'
 import { setupMenu } from './phone/menu'
-import { askPairingCode, onHelloNotice } from './phone/notices'
+import { askPairingCode, askRouterAddress, onHelloNotice } from './phone/notices'
 import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
 import { setupToolbar, showConnection } from './phone/toolbar'
@@ -103,9 +103,10 @@ const BRIDGE_WAIT_MS = 3000
 
 async function main() {
   link.connect()
+  if (!link.address) askRouterAddress() // first run of a build with no router built in
   drawCanvas()
   if (HAS_LOUPE) drawLoupe()
-  showStatus(`waiting for Even bridge… (${WS_URL})`)
+  showStatus(`waiting for Even bridge… (${link.address || 'no tablet address yet'})`)
   const bridgeP = waitForEvenAppBridge()
   void bridgeP.then((sdk) => {
     glasses.sdk = sdk

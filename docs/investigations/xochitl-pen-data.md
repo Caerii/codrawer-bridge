@@ -1,7 +1,7 @@
 # xochitl pen data: exact tool, colour, width, and when it reaches disk
 
 Status: investigation (2026-10-02). No production code. **The tablet was asleep for the whole
-session.** `192.168.50.156:22` and `10.11.99.1:22` timed out on every try, and a later ping
+session.** SSH to its Wi-Fi address and to `10.11.99.1:22` (USB) timed out on every try, and a later ping
 returned "Destination host unreachable". So this note has **no on-device measurements**. Format
 facts come from the open-source parsers and from parsing their Paper Pro fixtures on the desktop
 (`uv run --with rmscene`). Section 2 has the timing script to run once the tablet is awake.

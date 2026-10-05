@@ -11,7 +11,9 @@
 # Signing key: ~/.codrawer/release.key (created on first run; keep it private).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# CODRAWER_TABLET: the tablet's Wi-Fi address. The default is the maintainer's LAN; set yours.
 TABLET="${CODRAWER_TABLET:-192.168.50.156}"
+# CODRAWER_LAN_IP: this PC's LAN address (the phone loads the app from it). Maintainer's default.
 LAN_IP="${CODRAWER_LAN_IP:-192.168.50.2}"
 KEYDIR="${CODRAWER_KEYDIR:-$HOME/.codrawer}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET")
