@@ -522,3 +522,25 @@ async fn page_snapshot_keeps_other_participants_strokes() {
     let m = read(&mut late).await;
     assert!(m["t"] == "stroke_begin" && m["id"] == "p_1", "peer stroke dropped by the snapshot: {m}");
 }
+
+/// Go: TestPageTurnDropsOtherParticipantsStrokes. A peer's strokes belong to the page they were
+/// drawn on: after the tablet turns the page, a late joiner gets the new page and nothing else.
+#[tokio::test]
+async fn page_turn_drops_other_participants_strokes() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut peer = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"page","doc":"d","page":"p1","rev":100,"strokes":[]}"#).await;
+    read(&mut peer).await; // page p1
+    send(&mut peer, r##"{"t":"stroke_begin","id":"p_1","layer":"peer","color":"#d6482a","ts":150}"##).await;
+    send(&mut peer, r#"{"t":"stroke_end","id":"p_1"}"#).await;
+    read(&mut tablet).await; // p_1 begin
+    read(&mut tablet).await; // p_1 end
+    send(&mut tablet, r#"{"t":"page","doc":"d","page":"p2","rev":200,"strokes":[]}"#).await;
+    read(&mut peer).await; // page p2
+    let mut late = dial(&srv, "s1").await;
+    let m = read(&mut late).await;
+    assert!(m["t"] == "page" && m["page"] == "p2", "want page p2 first: {m}");
+    let next = tokio::time::timeout(std::time::Duration::from_millis(300), late.next()).await;
+    assert!(next.is_err(), "the peer's stroke from page p1 was replayed: {next:?}");
+}

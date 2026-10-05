@@ -387,11 +387,14 @@ mod tests {
         assert_eq!(unquote_usage("one ` only", ""), (String::new(), "one ` only".to_string()));
     }
 
-    /// The flags match Go's main.go: every `flag.XxxVar(&v, "name", default, "usage")` there is
+    /// Go's configuration source: flags and env defaults live in config.go (main.go wires).
+    const GO_CONFIG: &str = include_str!("../../native/config.go");
+
+    /// The flags match Go's config.go: every `flag.XxxVar(&v, "name", default, "usage")` there is
     /// defined here with the same usage text, and none other.
     #[test]
     fn same_flags_as_go() {
-        let go = include_str!("../../native/main.go");
+        let go = GO_CONFIG;
         let mut go_flags: Vec<(&str, &str)> = Vec::new();
         for line in go.lines().filter(|l| l.trim_start().starts_with("flag.") && l.contains("Var(")) {
             let parts: Vec<&str> = line.split('"').collect();
@@ -403,7 +406,7 @@ mod tests {
         assert_eq!(ours, go_flags);
     }
 
-    /// The environment variables read for the config match the ones Go's main.go reads.
+    /// The environment variables read for the config match the ones Go's config.go reads.
     #[test]
     fn same_env_vars_as_go() {
         fn env_names(src: &str, markers: &[&str]) -> Vec<String> {
@@ -419,9 +422,9 @@ mod tests {
             names.dedup();
             names
         }
-        let go = include_str!("../../native/main.go");
+        let go = GO_CONFIG;
         let ours = include_str!("flags.rs").split("#[cfg(test)]").next().unwrap();
-        let go_names = env_names(go, &["Default(\"", "os.Getenv(\""]);
+        let go_names = env_names(go, &["Default(\"", " env(\"", "(env(\"", "os.Getenv(\""]);
         let our_names = env_names(ours, &["_default(\"", "env::var(\""]);
         assert_eq!(our_names, go_names);
     }

@@ -34,6 +34,12 @@ pub(super) struct Envelope<'a> {
     /// ever in its saved page, so only that is covered by a `page` snapshot.
     #[serde(default)]
     pub(super) layer: String,
+    /// `page`: the open document's id.
+    #[serde(default)]
+    pub(super) doc: String,
+    /// `page`: the open page's id.
+    #[serde(default)]
+    pub(super) page: String,
 }
 
 /// `hello`, the first message on every connection.

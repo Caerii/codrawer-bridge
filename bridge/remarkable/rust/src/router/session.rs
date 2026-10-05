@@ -30,6 +30,8 @@ pub(super) struct Session {
     /// The page's base: the latest `page` message as received (`None` before one, or after a
     /// `clear`). Shared, never modified once stored.
     pub(super) page: Option<Utf8Bytes>,
+    /// `"doc/page"` of the latest snapshot (empty before the first).
+    pub(super) page_key: String,
     /// The live log: strokes since the base (or the last clear), in arrival order.
     pub(super) order: VecDeque<String>,
     pub(super) strokes: HashMap<String, Stroke>,
@@ -204,13 +206,17 @@ impl Session {
     /// strokes that began after `rev`: ink drawn since the save, not in any file yet. A page
     /// turn works the same way: the watcher's `rev` is then the time of the turn, so ink from
     /// the previous page leaves the log too. Other participants' and the AI's strokes are in no
-    /// tablet file, so a snapshot never covers them: they stay (Go: `stroke.isTabletInk`).
-    pub(super) fn set_page(&mut self, rev: i64, raw: &Utf8Bytes) {
+    /// tablet file, so a snapshot never covers them: they stay while the page stays, and leave
+    /// when the tablet turns to another page or document (`key` = `"doc/page"`), or they would
+    /// be replayed onto the new page (Go: `setPageLocked`).
+    pub(super) fn set_page(&mut self, rev: i64, key: &str, raw: &Utf8Bytes) {
         self.page = Some(raw.clone());
+        let turned = !self.page_key.is_empty() && self.page_key != key;
+        self.page_key = key.to_string();
         let mut kept = VecDeque::with_capacity(self.order.len());
         for id in self.order.drain(..) {
             let covered = match self.strokes.get(&id) {
-                Some(st) => st.is_tablet_ink() && st.ts <= rev,
+                Some(st) => if st.is_tablet_ink() { st.ts <= rev } else { turned },
                 None => true,
             };
             if !covered {
@@ -384,7 +390,7 @@ mod tests {
         rec(&mut s, r#"{"t":"stroke_begin","id":"no_ts"}"#, 1);
         rec(&mut s, r#"{"t":"stroke_begin","id":"new","ts":3000}"#, 1);
         rec(&mut s, &pts_msg("new", 4), 1);
-        s.set_page(2000, &Utf8Bytes::from_static(r#"{"t":"page","rev":2000}"#));
+        s.set_page(2000, "/", &Utf8Bytes::from_static(r#"{"t":"page","rev":2000}"#));
         assert_eq!(s.order, ["new"]);
         assert_eq!(s.points, 4, "the dropped strokes' points were not released");
 

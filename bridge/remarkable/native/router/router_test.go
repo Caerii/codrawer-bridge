@@ -537,3 +537,24 @@ func TestPageSnapshotKeepsOtherParticipantsStrokes(t *testing.T) {
 		t.Fatalf("peer stroke dropped by the snapshot: %v", m)
 	}
 }
+
+// A peer's strokes belong to the page they were drawn on: when the tablet turns to another page
+// (or document), they leave the replay, or a late joiner would see them painted onto the new page.
+func TestPageTurnDropsOtherParticipantsStrokes(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	peer := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"page","doc":"d","page":"p1","rev":100,"strokes":[]}`)
+	read(t, peer) // page p1
+	send(t, peer, `{"t":"stroke_begin","id":"p_1","layer":"peer","color":"#d6482a","ts":150}`)
+	send(t, peer, `{"t":"stroke_end","id":"p_1"}`)
+	read(t, tablet) // p_1 begin
+	read(t, tablet) // p_1 end
+	send(t, tablet, `{"t":"page","doc":"d","page":"p2","rev":200,"strokes":[]}`)
+	read(t, peer) // page p2
+	late := dial(t, srv, "s1")
+	if m := read(t, late); m["t"] != "page" || m["page"] != "p2" {
+		t.Fatalf("want page p2 first, got %v", m)
+	}
+	expectQuiet(t, late, 300*time.Millisecond)
+}

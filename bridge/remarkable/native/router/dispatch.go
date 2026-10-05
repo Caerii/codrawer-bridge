@@ -31,7 +31,9 @@ type envelope struct {
 	Ts  int64             `json:"ts"`  // stroke_begin: when the stroke started (ms)
 	// stroke_begin: "user" (the tablet's ink), "peer" (another participant), "ai"
 	Layer string `json:"layer"`
-	Rev   int64  `json:"rev"` // page: the snapshot covers everything up to this time (ms)
+	Rev   int64  `json:"rev"`  // page: the snapshot covers everything up to this time (ms)
+	Doc   string `json:"doc"`  // page: the open document's id
+	Page  string `json:"page"` // page: the open page's id
 }
 
 // termUnavailable answers term_* requests on this router.

@@ -24,6 +24,7 @@ type session struct {
 	// page: the tablet's latest saved page (a `page` snapshot, or nil), then the live strokes
 	// recorded after it, in arrival order, for replay to late joiners.
 	page    []byte
+	pageKey string   // "doc/page" of the latest snapshot ("" before the first)
 	order   []string // stroke ids in arrival order
 	strokes map[string]*stroke
 	points  int // recorded points over all strokes
@@ -124,14 +125,19 @@ func (s *session) resetLocked() {
 // setPageLocked makes a `page` snapshot the page's new base. The snapshot already holds every
 // stroke the tablet saved up to its rev (erased ones are simply absent), so the live log keeps
 // only strokes that began after rev: ink drawn since the save, not yet in any file. Strokes on
-// other layers (other participants, AI) are never in the tablet's file, so they always stay.
-// Both times are on the tablet's clock (docs/protocol.md, `page`).
+// other layers (other participants, AI) are never in the tablet's file: they stay while the page
+// stays, and leave when the tablet turns to another page or document (they were drawn on the old
+// one; replaying them would paint them onto the new page). Both times are on the tablet's clock
+// (docs/protocol.md, `page`).
 func (s *session) setPageLocked(m envelope, raw []byte) {
 	s.page = append([]byte(nil), raw...)
+	key := m.Doc + "/" + m.Page
+	turned := s.pageKey != "" && s.pageKey != key
+	s.pageKey = key
 	order := s.order[:0:0]
 	for _, id := range s.order {
 		st := s.strokes[id]
-		if st != nil && (st.ts > m.Rev || !st.isTabletInk()) {
+		if st != nil && (st.isTabletInk() && st.ts > m.Rev || !st.isTabletInk() && !turned) {
 			order = append(order, id)
 			continue
 		}
