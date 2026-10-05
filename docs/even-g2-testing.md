@@ -10,7 +10,7 @@ Verified against hub.evenrealities.com/docs on 2026-09-26. Re-check versions bef
 | reMarkable native bridge | Paper Pro (ssh root) | Build from source: `cd bridge/remarkable/native && GOOS=linux GOARCH=arm64 go build -o codrawer_bridge_native .` (binary is gitignored). Setup: `docs/remarkable_setup.md`. |
 | Desktop router | laptop, `:8000` | `uv sync && uv run uvicorn codrawer_bridge.server.app:app --host 0.0.0.0 --port 8000`. Web viewer at `/viewer/session1`. |
 | model-server | laptop, `:3100` | Optional; needed for ghost ink. `cd model-server && pnpm dev`. |
-| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | **`apps/even-g2/`** (Vite + `@evenrealities/even_hub_sdk`), verified in the simulator 2026-09-26. The Node viewer in `experimental/even-g2-codrawer-viewer/` is the older mock harness. |
+| Even Hub app | the Even phone app's WebView, relayed over BLE to the glasses | **`apps/even-g2/`** (Vite + `@evenrealities/even_hub_sdk`), verified in the simulator 2026-09-26. |
 | Even Hub simulator | laptop | `npm i -g @evenrealities/evenhub-simulator`, then `evenhub-simulator http://localhost:5173`. Emulates containers, text, input events (up/down/click/double-click/long-press), 16 kHz PCM audio. Not frame pacing, BLE timing or LZ4 image validation. |
 
 ## Tooling to install once

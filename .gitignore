@@ -23,7 +23,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# Node (model-server, experimental viewers)
+# Node (model-server, apps/even-g2)
 node_modules/
 .pnpm-store/
 *.tsbuildinfo
