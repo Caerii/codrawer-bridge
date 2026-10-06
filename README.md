@@ -65,6 +65,21 @@ pose and deleting the last one with `stroke_delete`, so the lens shows them at t
 animation in real time. Stills: [proof](docs/media/showcase-proof.png),
 [music](docs/media/showcase-music.png), [together](docs/media/showcase-together.png).
 
+### A hand for the agent
+
+<p align="center"><img src="docs/media/hand-sketcher.gif" alt="The Sketcher persona writing what if ink could travel?" width="640"></p>
+
+The agent's ink can carry the gesture of a real hand: [`packages/hand`](packages/hand/README.md)
+writes text as a persona would, from a model of how people move a pen (Plamondon's
+sigma-lognormal motor plans re-timed toward the two-thirds power law, a damped
+shoulder–elbow–wrist–finger arm with 8–12 Hz tremor, pressure from the movement), with pauses at
+phrase boundaries, a hover before a word it is unsure of, the occasional slip struck through, and
+yielding while you write. Five personas (Archivist, Sketcher, Elder, Mathematician, Calligrapher)
+and a Mirror that takes your pace. Watch and tune them in [`apps/hand-lab`](apps/hand-lab)
+(`pnpm --filter hand-lab dev --port 5197 --strictPort`), or stream into a session with
+`pnpm --filter hand cli "what if ink could travel?" --persona sketcher --ws ws://localhost:8577/ws/handlab`.
+The model, its sources and the measurements: [hand simulator](docs/investigations/hand-simulator.md).
+
 ## How it fits together
 
 ```
@@ -132,6 +147,8 @@ For AI ink and Claude Code turns, run the desktop router as well: `scripts/dev/u
 | [`bridge/remarkable/rust/`](bridge/remarkable/rust/README.md) | The same bridge in Rust, at parity, selectable with `ENGINE=rust` |
 | [`bridge/remarkable/boot/`](bridge/remarkable/boot) | Durable install: boot stub, signed releases, health check, rollback, Bluetooth bring-up |
 | [`apps/even-g2/`](apps/even-g2/README.md) | Even G2 glasses app and phone/browser stage (TypeScript, Even Hub SDK) |
+| [`packages/hand/`](packages/hand/README.md) | Handwriting simulator for agent ink: lognormal motor plans, a damped arm, tremor, personas; CLI |
+| [`apps/hand-lab/`](apps/hand-lab) | Watch the personas write live, with the arm, speed profiles and tunable parameters |
 | [`src/codrawer_bridge/`](src/codrawer_bridge) | Desktop router (Python, FastAPI): AI worker, `/term` to Claude Code, record/replay tools |
 | [`model-server/`](model-server) | OpenAI-compatible model gateway for the AI worker (Cerebras, Bedrock, Together) |
 | [`codrawer-ipad/`](codrawer-ipad) | iPad client (SwiftUI + PencilKit) |
@@ -153,19 +170,19 @@ For AI ink and Claude Code turns, run the desktop router as well: `scripts/dev/u
 
 Device research that shaped them, with the evidence, is in [`docs/investigations/`](docs/investigations):
 xochitl's pen data and page files, durable installs across OS updates, direct BLE to the glasses,
-smart_remarkable, and writing native layers through XOVI.
+smart_remarkable, writing native layers through XOVI, and the biomechanical hand for agent ink.
 
 ## Development
 
 ```bash
 cd bridge/remarkable/native && go test ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/
 cd bridge/remarkable/rust   && cargo test
-cd apps/even-g2             && pnpm typecheck && pnpm test
+pnpm install && pnpm -r typecheck && pnpm -r test             # glasses app, hand simulator, hand lab
 bash bridge/remarkable/boot/test/run.sh                       # boot scripts (Docker)
 uv run pytest -q && uv run ruff check . && uv run mypy .      # desktop router
 ```
 
-CI runs the Go, Rust, app and boot-script suites on every push. Code is written in a literate
+CI runs the Go, Rust, app, hand and boot-script suites on every push. Code is written in a literate
 style: every module opens with the problem it solves and the measured facts it rests on.
 
 Ground rules that hold across the codebase:

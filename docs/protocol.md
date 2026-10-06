@@ -72,6 +72,11 @@ Points are batched for throughput (target ~60Hz, but not required).
 
 Each point is `[x, y, p, t]`.
 
+Agent ink sent as `stroke_*` on `layer:"ai"` carries the time its (simulated) hand drew each
+point (`packages/hand`); clients may play such strokes out at that timing rather than on arrival.
+The Even G2 phone stage does (`apps/even-g2/src/playout.ts`), so a turn posted in one burst still
+appears at the pace it was written.
+
 ### `stroke_end` (bridge → server → broadcast; also triggers AI)
 
 ```json
