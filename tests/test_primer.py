@@ -582,3 +582,184 @@ def test_bkt_values_stay_probabilities_after_a_session(tmp_path):
     assert lr.turn == 3
     assert all(0 < st.p < 1 and not math.isnan(st.p) for st in lr.concepts.values())
     assert lr.misconceptions["sqrt2_no_lowest_terms"].count == 1
+
+
+# =============================================================================================
+# Mock-exam mode
+# =============================================================================================
+
+
+def test_mock_schedule_follows_the_2026_format():
+    from codrawer_bridge.primer import mock
+
+    sched = mock.schedule(0)
+    mins = [(a / 60_000, b / 60_000) for a, b in sched]
+    assert mins == [(0, 90), (105, 195), (300, 390), (405, 495)]  # 11:00, 12:45, 16:00, 17:45 ET
+    fast = mock.schedule(0, scale=0.01)
+    assert fast[3][1] == pytest.approx(495 * 600)
+
+
+def test_a_mock_collects_write_ups_and_grades_them_the_next_morning(tmp_path):
+    from codrawer_bridge.primer import mock
+
+    clock = {"now": dt.datetime(2026, 10, 24, 11, 0).timestamp() * 1000}
+    sent: list[dict] = []
+
+    async def send(m: dict) -> None:
+        sent.append(m)
+
+    agent = PrimerAgent(
+        send,
+        learner="nell",
+        mode="offline",
+        store=LearnerStore(tmp_path),
+        clock=lambda: clock["now"],
+    )
+    problems = [
+        ["sqrt2_irrational", "odd_sum_squares", "am_gm_two"],
+        ["pigeonhole_square", "handshake", "vieta_sum_squares"],
+        ["squares_mod_4", "harmonic_diverges", "roots_unity_sum"],
+        ["fixed_points_expectation", "infinitely_many_primes", "rank_ab"],
+    ]
+
+    async def go():
+        await agent.handle({"t": "primer_request", "what": "mock_start", "problems": problems})
+        first = [m for m in sent if m.get("t") == "primer"][-1]
+        assert first["mock"]["phase"] == "session" and first["mock"]["session"] == 1
+        assert first["mock"]["glance"] == "Mock S1/4 · 90 min · P1"
+        assert [p["id"] for p in first["mock"]["problems"]] == problems[0]
+        # write problem 1, then switch to problem 2 from the keyboard and write it
+        for m in load_recording(FIXTURES / "sqrt2_flawed.jsonl"):
+            await agent.handle(m)
+        for ch in "/p 2":
+            await agent.handle({"t": "key", "key": ch, "char": ch})
+        await agent.handle({"t": "key", "key": "Enter"})
+        for m in load_recording(FIXTURES / "odd_sum.jsonl"):
+            await agent.handle(m)
+        # no tutoring during the exam
+        await agent.handle({"t": "primer_request", "what": "hint"})
+        assert sent[-1]["move"]["kind"] == "notice" and "mock" in sent[-1]["move"]["text"].lower()
+        # the break: ink is not collected
+        clock["now"] += 95 * 60_000
+        await agent.tick()
+        assert sent[-1]["mock"]["phase"] == "break"
+        await agent.handle({"t": "stroke_begin", "id": "brk", "layer": "user", "ts": 1})
+        await agent.handle(
+            {"t": "stroke_pts", "id": "brk", "pts": [[0.5, 0.9, 0.5, 1], [0.6, 0.9, 0.5, 2]]}
+        )
+        await agent.handle({"t": "stroke_end", "id": "brk", "ts": 2})
+        # the day ends; nothing is graded until the next morning
+        clock["now"] += 500 * 60_000
+        await agent.tick()
+        assert agent.mock.status == "awaiting_grading"
+        assert sent[-1]["mock"]["grade_after"] == dt.datetime(2026, 10, 25, 6, 0).timestamp() * 1000
+        clock["now"] = dt.datetime(2026, 10, 25, 7, 0).timestamp() * 1000
+        await agent.tick()
+
+    asyncio.run(go())
+    report = sent[-1]["mock"]["report"]
+    assert report["estimate"] is True and report["max"] == 120
+    by_id = {r["problem"]: r for r in report["problems"]}
+    assert by_id["sqrt2_irrational"]["score"] == 2 and "lowest terms" in " ".join(
+        by_id["sqrt2_irrational"]["findings"]
+    )
+    assert by_id["odd_sum_squares"]["score"] == 10
+    assert by_id["am_gm_two"]["score"] == 0 and by_id["am_gm_two"]["rigor"].startswith(
+        "No write-up"
+    )
+    assert report["total"] == 12
+    m = mock.MockStore(LearnerStore(tmp_path).dir).latest("nell")
+    s1 = m.sessions[0]
+    assert "brk" not in {st["id"] for w in s1.writeups.values() for st in w.strokes}
+    lr = LearnerStore(tmp_path).load("nell")
+    assert lr.sessions[-1].kind == "mock" and sum(lr.sessions[-1].scores) == 12
+
+
+def test_a_different_page_starts_the_view_over():
+    log = InkLog()
+    log.observe({"t": "page", "doc": "d", "page": "p1", "strokes": []})
+    for m in _line_msgs("a", 0.2, 0.0)[0]:
+        log.observe(m)
+    assert log.ink()
+    log.observe({"t": "page", "doc": "d", "page": "p2", "strokes": []})
+    assert log.ink() == [] and log.page_key == "d/p2"
+
+
+def test_problem_of_the_day_is_stable_for_a_day():
+    lr = Learner(name="t", created_ms=NOW)
+    a = practice.problem_of_the_day(lr, "2026-10-07", NOW)
+    assert a is not None and a == practice.problem_of_the_day(lr, "2026-10-07", NOW)
+    assert a.why
+
+
+# =============================================================================================
+# The scored evaluation, and the live recognizer's request (no network)
+# =============================================================================================
+
+
+def test_scored_evaluation_passes_offline_and_scores_a_replayed_reading(tmp_path):
+    from codrawer_bridge.primer import scoring
+
+    scores = scoring.gate(scoring.run("offline"), scoring.OFFLINE_GATE)
+    assert scores and all(s.passed for s in scores), scoring.report(scores)
+    kinds = {s.kind for s in scores}
+    assert kinds == {"recognize", "grade"} and sum(s.kind == "grade" for s in scores) >= 7
+    # A recorded "model reply" that merged two steps and missed the lowest-terms finding.
+    for name in ("sqrt2_correct", "odd_sum", "sqrt2_flawed"):
+        gold = load_fixture(name).to_dict()
+        reply = {k: gold[k] for k in ("title", "goal", "technique", "steps")}
+        reply.update(received_text="L1: ...", kind="proof", findings=[], formal="")
+        reply["grade"] = {"score": 10, "band": "complete", "rigor": "", "exposition": ""}
+        if name == "sqrt2_flawed":
+            reply["steps"] = reply["steps"][:4] + [reply["steps"][5]]
+        rec = {"model": "fake", "usage": {"ms": 1}, "reply": reply}
+        (tmp_path / f"{name}.json").write_text(json.dumps(rec), encoding="utf-8")
+    replay = scoring.gate(scoring.run("replay", recorded=tmp_path), scoring.MODEL_GATE)
+    by = {(s.kind, s.case): s for s in replay}
+    assert by[("recognize", "sqrt2_flawed")].metrics["steps_match"] == 0.0
+    assert by[("recognize", "sqrt2_flawed")].metrics["latex_f1"] < 1.0
+    g = by[("grade", "sqrt2_flawed")]
+    assert g.metrics["findings_recall"] == 0.0 and not g.passed
+    assert by[("grade", "sqrt2_correct")].passed
+
+
+def test_live_recognizer_sends_the_selection_and_page_and_parses_the_reply(monkeypatch):
+    import types
+
+    import anthropic
+
+    from codrawer_bridge.primer.recognize import LiveRecognizer
+
+    gold = load_fixture("sqrt2_flawed").to_dict()
+    reply = {k: gold[k] for k in ("title", "goal", "technique", "steps")}
+    finding = {"id": "sqrt2_no_lowest_terms", "step": 6, "detail": "x"}
+    reply.update(received_text="L1: Claim", kind="proof", formal="", findings=[finding])
+    reply["grade"] = {"score": 2, "band": "partial", "rigor": "r", "exposition": "e"}
+    seen = {}
+
+    def create(**kw):
+        seen.update(kw)
+        return types.SimpleNamespace(
+            stop_reason="end_turn",
+            model="claude-opus-5-5",
+            usage=types.SimpleNamespace(input_tokens=1200, output_tokens=900),
+            content=[types.SimpleNamespace(type="text", text=json.dumps(reply))],
+        )
+
+    messages = types.SimpleNamespace(create=create)
+    fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=messages))
+    monkeypatch.setattr(anthropic, "Anthropic", lambda *a, **k: fake)
+    page = fixture_log("sqrt2_flawed")
+    sel = InkLog()
+    for s in page.ink()[:40]:
+        sel.strokes[s.id] = s
+    doc = LiveRecognizer().recognize(sel, "Prove that sqrt 2 is irrational.", page=page)
+    content = seen["messages"][0]["content"]
+    assert [c["type"] for c in content] == ["image", "image", "text"]
+    assert "Image 2 is the whole page" in content[-1]["text"]
+    assert "irrational" in content[-1]["text"]
+    schema = seen["output_config"]["format"]["schema"]
+    assert {"received_text", "kind"} <= set(schema["required"])
+    assert seen["fallbacks"] == "default" and "never to complete" in seen["system"]
+    assert doc.source == "live:claude-opus-5-5" and doc.received_text == "L1: Claim"
+    assert doc.findings[0].id == "sqrt2_no_lowest_terms"

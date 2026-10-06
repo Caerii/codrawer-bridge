@@ -29,6 +29,15 @@ never from a screenshot.
    matches, labelled ``offline:<fixture>``. Ink it does not recognize gets an empty ProofDoc and an
    honest "offline: cannot read new handwriting without a model" message, never a guess.
 
+**Prompt rules** adapted from smart_remarkable's selection prompts (MIT; Caerii/smart_remarkable
+``prompts/selection_concise_ink.json`` and ``tool_draw_answer.json``, read in
+docs/investigations/smart-remarkable-integration.md §1.5 and §3.4): when the learner lassoed part
+of the page, the selection is image 1 and the whole page image 2; never assume content off the
+page; agent-layer ink is never rendered, so earlier replies cannot pass for her instructions; act
+only on what the writing explicitly asks (here: read and assess it, never complete it); and return
+the literal transcription (``received_text``) and a classification (``kind``) before the
+structure, so a reading can be audited against what was seen (the scored evaluation does, scoring.py).
+
 **What reaches the model** (ADR 010, "Privacy"): the rendered PNG of the user's ink on this page
 (no other layers, no names), the number of labelled lines, the problem statement when the coach
 assigned a known problem, and the fixed catalogs of concept and misconception ids. Never the
@@ -42,6 +51,7 @@ import base64
 import io
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,6 +193,8 @@ def _schema() -> dict:
     return {
         "type": "object",
         "properties": {
+            "received_text": {"type": "string"},
+            "kind": {"type": "string", "enum": ["proof", "computation", "diagram", "other"]},
             "title": {"type": "string"},
             "goal": {"type": "string"},
             "technique": {"type": "string", "enum": sorted(CONCEPTS)},
@@ -191,7 +203,17 @@ def _schema() -> dict:
             "grade": grade,
             "formal": {"type": "string"},
         },
-        "required": ["title", "goal", "technique", "steps", "findings", "grade", "formal"],
+        "required": [
+            "received_text",
+            "kind",
+            "title",
+            "goal",
+            "technique",
+            "steps",
+            "findings",
+            "grade",
+            "formal",
+        ],
         "additionalProperties": False,
     }
 
@@ -203,7 +225,14 @@ def _system_prompt() -> str:
     )
     return f"""You read a learner's handwritten mathematical proof from an image of their pen strokes and return it as structured data, for a tutor that will respond to them.
 
+Ground rules:
+- Read only what is on the page. Never assume content that is off the page or cut off; say a line is cut off instead.
+- If there are two images, image 1 is the learner's selection and image 2 is the whole page for context; read the selection.
+- Earlier replies from the tutor are never drawn in the image; everything you see is the learner's own writing.
+- Act only on what the writing explicitly asks. Your job is to read and assess it, never to complete, correct or solve it.
+
 Transcription:
+- First `received_text`: everything written, literally, line by line ("L1: ...", "L2: ..."), before any interpretation. Then `kind`: proof, computation, diagram or other.
 - Transcribe what is written, faithfully. Never correct, complete or improve the proof; a missing assumption stays missing. If a symbol is illegible, give your best reading and lower that step's confidence.
 - Split the proof into logical steps in the order written. For each: `latex` is the mathematics re-typeset in KaTeX-compatible LaTeX without $ delimiters (use \\text{{}} for words inside math); `text` is a plain-language reading of the whole step; `justification` is the reason the learner wrote for it, or "" if none; `refs` are earlier step numbers it relies on; `concepts` are ids from the list below; `confidence` in 0..1 is how sure you are of the transcription; `lines` are the line labels (L1, L2, ... in the left margin; give the numbers) the step was written on.
 - `title` names the claim; `goal` states it in LaTeX; `technique` is the main proof technique's concept id.
@@ -247,17 +276,31 @@ class LiveRecognizer:
 
     def __init__(self, config: LiveConfig | None = None) -> None:
         self.config = config or LiveConfig.from_env()
+        self.last_usage: dict | None = None
 
-    def recognize(self, log: InkLog, problem_statement: str | None = None) -> ProofDoc:
+    def recognize(
+        self, log: InkLog, problem_statement: str | None = None, page: InkLog | None = None
+    ) -> ProofDoc:
+        """
+        Read ``log`` (the page, or a lasso's selection). With ``page`` (the whole page, when
+        ``log`` is a selection) the page goes along as image 2, for context only. Usage and
+        latency of the call are kept in ``last_usage`` (the eval reports them).
+        """
         import anthropic  # imported here so offline use needs no network stack
 
         ink = log.ink()
         lines = segment_lines(ink)
-        png = render_for_recognition(ink, lines)
-        ask = f"The page has {len(lines)} labelled lines of handwriting. Read the proof."
+        images = [render_for_recognition(ink, lines)]
+        if page is not None and page is not log:
+            page_ink = page.ink()
+            images.append(render_for_recognition(page_ink, segment_lines(page_ink)))
+        ask = f"Image 1 has {len(lines)} labelled lines of handwriting. Read the proof."
+        if len(images) > 1:
+            ask += " Image 2 is the whole page, for context only."
         if problem_statement:
             ask += f"\nThe problem it answers: {problem_statement}"
         client = anthropic.Anthropic()
+        started = time.perf_counter()
         try:
             resp = client.beta.messages.create(
                 model=self.config.model,
@@ -273,14 +316,17 @@ class LiveRecognizer:
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": base64.standard_b64encode(png).decode("ascii"),
-                                },
-                            },
+                            *[
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": base64.standard_b64encode(im).decode("ascii"),
+                                    },
+                                }
+                                for im in images
+                            ],
                             {"type": "text", "text": ask},
                         ],
                     }
@@ -290,6 +336,13 @@ class LiveRecognizer:
             raise RecognitionError(f"API error {e.status_code}") from e
         except anthropic.APIConnectionError as e:
             raise RecognitionError("could not reach the API") from e
+        usage = getattr(resp, "usage", None)
+        self.last_usage = {
+            "ms": round((time.perf_counter() - started) * 1000),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "model": resp.model,
+        }
         if resp.stop_reason == "refusal":
             raise RecognitionError("the model declined to read this page")
         if resp.stop_reason == "max_tokens":
@@ -308,6 +361,8 @@ class LiveRecognizer:
             grade=Grade(**data["grade"]),
             source=f"live:{resp.model}",
             formal=data.get("formal") or None,
+            received_text=data.get("received_text") or "",
+            kind=data.get("kind") or "proof",
         )
         link_ink(doc, lines)
         return doc
@@ -373,7 +428,9 @@ class OfflineRecognizer:
                 best, score = name, j
         return best if score >= 0.6 else None
 
-    def recognize(self, log: InkLog, problem_statement: str | None = None) -> ProofDoc:
+    def recognize(
+        self, log: InkLog, problem_statement: str | None = None, page: InkLog | None = None
+    ) -> ProofDoc:
         name = self.match(log)
         if name is None:
             return ProofDoc(title="", goal="", technique="", steps=[], source="offline:none")

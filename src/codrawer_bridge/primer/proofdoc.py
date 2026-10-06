@@ -108,6 +108,11 @@ class ProofDoc:
     check: Check | None = None
     source: str = ""
     formal: str | None = None
+    #: The literal transcription of everything written, before any structuring (the envelope's
+    #: ``received_text``, after smart_remarkable): what the model saw, for audit and the eval.
+    received_text: str = ""
+    #: What the ink is: ``proof``, ``computation``, ``diagram`` or ``other``.
+    kind: str = "proof"
 
     # ── Serialization ────────────────────────────────────────────────────────────────────────
 
@@ -138,6 +143,8 @@ class ProofDoc:
             check=pick(Check, d["check"]) if d.get("check") else None,
             source=str(d.get("source") or ""),
             formal=d.get("formal"),
+            received_text=str(d.get("received_text") or ""),
+            kind=str(d.get("kind") or "proof"),
         )
 
     def step(self, n: int) -> Step | None:

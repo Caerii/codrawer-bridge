@@ -11,6 +11,9 @@ The Primer's command line.
     uv run python -m codrawer_bridge.primer learner nell --show
     uv run python -m codrawer_bridge.primer learner nell --forget
 
+    # the scored evaluation of recognition and grading (scoring.py): offline by default, gated
+    uv run python -m codrawer_bridge.primer score [--mode offline|live|replay] [--record DIR] [--recorded DIR]
+
 ``--mode`` is ``auto`` (live when ``ANTHROPIC_API_KEY`` is set, else offline), ``live`` or
 ``offline``. ``--out DIR`` writes the ``primer`` message (``primer.json``) and ``proof.tex``;
 ``--pdf`` also compiles it when a TeX engine is installed. ``--coach`` turns the practice coach on
@@ -203,6 +206,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument("--auto", action="store_true", help="also read the page at lulls")
         return asyncio.run(run_live(p.parse_args(argv[1:])))
+    if argv and argv[0] == "score":
+        from . import scoring as primer_eval
+
+        p = argparse.ArgumentParser(prog="primer score")
+        p.add_argument("--mode", default="offline", choices=["offline", "live", "replay"])
+        p.add_argument("--record", default=None, help="live: save each model reply here")
+        p.add_argument("--recorded", default=None, help="replay: read the saved replies from here")
+        a = p.parse_args(argv[1:])
+        scores = primer_eval.run(
+            a.mode, Path(a.record) if a.record else None, Path(a.recorded) if a.recorded else None
+        )
+        primer_eval.gate(
+            scores, primer_eval.OFFLINE_GATE if a.mode == "offline" else primer_eval.MODEL_GATE
+        )
+        print(primer_eval.report(scores))
+        return 0 if all(s.passed for s in scores) else 1
     if argv and argv[0] == "learner":
         p = argparse.ArgumentParser(prog="primer learner")
         p.add_argument("name")
