@@ -33,6 +33,8 @@ Usage (from the repo root; copy the plugin off the tablet first, read-only):
 
     scp root@192.168.50.156:/usr/lib/plugins/platforms/libepaper.so /tmp/
     uv run --with pyelftools python scripts/dev/epaper_keymap.py /tmp/libepaper.so [Locale] [--json]
+    uv run --with pyelftools python scripts/dev/epaper_keymap.py /tmp/libepaper.so --typer \
+        > bridge/remarkable/native/epaper_keymaps.json      # the bridge typer's tables (both engines)
 
 Nothing here touches the tablet.
 """
@@ -141,10 +143,33 @@ def report(name: str, table: list[Mapping]) -> dict:
     }
 
 
+def typer_tables(maps: dict[str, list[Mapping]]) -> dict:
+    """The bridge typer's tables (`--typer`): per locale, the characters it can produce with the
+    key and modifiers (Shift 1, AltGr 2) that produce them, and the printable ASCII it cannot.
+    Written to bridge/remarkable/native/epaper_keymaps.json, which both engines embed."""
+    keypad = set(range(71, 84)) | {96, 98}  # KEY_KP7..KP_DOT, KPENTER, KPSLASH: NumLock-dependent
+    out = {}
+    for name in sorted(maps):
+        prod = producers(maps[name])
+        # A character the table also produces from a main-keyboard key uses that key, never the
+        # keypad (France's digits are first in its table on the keypad).
+        main = producers([m for m in maps[name] if m.keycode not in keypad])
+        prod = {c: main.get(c, km) for c, km in prod.items()}
+        out[name] = {
+            "missing": "".join(c for c in PRINTABLE if c not in prod),
+            "keys": {c: [k, m] for c, (k, m) in sorted(prod.items()) if c.isprintable()},
+        }
+    return out
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
         return 2
+    if "--typer" in argv:
+        args = [a for a in argv[1:] if a != "--typer"]
+        print(json.dumps(typer_tables(read_keymaps(args[0])), ensure_ascii=False, separators=(",", ":")))
+        return 0
     as_json = "--json" in argv
     args = [a for a in argv[1:] if a != "--json"]
     maps = read_keymaps(args[0])

@@ -11,6 +11,7 @@ type pageSnapshot struct {
 	page    []byte // the latest `page` message (never modified once stored), or nil
 	strokes []strokeSnap
 	doc     []string
+	typer   []byte // the latest typer_config acknowledgement (never modified once stored), or nil
 }
 
 // strokeSnap is one recorded stroke as of the snapshot.
@@ -24,7 +25,7 @@ type strokeSnap struct {
 // snapshotLocked takes the snapshot. The full slice expressions cap each copy at its current
 // length, so a later append in the session can never write into what the snapshot sees.
 func (s *session) snapshotLocked() pageSnapshot {
-	snap := pageSnapshot{page: s.page, doc: s.docLog[:len(s.docLog):len(s.docLog)]}
+	snap := pageSnapshot{page: s.page, doc: s.docLog[:len(s.docLog):len(s.docLog)], typer: s.typer}
 	for _, id := range s.order {
 		if st := s.strokes[id]; st != nil {
 			snap.strokes = append(snap.strokes, strokeSnap{id, st.begin, st.pts[:len(st.pts):len(st.pts)], st.ended})
@@ -35,7 +36,8 @@ func (s *session) snapshotLocked() pageSnapshot {
 
 // messages renders the snapshot in replay order: the page base, then each stroke (its original
 // stroke_begin, its points in stroke_pts messages of replayPts, and stroke_end if it ended), then
-// the document log in doc_update messages of docReplayN updates ({"t":"doc_update","us":[…]}).
+// the document log in doc_update messages of docReplayN updates ({"t":"doc_update","us":[…]}),
+// then the bridge's latest typer_config acknowledgement.
 func (snap pageSnapshot) messages() [][]byte {
 	var out [][]byte
 	if snap.page != nil {
@@ -61,6 +63,9 @@ func (snap pageSnapshot) messages() [][]byte {
 			T  string   `json:"t"`
 			Us []string `json:"us"`
 		}{"doc_update", snap.doc[i:j]}))
+	}
+	if snap.typer != nil {
+		out = append(out, snap.typer)
 	}
 	return out
 }

@@ -83,6 +83,10 @@ export interface Inbound {
    * next move, the learner and the plan. Normalized by primer/model.ts parseReading.
    */
   primer: Record<string, unknown>
+  /** The tablet's reply typing speed: a request (no `ok`) or the bridge's answer (typer.ts). */
+  typer_config: { speed?: unknown; char_ms?: unknown; burst?: unknown; ok?: unknown }
+  /** What a reply typed into the tablet lost: characters its keyboard cannot type (typer.ts). */
+  typer_note: { dropped?: unknown; count?: unknown; keymap?: unknown }
 }
 
 export type InboundType = keyof Inbound

@@ -341,6 +341,89 @@ question; with nothing pending it is a prompt. Streamed assistant text is coales
 into `kind:"text"` chunks; tool starts/ends, progress, results and errors are `kind:"note"`;
 `kind:"status"` reports the bridge itself (attached, dropped, misconfigured).
 
+### `typer_config` (client → server → bridge; the bridge's answer → server → broadcast, replayed to joiners)
+
+The speed at which the tablet bridge types `term` replies into xochitl's focused text field (its
+uinput typer: `bridge/remarkable/rust/src/typer.rs`, `native/typer.go`, the fallback when the
+codrawer-layer extension cannot insert the text itself; inserted text arrives at once and has
+no speed). The bridge owns the setting; anyone may ask for a change, and only the bridge's
+acknowledgement says what is in force.
+
+```json
+{"t":"typer_config","speed":"fast"}
+{"t":"typer_config"}
+{"t":"typer_config","speed":"fast","char_ms":12,"burst":10,"enter_ms":150,"substitute":false,"keymap":"UnitedStates","untypeable":"[]^`{}~","ok":true}
+{"t":"typer_config","speed":"careful","char_ms":12,"burst":10,"enter_ms":150,"substitute":false,"keymap":"UnitedStates","untypeable":"[]^`{}~","ok":false,"error":"speed must be careful, fast or instant"}
+```
+
+Speeds (one write = one `write()` to the virtual keyboard; every keystroke stays in its own
+SYN frames):
+
+| `speed` | one write carries | `char_ms` default | 400 characters |
+| --- | --- | --- | --- |
+| `careful` | one keystroke | 12 | ~4.8 s (verified on the device) |
+| `fast` | a word and its separator, at most 16 keys | 12 | ~0.9 s |
+| `instant` | up to `burst` keys (default 10), never past an Enter | 40 | ~1.6 s; **uncalibrated defaults** |
+
+Request fields, all optional: `speed`; `char_ms`, the pause after each write in ms (1–1000); `burst`,
+instant's keys per write (1–16); `enter_ms`, the least pause after a write that ends with Enter
+(0–2000, default 150); `substitute`, true to replace characters the keyboard cannot type with
+stand-ins (`[`→`(`, `^`→`**`, …) instead of leaving them out. A `speed` resets `char_ms` to that
+speed's default before a given `char_ms` applies; the other fields alone adjust the current
+speed. A request with no fields asks for the current setting.
+A bad value refuses the whole request (`"ok":false` with `error`, and the unchanged setting). A
+change applies from the next reply on. Requests carry no `ok`. The bridge ignores any
+`typer_config` that has one.
+
+The bridge answers every request with an acknowledgement and announces its setting the same way
+on every new connection. The routers (Python, Go, Rust) relay `typer_config` like any broadcast
+and keep the latest acknowledgement with `"ok":true`, which they replay to a joiner after the
+page, the strokes and the document (not to `?replay=0` sources). `clear` keeps it. The bridge
+starts from its environment: `TYPE_SPEED` (`careful|fast|instant`), else `TYPE_BATCH=word` for
+`fast`, else `careful`; `TYPE_CHAR_MS` (> 0), `TYPE_BURST`, `TYPE_ENTER_MS` and
+`TYPE_SUBSTITUTE=1` override the preset's values. The Even G2 app's phone ⋯ menu shows the
+acknowledged speed under "Reply typing speed" and asks for one when tapped.
+
+`keymap` and `untypeable` describe the keyboard. xochitl turns key codes into characters with its
+own Type Folio table for the keyboard language set in its Settings (`InputLocale` in
+xochitl.conf; `TYPE_KEYMAP` overrides), and the typer presses keys from the same table
+(`scripts/dev/epaper_keymap.py --typer`). It never presses a dead key. Under United States the
+table has no key for ``[ ] { } ^ ` ~``, under United Kingdom only for ``^ ` ~``. Agents whose
+replies are typed into the tablet should avoid them: LaTeX, for one, loses its braces.
+
+Each write also waits until the pen is out of range and no finger touches the screen, plus
+300 ms: xochitl ignores keys in the meantime. Before a reply that follows pen or touch activity,
+or a pause of more than 1 s, the typer presses End and waits 150 ms. That puts xochitl back in
+text mode without changing the text.
+
+**From the tablet's dock.** A `dock_action` whose `id` is `typer_careful`, `typer_fast` or
+`typer_instant` sets that speed: the bridge applies it as it sends the `dock_action` on (which is
+relayed as usual) and then sends the acknowledgement. `/run/codrawer/dock.json` replaces the
+dock's built-in list when it has entries, so a file offering the speeds repeats the built-in ones:
+
+```json
+{"entries":[
+  {"id":"status","label":"codrawer status"},
+  {"id":"agent_ink","label":"Agent ink on/off"},
+  {"id":"practice_coach","label":"Practice coach"},
+  {"id":"ask_page","label":"Ask about this page"},
+  {"id":"ask_selection","label":"Ask about selection"},
+  {"id":"typer_careful","label":"Reply typing: careful"},
+  {"id":"typer_fast","label":"Reply typing: fast"},
+  {"id":"typer_instant","label":"Reply typing: instant"}]}
+```
+
+The dock's entries are plain `{id, label}` with no checked state. Nothing writes this file yet.
+
+### `typer_note` (tablet bridge → server → broadcast)
+
+What a typed reply lost: the characters the tablet's keyboard table cannot type, in order. The
+glasses show it on the status strip.
+
+```json
+{"t":"typer_note","dropped":"[]{}","count":4,"keymap":"UnitedStates"}
+```
+
 ### `ai_stroke_*` (server → clients)
 
 AI strokes are streamed in a separate layer and **never** replace user strokes.

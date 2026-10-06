@@ -197,6 +197,31 @@ async fn doc_survives_clear() {
     assert_eq!(m["t"], "doc_update", "doc lost on clear: {m}");
 }
 
+/// typer_config: a request is relayed (to the bridge) but not kept; the bridge's acknowledgement
+/// is relayed and kept, survives clear, and a late joiner gets the latest one (Go: same test).
+#[tokio::test]
+async fn typer_config_relays_and_latest_ack_replays() {
+    let srv = new_server().await;
+    let mut phone = dial(&srv, "s1").await;
+    let mut bridge = dial(&srv, "s1").await;
+    send(&mut phone, r#"{"t":"typer_config","speed":"fast"}"#).await;
+    let m = read(&mut bridge).await;
+    assert!(m["t"] == "typer_config" && m["speed"] == "fast" && m["ok"].is_null(), "request relay: {m}");
+    send(&mut bridge, r#"{"t":"typer_config","speed":"careful","ok":true}"#).await;
+    read(&mut phone).await;
+    send(&mut bridge, r#"{"t":"typer_config","speed":"fast","ok":true}"#).await;
+    let m = read(&mut phone).await;
+    assert!(m["speed"] == "fast" && m["ok"] == true, "ack relay: {m}");
+    send(&mut bridge, r#"{"t":"typer_config","speed":"warp","ok":false}"#).await; // a refusal is not the setting
+    read(&mut phone).await;
+    send(&mut phone, r#"{"t":"clear"}"#).await;
+    read(&mut bridge).await;
+    let mut late = dial(&srv, "s1").await;
+    let m = read(&mut late).await;
+    assert!(m["t"] == "typer_config" && m["speed"] == "fast" && m["ok"] == true, "replay: {m}");
+    expect_quiet(&mut late, Duration::from_millis(100)).await; // the request itself was never kept
+}
+
 #[tokio::test]
 async fn healthz_and_bad_paths() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

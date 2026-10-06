@@ -43,6 +43,10 @@ pub(super) struct Envelope<'a> {
     /// `stroke_delete`: the strokes to remove.
     #[serde(default)]
     pub(super) ids: Vec<String>,
+    /// `typer_config`: present on the bridge's acknowledgement (`true` when it took effect),
+    /// absent on a client's request.
+    #[serde(default)]
+    pub(super) ok: Option<bool>,
 }
 
 /// A `stroke_delete` re-encoded with only the ids the router accepted, when it refused or did

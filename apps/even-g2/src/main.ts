@@ -59,6 +59,7 @@ import { acceptReading, glanceFor, parseReading, primer } from './primer/model'
 import { onReading, setupPrimerPanel } from './primer/panel'
 import * as session from './session'
 import { dirty, glasses, hud, view } from './state'
+import { typerNoteText } from './typer'
 
 // ── 1. The phone page ─────────────────────────────────────────────────────────────────────────
 installDevLog() // first, so the console of everything below reaches the desktop in dev builds
@@ -139,6 +140,12 @@ setInterval(() => {
     dirty.text = true
   }
 }, 15_000)
+
+link.on('typer_note', (m) => {
+  // what the tablet's typer could not type shows on the glasses' status strip
+  const text = typerNoteText({ t: 'typer_note', ...m })
+  if (text) onTerm({ kind: 'status', text })
+})
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

@@ -45,7 +45,8 @@ type BridgeConfig struct {
 	KeyboardGrab bool
 
 	// TypeReplies (TYPE_REPLIES): type terminal (`term`) replies into the tablet's focused text
-	// field through a virtual keyboard (uinput). TypeCharMs (TYPE_CHAR_MS) paces the keystrokes.
+	// field through a virtual keyboard (uinput). TypeCharMs (TYPE_CHAR_MS) is the pause after each
+	// write, 0 for the speed preset's own (typer.go; TYPE_SPEED, TYPE_BATCH, TYPE_BURST pick the rest).
 	TypeReplies bool
 	TypeCharMs  int
 
@@ -95,7 +96,7 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 		Keyboard:           getenvDefault("KEYBOARD_DEVICE", "auto"),
 		KeyboardGrab:       getenvBoolDefault("KEYBOARD_GRAB", false),
 		TypeReplies:        getenvBoolDefault("TYPE_REPLIES", true),
-		TypeCharMs:         getenvIntDefault("TYPE_CHAR_MS", 12),
+		TypeCharMs:         getenvIntDefault("TYPE_CHAR_MS", 0),
 		HoverHz:            getenvIntDefault("HOVER_HZ", 30),
 		ServeAddr:          os.Getenv("SERVE_ADDR"),
 		RouterOnly:         getenvBoolDefault("ROUTER_ONLY", false),
@@ -126,7 +127,7 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 	flag.StringVar(&cfg.Keyboard, "keyboard", cfg.Keyboard, "Keyboard device: auto (find a kbd device), off, or /dev/input/eventN. Emits key messages.")
 	flag.BoolVar(&cfg.KeyboardGrab, "keyboard-grab", cfg.KeyboardGrab, "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)")
 	flag.BoolVar(&cfg.TypeReplies, "type-replies", cfg.TypeReplies, "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)")
-	flag.IntVar(&cfg.TypeCharMs, "type-char-ms", cfg.TypeCharMs, "Milliseconds between typed characters")
+	flag.IntVar(&cfg.TypeCharMs, "type-char-ms", cfg.TypeCharMs, "Milliseconds of pause after each typed write (0: the speed preset's; TYPE_SPEED picks careful, fast or instant)")
 	flag.IntVar(&cfg.HoverHz, "hover-hz", cfg.HoverHz, "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables")
 	flag.StringVar(&cfg.ServeAddr, "serve", cfg.ServeAddr, "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>")
 	flag.BoolVar(&cfg.RouterOnly, "router-only", cfg.RouterOnly, "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)")

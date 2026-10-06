@@ -49,6 +49,10 @@ class Session:
     # replayed to joiners right after hello. This router keeps no live-stroke log to rebase.
     page_msg: str | None = None
 
+    # The tablet bridge's latest `typer_config` acknowledgement (its reply typing speed), raw
+    # JSON, replayed to joiners after the document so every client shows the current speed.
+    typer_msg: str | None = None
+
     # Last known cursor (normalized), if clients send cursor updates.
     last_cursor_xy: list[float] | None = None
 

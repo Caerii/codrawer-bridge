@@ -34,6 +34,7 @@ pub struct Config {
 
     /// Type terminal (`term`) replies into the tablet's focused text field (uinput).
     pub type_replies: bool,
+    /// Pause after each typed write, ms; 0 (default) keeps the speed preset's own (typer.rs).
     pub type_char_ms: i64,
 
     /// Cursor messages per second while the pen hovers (0: off).
@@ -85,7 +86,7 @@ impl Config {
             keyboard: getenv_default("KEYBOARD_DEVICE", "auto"),
             keyboard_grab: getenv_bool_default("KEYBOARD_GRAB", false),
             type_replies: getenv_bool_default("TYPE_REPLIES", true),
-            type_char_ms: getenv_int_default("TYPE_CHAR_MS", 12),
+            type_char_ms: getenv_int_default("TYPE_CHAR_MS", 0),
             hover_hz: getenv_int_default("HOVER_HZ", 30),
             serve_addr: std::env::var("SERVE_ADDR").unwrap_or_default(),
             router_only: getenv_bool_default("ROUTER_ONLY", false),
@@ -132,7 +133,7 @@ const FLAGS: &[FlagDef] = &[
     FlagDef { name: "keyboard", usage: "Keyboard device: auto (find a kbd device), off, or /dev/input/eventN. Emits key messages." },
     FlagDef { name: "keyboard-grab", usage: "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)" },
     FlagDef { name: "type-replies", usage: "Type terminal replies into the tablet's focused text field via a virtual keyboard (uinput)" },
-    FlagDef { name: "type-char-ms", usage: "Milliseconds between typed characters" },
+    FlagDef { name: "type-char-ms", usage: "Milliseconds of pause after each typed write (0: the speed preset's; TYPE_SPEED picks careful, fast or instant)" },
     FlagDef { name: "hover-hz", usage: "Pen hover position (cursor messages) per second, for a pointer on viewers; 0 disables" },
     FlagDef { name: "serve", usage: "Also run the stroke router on this address (e.g. :8577); point -ws at ws://127.0.0.1:<port>/ws/<session>" },
     FlagDef { name: "router-only", usage: "Run only the router (-serve), no pen or keyboard (e.g. on a desktop)" },

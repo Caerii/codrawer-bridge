@@ -568,6 +568,8 @@ async def ws(session_id: str, ws: WebSocket):
         await ws.send_text(
             json.dumps({"t": "doc_update", "us": session.doc_updates[i : i + 256]}, separators=(",", ":"))
         )
+    if session.typer_msg is not None and ws.query_params.get("replay") != "0":
+        await ws.send_text(session.typer_msg)
 
     # The Primer (ADR 010), opt-in: one agent per session, fed from this loop through a queue.
     if primer_link.enabled():
@@ -743,6 +745,18 @@ async def ws(session_id: str, ws: WebSocket):
             if t == "page":
                 # The tablet's saved page: keep the latest for joiners, relay as received.
                 session.page_msg = raw
+                await broadcast_raw(session, raw, exclude=ws)
+                continue
+
+            if t == "typer_config":
+                # The bridge's reply typing speed: a request goes to the bridge, its
+                # acknowledgement (ok: true) is the current setting, kept for joiners.
+                if msg.get("ok") is True:
+                    session.typer_msg = raw
+                await broadcast_raw(session, raw, exclude=ws)
+                continue
+            if t == "typer_note":
+                # What a typed reply lost (characters the tablet's keyboard cannot type).
                 await broadcast_raw(session, raw, exclude=ws)
                 continue
 

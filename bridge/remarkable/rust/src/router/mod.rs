@@ -1,7 +1,7 @@
 //! The stroke-only session router (router/router.go + serve.go), small enough to run on the
 //! Paper Pro inside the bridge binary so the glasses app can connect to the tablet directly.
 //!
-//! Scope: hello, stroke_*, key, cursor, clear, page, doc, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
+//! Scope: hello, stroke_*, key, cursor, clear, page, doc, typer_config, and shared live editing (doc_update). AI (prompt, ai_*) and the terminal
 //! (term_prompt/term_answer) stay on the desktop Python router; here they are dropped, and a
 //! term_* request gets a one-line `term` status so the client is not left waiting.
 //!
@@ -22,6 +22,8 @@
 //! - `stroke_delete` takes strokes back: a client may delete the strokes it began, and anyone
 //!   may delete `ai`-layer ink. Deleted strokes leave the replay, so late joiners never see them
 //!   (`Session::delete_strokes`).
+//! - `typer_config` (the bridge's reply typing speed) is relayed; the bridge's latest
+//!   acknowledgement (`"ok":true`) is kept and replayed last, so a joiner shows the current speed.
 //!
 //! Shared live editing: clients keep the session document as a Yjs CRDT and send
 //! `{"t":"doc_update","u":<base64>}`. The router never decodes them; it relays each one, keeps the

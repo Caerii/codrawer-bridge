@@ -51,6 +51,7 @@ func readPen(f *os.File, fd int, buf []byte, dump bool, evC chan<- pen.Event) {
 	parser := &inputParser{}
 	var rs resyncer
 	emit := func(ev pen.Event) {
+		typerGate.pen(ev.Type, ev.Code, ev.Value) // the typer waits while the pen is near (typer.go)
 		// The machine never blocks, so this only fills if it is wedged; dropping is the lesser
 		// evil there, and the SYN_DROPPED-style resync repairs the state.
 		select {
