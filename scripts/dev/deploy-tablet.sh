@@ -39,8 +39,34 @@ TOOL="$ROOT/.codrawer/codrawer-release.exe"
 (cd "$NATIVE" && go build -o "$TOOL" ./cmd/codrawer-release)
 B="$ROOT/bridge/remarkable/boot"
 cp "$B"/boot.sh "$B"/install.sh "$B"/bt-up.sh "$B"/keyboard-keeper.sh "$B"/run-bridge.sh "$B"/bridge.env.example \
-  "$B"/compat.conf "$B"/codrawer-boot.service "$STAGE/"
+  "$B"/compat.conf "$B"/codrawer-boot.service "$B"/xovi.sh "$B"/xovi-compat.conf "$STAGE/"
 cp "$B"/units/*.service "$STAGE/units/"
+
+# The XOVI payload (xovi/ in the release, signed with the rest): boot.sh's codrawer-xovi unit
+# starts it after boot under xovi.sh's gates and crash guard (docs/what-codrawer-changes.md).
+#   - xovi.so, start, stock: XOVI v0.3.3 from asivery/rm-xovi-extensions (release v19-23052026,
+#     xovi-aarch64.tar.gz, sha256 32d64d1262ddc984e3235c7d0340a398fe6d5b3efa6a979865f5977b32630d27;
+#     the pre-v20-08092026 tarball has the same three files). Not vendored in the repository: put
+#     them in $CODRAWER_XOVI_DIR (default ~/.codrawer/xovi); they are checked against the pins below.
+#   - codrawer-layer.so: built here from bridge/remarkable/xovi/codrawer-layer (Docker).
+# All four or none: a release without the payload simply leaves the tablet stock (CODRAWER_SKIP_XOVI=1
+# skips it on purpose).
+XOVI_DIR="${CODRAWER_XOVI_DIR:-$KEYDIR/xovi}"
+XOVI_PINS="d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446  xovi.so
+bf15dfd641deea3e4487b9182957938a3dc824c340383c9243b7f118bfe829dc  start
+e29494c9fff5ede390b06f1f5e27ca59e4f7bc81d25889822a123ccad1fd686d  stock"
+if [ "${CODRAWER_SKIP_XOVI:-0}" = 1 ]; then
+  echo "[deploy] CODRAWER_SKIP_XOVI=1: release without the XOVI payload"
+elif ! (cd "$XOVI_DIR" 2> /dev/null && echo "$XOVI_PINS" | sha256sum -c --quiet > /dev/null 2>&1); then
+  echo "[deploy] WARN $XOVI_DIR lacks the pinned xovi.so/start/stock; release without the XOVI payload"
+elif ! command -v docker > /dev/null || ! "$ROOT/bridge/remarkable/xovi/codrawer-layer/build.sh" > /dev/null; then
+  echo "[deploy] WARN codrawer-layer build failed (Docker?); release without the XOVI payload"
+else
+  mkdir -p "$STAGE/xovi"
+  cp "$XOVI_DIR/xovi.so" "$XOVI_DIR/start" "$XOVI_DIR/stock" "$STAGE/xovi/"
+  cp "$ROOT/bridge/remarkable/xovi/codrawer-layer/out/codrawer-layer.so" "$STAGE/xovi/"
+  echo "[deploy] XOVI payload: codrawer-layer.so $(sha256sum "$STAGE/xovi/codrawer-layer.so" | cut -c1-12)…"
+fi
 if [ ! -f "$KEYDIR/release.key" ]; then
   echo "[deploy] creating signing key $KEYDIR/release.key"
   "$TOOL" keygen "$KEYDIR/release.key" "$KEYDIR/release.pub"
