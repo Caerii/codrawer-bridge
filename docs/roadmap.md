@@ -70,7 +70,8 @@ meaning. It earns one.").
 - **Sketch as program:** drawn graphs get real axes and fits; state machines run; circuits
   simulate; free-body diagrams animate. Answers come back as agent ink.
 - **Search everything you have written:** a local handwriting index across notebooks, queried from
-  the glasses or keyboard.
+  the glasses or keyboard. Designed with the book library, citations, consent and the context graph in ADR 011
+  (proposed) and `docs/investigations/grounded-context.md`.
 - **An ambient co-thinker on the glasses:** a small glyph when the agent has something, never an
   interruption.
 - **The agent's own notebook:** reflections and open questions in its handwriting persona.
