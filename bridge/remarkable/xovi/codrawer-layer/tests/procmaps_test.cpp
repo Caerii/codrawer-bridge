@@ -17,6 +17,11 @@ int main() {
     // too small, or not readable
     CHECK(!frameMapping("7f80000000-7f80d72000 rw-p 00000000 00:00 0\n", base, size));
     CHECK(!frameMapping("7f80000000-7f80d72800 ---p 00000000 00:00 0\n", base, size));
+    // a named mapping of the same size is never the display buffer (before the fix, sscanf
+    // counted at most 4 conversions and the `>= 5` test let every named mapping through)
+    CHECK(!frameMapping("7f80000000-7f80d72800 r--p 00000000 b3:02 1234 /usr/share/big.bin\n", base, size));
+    CHECK(!frameMapping("7f80000000-7f80d72800 rw-s 00000000 00:01 77 /memfd:frame (deleted)\n", base, size));
+    CHECK(!frameMapping("7f80000000-7f80d72800 rw-p 00000000 00:00 0 [heap]\n", base, size));
     // garbage
     CHECK(!frameMapping("", base, size));
     CHECK(!frameMapping("not a maps line\n", base, size));

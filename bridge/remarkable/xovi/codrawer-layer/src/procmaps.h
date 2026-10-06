@@ -17,15 +17,18 @@ constexpr size_t kStride = 6528;  // bytes per row
 constexpr size_t kWidth = 1620, kHeight = 2160;  // pixels
 constexpr size_t kSlack = size_t(1) << 20;  // a mapping may exceed one frame by less than this
 
-// One line of /proc/<pid>/maps: true when it is a readable mapping of a frame's size (at least
-// kStride × kHeight bytes, less than that plus kSlack) that the filter below lets through, with
-// its start address and size.
+// One line of /proc/<pid>/maps: true when it is a readable anonymous mapping (no path) of a
+// frame's size (at least kStride × kHeight bytes, less than that plus kSlack), with its start
+// address and size. The same filter as Probe 1's fbgrab tool, which found xochitl's two frame
+// buffers this way on the device.
 inline bool frameMapping(const char *line, uintptr_t &base, size_t &size) {
     unsigned long a = 0, b = 0;
     char perms[8] = {0};
     char path[256] = {0};
+    // a, b, perms and path are the four conversions that count; the three %*s do not
     const int fields = std::sscanf(line, "%lx-%lx %7s %*s %*s %*s %255s", &a, &b, perms, path);
-    if (fields >= 5 && path[0]) return false;  // named mapping
+    if (fields < 3) return false;  // not a maps line
+    if (fields >= 4 && path[0]) return false;  // named mapping: a file, [heap], [stack], memfd
     if (perms[0] != 'r') return false;
     const size_t sz = b - a;
     if (sz >= kStride * kHeight && sz < kStride * kHeight + kSlack) {
