@@ -17,15 +17,17 @@ clearance, free?" in constant time.
 grid inside the page's margins, and each free position gets a cost:
 
 - the gap between the block and the anchor (the selection, or the page's ink for ``ask_page``);
-- where it sits: right of the anchor (the margin) and below it are natural, above costs more,
-  left more still, as a reader looks for a reply after the question;
+- where it sits: right of the anchor (the margin) and below it are natural, left of it costs
+  more and above it more still, as a reader looks for a reply after the question;
 - misalignment: right of the anchor its top should meet the anchor's top, below it its left
   edge should meet the anchor's left edge;
 - a smaller scale costs a little (writing should be its true size when it can);
 - with ``prefer`` (the pending mark's spot), the distance from it, so the answer starts there.
 
-The cheapest wins. Units: page units throughout (x from the left edge, not centred), converted
-to normalized coordinates only at the edges (:func:`to_pu`, :class:`Placement` ``norm``).
+The block never leaves the page (``page_bottom``, :func:`place`), and never sits farther than
+``max_gap`` from the anchor. The cheapest wins. Units: page units throughout (x from the left
+edge, not centred), converted to normalized coordinates only at the edges (:func:`to_pu`,
+:class:`Placement` ``norm``).
 """
 
 from __future__ import annotations
@@ -145,7 +147,7 @@ class Occupancy:
 
 
 #: Extra cost by side (page units): a reply is looked for to the right of or below the question.
-SIDE_COST = {"right": 0.0, "below": 40.0, "above": 320.0, "left": 420.0, "inside": 600.0}
+SIDE_COST = {"right": 0.0, "below": 40.0, "left": 280.0, "above": 320.0, "inside": 600.0}
 
 
 def _side(rect: Box, anchor: Box) -> tuple[str, float, float]:
@@ -175,20 +177,24 @@ def place(
     clearance: float = 36.0,
     margins: tuple[float, float, float, float] = (150.0, 70.0, 60.0, 70.0),
     step: float = 18.0,
-    max_bottom: float | None = None,
+    page_bottom: float | None = None,
+    max_gap: float | None = None,
 ) -> Placement | None:
     """
     The cheapest free position for any of ``blocks`` (module docstring), or None when none fits.
 
     ``anchor`` is in page units. ``margins`` are left, top, right, bottom in page units (the left
-    one is wide: xochitl's toolbar covers the page's left edge while it is open). ``max_bottom``
-    caps the block's bottom edge (default: the page's height, or 400 units past the anchor on a
-    page scrolled further than that).
+    one is wide: xochitl's toolbar covers the page's left edge while it is open). The block stays
+    on the page: its bottom edge at most ``page_bottom`` (default the page's height; a page the
+    user has already extended by writing further down passes that extent) less the bottom margin.
+    Never past it, since a reply below the page's end would be off screen or would grow the page.
+    So a selection at the bottom edge gets its answer beside it (right, then left), above it, or
+    smaller, before anywhere else. With ``max_gap``, a block farther than that from the anchor
+    counts as not fitting (the caller then answers on the glasses only).
     """
     ml, mt, mr, mb = margins
     W = occ.page_w
-    bottom = max_bottom if max_bottom is not None else max(occ.page_h, anchor[3] + 400.0) - mb
-    bottom = min(bottom, occ.height - mb)
+    bottom = (page_bottom if page_bottom is not None else occ.page_h) - mb
     best: Placement | None = None
     for b in blocks:
         if b.w > W - ml - mr or b.h > bottom - mt:
@@ -203,7 +209,9 @@ def place(
                 cost = gap + SIDE_COST[side] + 0.35 * misalign + scale_cost
                 if prefer is not None:
                     cost += 1.5 * math.hypot(x - prefer[0], y - prefer[1])
-                if (best is None or cost < best.cost) and occ.free(rect, clearance):
+                if max_gap is not None and gap > max_gap:
+                    pass
+                elif (best is None or cost < best.cost) and occ.free(rect, clearance):
                     best = Placement(b, x, y, side, cost, occ.page_w, occ.page_h)
                 x += step
             y += step
