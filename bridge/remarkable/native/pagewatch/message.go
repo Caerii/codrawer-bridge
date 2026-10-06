@@ -50,6 +50,7 @@ func Message(loc Location, rev int64, page *rmlines.Page) []byte {
 			if !layer.Visible {
 				continue
 			}
+			agent := layer.Label == AgentLayer
 			for _, l := range layer.Lines {
 				if len(l.Points) == 0 {
 					continue
@@ -58,7 +59,7 @@ func Message(loc Location, rev int64, page *rmlines.Page) []byte {
 					b = append(b, ',')
 				}
 				first = false
-				b = appendStroke(b, l, w, h)
+				b = appendStroke(b, l, w, h, agent)
 			}
 		}
 	}
@@ -86,9 +87,15 @@ func appendHeader(b []byte, loc Location, rev int64, w, h float64) []byte {
 	return b
 }
 
+// AgentLayer is the layer the codrawer-layer extension commits agent ink to (NATIVE_AGENT_INK).
+// Its strokes are agent ink that viewers already drew live from the router's `layer:"ai"`
+// stream, so the snapshot labels them `"layer":"ai"` instead of the layer id: a client then
+// treats them as agent ink, not as the tablet user's (docs/protocol.md, "page").
+const AgentLayer = "codrawer: agent"
+
 // appendStroke writes one stroke object: id, tool name, palette id, resolved #rrggbbaa colour,
-// size, layer id and points.
-func appendStroke(b []byte, l *rmlines.Line, w, h float64) []byte {
+// size, layer id (or "ai" on the agent layer) and points.
+func appendStroke(b []byte, l *rmlines.Line, w, h float64, agent bool) []byte {
 	c := l.RGBA()
 	b = append(b, `{"id":"`...)
 	b = append(b, l.ID.String()...)
@@ -102,7 +109,9 @@ func appendStroke(b []byte, l *rmlines.Line, w, h float64) []byte {
 	}
 	b = append(b, `","size":`...)
 	b = appendNum(b, l.ThicknessScale, sizeScale)
-	if l.Layer != (rmlines.CrdtID{}) {
+	if agent {
+		b = append(b, `,"layer":"ai"`...)
+	} else if l.Layer != (rmlines.CrdtID{}) {
 		b = append(b, `,"layer":"`...)
 		b = append(b, l.Layer.String()...)
 		b = append(b, '"')

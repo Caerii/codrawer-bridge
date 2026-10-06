@@ -13,6 +13,8 @@ package main
 //   - runKeyboardForever (keyboard.go) produces `key` messages on keyC.
 //   - runPageWatch (page_watch.go) keeps the latest `page` snapshot in a pageFeed.
 //   - typerForever (typer.go) types `term` replies that arrive from the router.
+//   - agentInkForever (agent_ink.go) hands the router's ai-layer strokes to the codrawer-layer
+//     extension inside xochitl (NATIVE_AGENT_INK) and brings its `dock_action`s back.
 //   - RunBridgeForever dials the router and drains the outbox, keyC and the page feed into the
 //     socket until it dies, then reconnects with backoff. It also notices a suspend/resume and
 //     reconnects at once instead of writing into a socket that died while the tablet slept.
@@ -68,9 +70,14 @@ func RunBridgeForever(cfg BridgeConfig) error {
 	}
 	keyC := startKeyboard(cfg)
 	pages := startPageWatch(cfg)
-	onMessage := startTyper(cfg)
+	inkHook, actions, ink := startAgentInk(cfg, pages)
+	typed := startTyper(cfg, ink)
+	onMessage := typed
+	if inkHook != nil {
+		onMessage = func(b []byte) { typed(b); inkHook(b) }
+	}
 
-	connectForever(cfg, outC, keyC, pages, onMessage)
+	connectForever(cfg, outC, keyC, actions, pages, onMessage)
 	return nil
 }
 
@@ -117,16 +124,29 @@ func startPageWatch(cfg BridgeConfig) *pageFeed {
 }
 
 // startTyper starts the virtual keyboard when TYPE_REPLIES is on and returns the handler for
-// messages from the router (nil when off: the bridge then ignores what the router sends).
-func startTyper(cfg BridgeConfig) func([]byte) {
+// messages from the router (nil when off: the bridge then ignores what the router sends). When
+// the codrawer-layer extension is connected and offers text_insert, a reply goes into the
+// focused text box through it instead (agent_ink.go, "Text"); the virtual keyboard stays the
+// fallback, also for any insert the extension refuses.
+func startTyper(cfg BridgeConfig, ink *inkLink) func([]byte) {
 	if !cfg.TypeReplies {
 		return func([]byte) {}
 	}
 	typeC := make(chan string, 1024)
 	go typerForever(typeC, time.Duration(max(1, cfg.TypeCharMs))*time.Millisecond, cfg.Debug)
+	typeKeys := func(out string) {
+		select {
+		case typeC <- out:
+		default: // the typer is far behind; drop rather than block
+		}
+	}
+	ink.setFallback(typeKeys)
 	return func(data []byte) {
 		out, ok := typedReply(data)
 		if !ok {
+			return
+		}
+		if ink.insertText(out) {
 			return
 		}
 		select {
@@ -139,7 +159,7 @@ func startTyper(cfg BridgeConfig) func([]byte) {
 // ── the connection loop ─────────────────────────────────────────────────────
 
 // connectForever dials the router, runs one connection until it fails, and reconnects.
-func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, pages *pageFeed, onMessage func([]byte)) {
+func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, actions <-chan []byte, pages *pageFeed, onMessage func([]byte)) {
 	pingEvery := time.Duration(float64(time.Second) * math.Max(1, cfg.PingSeconds))
 	pongWait := time.Duration(float64(time.Second) * math.Max(2, cfg.PongTimeoutSeconds))
 	wsURL := sourceURL(cfg.WsURL)
@@ -158,7 +178,7 @@ func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, page
 
 		fmt.Printf("[bridge] connected ws=%s\n", wsURL)
 		reconnectDelay = reconnectMin
-		err = runConnection(ws, outC, keyC, pages, &held)
+		err = runConnection(ws, outC, keyC, actions, pages, &held)
 		fmt.Printf("[bridge] disconnected; reconnecting in %s (err=%v)\n", reconnectDelay, err)
 		time.Sleep(reconnectDelay)
 	}
@@ -166,12 +186,12 @@ func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, page
 
 // runConnection starts this connection's page pump, writes the outbox and keys until the socket
 // fails, then stops the pump and closes the socket.
-func runConnection(ws *WSConn, outC <-chan []byte, keyC chan outKey, pages *pageFeed, held *[]byte) error {
+func runConnection(ws *WSConn, outC <-chan []byte, keyC chan outKey, actions <-chan []byte, pages *pageFeed, held *[]byte) error {
 	stopPump := make(chan struct{})
 	if pages != nil {
 		go pumpPages(ws, pages, stopPump)
 	}
-	err := writeOutbox(ws, outC, keyC, held)
+	err := writeOutbox(ws, outC, keyC, actions, held)
 	close(stopPump)
 	ws.Close()
 	return err
@@ -196,8 +216,9 @@ func sourceURL(raw string) string {
 // writeOutbox writes queued messages and keys until the socket fails. A tablet that was
 // suspended (suspendCheck, run by every WSConn write) has its socket presumed dead, since its
 // timers did not run while asleep: the message is kept in *held for the next connection and
-// the caller reconnects immediately. A nil keyC is never ready.
-func writeOutbox(ws *WSConn, outC <-chan []byte, keyC <-chan outKey, held *[]byte) error {
+// the caller reconnects immediately. A nil keyC or actions channel is never ready. Actions are
+// the codrawer-layer extension's `dock_action` messages (agent_ink.go), sent as they are.
+func writeOutbox(ws *WSConn, outC <-chan []byte, keyC <-chan outKey, actions <-chan []byte, held *[]byte) error {
 	write := func(msg []byte) error {
 		err := ws.WriteRaw(msg)
 		var r *resumedError
@@ -219,6 +240,10 @@ func writeOutbox(ws *WSConn, outC <-chan []byte, keyC <-chan outKey, held *[]byt
 			return err
 		case msg := <-outC:
 			if err := write(msg); err != nil {
+				return err
+			}
+		case a := <-actions:
+			if err := write(a); err != nil {
 				return err
 			}
 		case k := <-keyC:

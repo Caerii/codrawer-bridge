@@ -52,6 +52,12 @@ pub struct Config {
     /// so that the toolbar Eraser used with the tip streams as an eraser. "off" disables it; an
     /// absent or stale file changes nothing.
     pub tool_file: String,
+    /// The codrawer-layer extension's socket ([`crate::agent_ink`]); "off" disables it (agent ink
+    /// and dock actions).
+    pub ink_socket: String,
+    /// Forward the router's ai-layer strokes to that socket, to be committed as real xochitl ink
+    /// on the "codrawer: agent" layer (NATIVE_AGENT_INK, off by default).
+    pub native_agent_ink: bool,
     /// `-page-dump`: print the open page's `page` message and exit (no env var, as in Go).
     pub page_dump: bool,
 }
@@ -87,6 +93,8 @@ impl Config {
             xochitl_dir: getenv_default("XOCHITL_DIR", crate::pagewatch::DEFAULT_DIR),
             page_poll_ms: getenv_int_default("PAGE_POLL_MS", 1000),
             tool_file: getenv_default("TOOL_FILE", crate::toolhint::DEFAULT_PATH),
+            ink_socket: getenv_default("INK_SOCKET", "/run/codrawer/ink.sock"),
+            native_agent_ink: getenv_bool_default("NATIVE_AGENT_INK", false),
             page_dump: false,
         }
     }
@@ -132,6 +140,8 @@ const FLAGS: &[FlagDef] = &[
     FlagDef { name: "xochitl-dir", usage: "xochitl's data directory (read-only)" },
     FlagDef { name: "page-poll-ms", usage: "How often the page watcher checks xochitl's files (ms)" },
     FlagDef { name: "tool-file", usage: "xochitl's selected tool, written by the codrawer-layer XOVI extension (toolbar Eraser → eraser strokes); off disables" },
+    FlagDef { name: "ink-socket", usage: "The codrawer-layer XOVI extension's socket (agent ink in, dock actions out); off disables" },
+    FlagDef { name: "native-agent-ink", usage: "Commit the router's ai-layer strokes as native xochitl ink on the codrawer: agent layer (needs the extension)" },
     FlagDef { name: "page-dump", usage: "Print the `page` message for the open document and page, then exit (read-only)" },
 ];
 
@@ -164,6 +174,8 @@ fn slot<'a>(cfg: &'a mut Config, name: &str) -> Option<Slot<'a>> {
         "xochitl-dir" => Slot::Str(&mut cfg.xochitl_dir),
         "page-poll-ms" => Slot::Int(&mut cfg.page_poll_ms),
         "tool-file" => Slot::Str(&mut cfg.tool_file),
+        "ink-socket" => Slot::Str(&mut cfg.ink_socket),
+        "native-agent-ink" => Slot::Bool(&mut cfg.native_agent_ink),
         "page-dump" => Slot::Bool(&mut cfg.page_dump),
         _ => return None,
     })

@@ -203,6 +203,28 @@ func TestLocateFallbacks(t *testing.T) {
 	}
 }
 
+// Strokes the codrawer-layer extension committed for an agent are labelled "ai", not with their
+// layer id, so clients do not take them for the user's ink. The bytes match the Rust engine's.
+func TestMessageLabelsTheAgentLayerAi(t *testing.T) {
+	page := &rmlines.Page{PaperW: 1620, PaperH: 2160, Layers: []*rmlines.Layer{
+		{ID: rmlines.CrdtID{Counter: 11}, Visible: true, Lines: []*rmlines.Line{{
+			ID: rmlines.CrdtID{Author: 1, Counter: 5}, Layer: rmlines.CrdtID{Counter: 11}, Tool: 17, ThicknessScale: 2,
+			Points: []rmlines.Point{{X: 0, Y: 1080, Pressure: 255, Width: 16}},
+		}}},
+		{ID: rmlines.CrdtID{Author: 1, Counter: 304}, Label: AgentLayer, Visible: true, Lines: []*rmlines.Line{{
+			ID: rmlines.CrdtID{Author: 1, Counter: 305}, Layer: rmlines.CrdtID{Author: 1, Counter: 304}, Tool: 17, ThicknessScale: 2,
+			Points: []rmlines.Point{{X: 0, Y: 1080, Pressure: 255, Width: 16}},
+		}}},
+	}}
+	got := string(Message(Location{Doc: "d", Page: "p"}, 9, page))
+	want := `{"t":"page","doc":"d","page":"p","rev":9,"w":1620,"h":2160,"strokes":[` +
+		`{"id":"1:5","tool":"fineliner","color":0,"rgba":"#000000ff","size":2,"layer":"0:11","pts":[[0.5,0.5,1,0.002469]]},` +
+		`{"id":"1:305","tool":"fineliner","color":0,"rgba":"#000000ff","size":2,"layer":"ai","pts":[[0.5,0.5,1,0.002469]]}]}`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
 func TestMessageNormalises(t *testing.T) {
 	page := &rmlines.Page{PaperW: 1620, PaperH: 2160, Layers: []*rmlines.Layer{
 		{ID: rmlines.CrdtID{Author: 0, Counter: 11}, Visible: true, Lines: []*rmlines.Line{{

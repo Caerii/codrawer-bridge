@@ -9,10 +9,11 @@
 //! stroke as more ink, so every viewer drew over what the tablet had just erased.
 //!
 //! xochitl knows the tool: its pen handler's `lineTool` property. The codrawer-layer XOVI
-//! extension (`bridge/remarkable/xovi/codrawer-layer`, "Following the tool") runs inside xochitl,
-//! reads that property every 100 ms and writes one line, `<tool> <thickness>`, to
-//! `/run/codrawer/tool` by rename when it changes. It rewrites the line every second as a
-//! heartbeat. The tool word is one of eraser, erase_area, clear_page, select, highlighter, shader,
+//! extension (bridge/remarkable/xovi/codrawer-layer, "Following the tool") runs inside xochitl,
+//! follows that property's change signal and writes one line, `<tool> <thickness>`, to
+//! /run/codrawer/tool by rename when it changes, and touches the file (utime) every 2 s as a
+//! heartbeat. (Until 2026-10-06 it polled every 100 ms and rewrote the line every second;
+//! either way a re-read follows any change of mtime or size.) The tool word is one of eraser, erase_area, clear_page, select, highlighter, shader,
 //! zoom, pen, or none when no document is open. The device test that grounds it is in
 //! `docs/investigations/native-erase.md` §6.
 //!

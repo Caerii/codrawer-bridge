@@ -9,6 +9,7 @@ package router
 //	stroke_begin/pts/end   record for replay, relay
 //	stroke_delete          forget the strokes the sender may delete, relay those ids
 //	key, cursor, doc       relay
+//	dock_action            relay (a tap in the tablet's injected dock, sent by the bridge)
 //	clear                  forget the recorded page and the base, relay
 //	page                   becomes the page's base (session.go), relay
 //	doc_update             append to the document log, relay, maybe ask for compaction
@@ -92,7 +93,7 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 			s.broadcastLocked(mustJSON(strokeDelete{"stroke_delete", gone, m.Ts}), c)
 		}
 		s.mu.Unlock()
-	case "key", "cursor", "doc":
+	case "key", "cursor", "doc", "dock_action":
 		s.mu.Lock()
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()

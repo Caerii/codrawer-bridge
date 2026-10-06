@@ -34,12 +34,12 @@ pub fn message(loc: &Location, rev: i64, page: Option<&Page>) -> String {
     }
     let _ = write!(out, r#","rev":{rev},"w":{w},"h":{h},"strokes":["#);
     let mut first = true;
-    for line in page.map(visible_lines).into_iter().flatten() {
+    for (line, agent) in page.map(visible_lines).into_iter().flatten() {
         if !first {
             out.push(',');
         }
         first = false;
-        push_stroke(&mut out, line, f64::from(w), f64::from(h));
+        push_stroke(&mut out, line, f64::from(w), f64::from(h), agent);
     }
     out.push_str("]}");
     out
@@ -53,17 +53,24 @@ fn paper_size(page: Option<&Page>) -> (u32, u32) {
     }
 }
 
-/// Strokes with points on visible layers, in drawing order.
-fn visible_lines(page: &Page) -> impl Iterator<Item = &Line> {
+/// The layer the codrawer-layer extension commits agent ink to (NATIVE_AGENT_INK). Its strokes
+/// are agent ink that viewers already drew live from the router's `layer:"ai"` stream, so the
+/// snapshot labels them `"layer":"ai"` instead of the layer id, as the Go bridge does.
+pub const AGENT_LAYER: &str = "codrawer: agent";
+
+/// Strokes with points on visible layers, in drawing order, each with whether it is on the
+/// agent layer.
+fn visible_lines(page: &Page) -> impl Iterator<Item = (&Line, bool)> {
     page.layers
         .iter()
         .filter(|layer| layer.visible)
-        .flat_map(|layer| layer.lines.iter())
-        .filter(|line| !line.points.is_empty())
+        .flat_map(|layer| layer.lines.iter().map(move |line| (line, layer.label == AGENT_LAYER)))
+        .filter(|(line, _)| !line.points.is_empty())
 }
 
-/// One stroke: `{"id","tool","color","rgba","size","layer","pts"}`.
-fn push_stroke(out: &mut String, line: &Line, w: f64, h: f64) {
+/// One stroke: `{"id","tool","color","rgba","size","layer","pts"}` (`"layer":"ai"` on the agent
+/// layer).
+fn push_stroke(out: &mut String, line: &Line, w: f64, h: f64, agent: bool) {
     let c = line.rgba();
     let _ = write!(
         out,
@@ -77,7 +84,9 @@ fn push_stroke(out: &mut String, line: &Line, w: f64, h: f64) {
         c.a
     );
     push_rounded(out, line.thickness_scale, 3);
-    if line.layer != CrdtId::default() {
+    if agent {
+        out.push_str(r#","layer":"ai""#);
+    } else if line.layer != CrdtId::default() {
         let _ = write!(out, r#","layer":"{}""#, line.layer);
     }
     out.push_str(r#","pts":["#);
@@ -161,6 +170,40 @@ mod tests {
             r##""pts":[[0,0,1,0.018519],[0.5,0.5,0,0.002469],[1,1.25,0,0]]}]}"##,
         );
         assert_eq!(got, want, "the hidden layer leaked or the encoding differs from Go");
+    }
+
+    /// Go: `TestMessageLabelsTheAgentLayerAi`, byte for byte.
+    #[test]
+    fn labels_the_agent_layer_ai() {
+        let ink = |line_id: CrdtId, layer: CrdtId| Line {
+            id: line_id,
+            layer,
+            tool: 17,
+            thickness_scale: 2.0,
+            points: vec![Point { x: 0.0, y: 1080.0, pressure: 255.0, width: 16.0, ..Point::default() }],
+            ..Line::default()
+        };
+        let page = Page {
+            paper_w: 1620,
+            paper_h: 2160,
+            layers: vec![
+                Layer { id: id(0, 11), visible: true, lines: vec![ink(id(1, 5), id(0, 11))], ..Layer::default() },
+                Layer {
+                    id: id(1, 304),
+                    label: AGENT_LAYER.into(),
+                    visible: true,
+                    lines: vec![ink(id(1, 305), id(1, 304))],
+                },
+            ],
+            ..Page::default()
+        };
+        let loc = Location { doc: "d".into(), page: "p".into(), ..Location::default() };
+        let want = concat!(
+            r##"{"t":"page","doc":"d","page":"p","rev":9,"w":1620,"h":2160,"strokes":["##,
+            r##"{"id":"1:5","tool":"fineliner","color":0,"rgba":"#000000ff","size":2,"layer":"0:11","pts":[[0.5,0.5,1,0.002469]]},"##,
+            r##"{"id":"1:305","tool":"fineliner","color":0,"rgba":"#000000ff","size":2,"layer":"ai","pts":[[0.5,0.5,1,0.002469]]}]}"##,
+        );
+        assert_eq!(message(&loc, 9, Some(&page)), want);
     }
 
     #[test]

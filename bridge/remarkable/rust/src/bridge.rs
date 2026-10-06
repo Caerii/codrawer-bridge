@@ -10,6 +10,8 @@
 //!   encoded messages on the outbox. A full outbox skips whole strokes, never single events.
 //! - The keyboard reader thread does the same for a keyboard, producing `key` messages.
 //! - The typer thread owns the virtual keyboard and types `term` replies into the tablet.
+//! - The agent ink task ([`crate::agent_ink`]) hands the router's ai-layer strokes to the
+//!   codrawer-layer extension inside xochitl (NATIVE_AGENT_INK) and brings its `dock_action`s back.
 //! - The page thread ([`crate::page_watch`]) publishes xochitl's saved page as `page` snapshots
 //!   (read-only); the latest one is sent on every connection.
 //! - [`run_connections`] dials the router and writes the outbox (and keys) until the socket dies,
@@ -132,6 +134,9 @@ pub struct Sources {
     pub key_rx: Option<mpsc::Receiver<OutKey>>,
     /// The latest `page` snapshot, when the page watcher runs.
     pub pages: Option<PageFeed>,
+    /// `dock_action` messages from the codrawer-layer extension ([`crate::agent_ink`]), sent as
+    /// they are.
+    pub actions_rx: Option<mpsc::Receiver<String>>,
     /// A message taken from the outbox or the keyboard but not written, because the tablet had
     /// just resumed and the socket was presumed dead: the next connection writes it first.
     pub held: Option<String>,
@@ -197,16 +202,34 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
     // xochitl's saved page as `page` snapshots, when enabled for this OS (logs either way).
     let pages = crate::page_watch::start_if_enabled(&cfg)?;
 
+    // Agent ink into xochitl and the dock's actions out (the codrawer-layer extension's socket).
+    let ink = crate::agent_ink::start(&cfg, pages.clone());
+    let (ink_hook, actions_rx, link) = match ink {
+        Some(i) => (i.hook, Some(i.actions), Some(i.link)),
+        None => (None, None, None),
+    };
+
     // Terminal replies typed into the tablet (uinput).
-    let on_message: Option<OnMessage> = if cfg.type_replies {
+    let typer: Option<OnMessage> = if cfg.type_replies {
         let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1024);
         let per_char = Duration::from_millis(cfg.type_char_ms.max(1) as u64);
         std::thread::Builder::new()
             .name("typer".into())
             .spawn(move || linux::typer_forever(rx, per_char, debug))
             .map_err(|e| e.to_string())?;
+        // With the codrawer-layer extension offering text_insert, a reply goes into the focused
+        // text box through it; the virtual keyboard is the fallback, also for refused inserts.
+        if let Some(link) = &link {
+            let tx = tx.clone();
+            link.set_fallback(Box::new(move |s| {
+                let _ = tx.try_send(s);
+            }));
+        }
         Some(std::sync::Arc::new(move |data: &str| {
             if let Some(s) = typed_reply(data) {
+                if link.as_ref().is_some_and(|l| l.insert_text(&s)) {
+                    return;
+                }
                 let _ = tx.try_send(s);
             }
         }))
@@ -214,7 +237,15 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         None
     };
 
-    run_connections(cfg, Sources { out_rx, key_rx, pages, held: None }, on_message).await
+    let on_message: Option<OnMessage> = match (typer, ink_hook) {
+        (Some(a), Some(b)) => Some(std::sync::Arc::new(move |d: &str| {
+            a(d);
+            b(d);
+        })),
+        (a, b) => a.or(b),
+    };
+
+    run_connections(cfg, Sources { out_rx, key_rx, pages, actions_rx, held: None }, on_message).await
 }
 
 /// Runs the stroke state machine for the life of the process: drains pen events into encoded
@@ -389,6 +420,10 @@ pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Rec
                 let Some(msg) = msg else { return "pen machine stopped".into() };
                 write_checked(ws, msg, &mut check, &mut src.held).await
             }
+            a = recv_opt(&mut src.actions_rx) => match a {
+                Some(a) => write_checked(ws, a, &mut check, &mut src.held).await,
+                None => Ok(()),
+            },
             k = recv_opt(&mut src.key_rx) => match k {
                 Some(k) => write_checked(ws, serde_json::to_string(&k).expect("serialize"), &mut check, &mut src.held).await,
                 None => Ok(()),
@@ -484,7 +519,7 @@ mod tests {
         cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
         let (_out_tx, out_rx) = mpsc::channel(8);
         let (page_tx, page_rx) = tokio::sync::watch::channel(Some(r#"{"t":"page","rev":1}"#.to_string()));
-        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), held: None };
+        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), actions_rx: None, held: None };
         tokio::spawn(run_connections(cfg, src, None));
 
         let mut first = accept_ws(&listener).await;

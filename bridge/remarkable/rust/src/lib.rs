@@ -24,10 +24,13 @@
 //! - [`release`]: build, sign and verify tablet releases (package release, release_cmd.go)
 //! - [`toolhint`]: follows the tool selected in xochitl's toolbar, reported by the codrawer-layer
 //!   XOVI extension (package toolhint)
+//! - [`agent_ink`]: agent ink into xochitl through the codrawer-layer extension's socket, and the
+//!   dock's actions back (package agentink, agent_ink.go)
 //! - [`typer`]: how a reply becomes paced writes to the virtual keyboard (typer.go, uinput.go)
 //! - `linux` (Linux only): evdev ioctls, device probing, pen/keyboard readers, uinput (linux_input.go,
 //!   device_select.go, keyboard.go, uinput.go)
 
+pub mod agent_ink;
 pub mod bridge;
 pub mod devices;
 pub mod flags;

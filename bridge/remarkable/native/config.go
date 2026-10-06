@@ -65,6 +65,12 @@ type BridgeConfig struct {
 	// xochitl's selected tool, so that the toolbar Eraser used with the tip streams as an
 	// eraser. "off" disables it; an absent or stale file changes nothing.
 	ToolFile string
+
+	// InkSocket (INK_SOCKET, agent_ink.go): the codrawer-layer extension's socket; "off" disables
+	// it (agent ink and dock actions). NativeAgentInk (NATIVE_AGENT_INK) forwards the router's
+	// ai-layer strokes to it, to be committed as real xochitl ink on the "codrawer: agent" layer.
+	InkSocket      string
+	NativeAgentInk bool
 }
 
 // loadConfig reads the environment, then the flags. pageDump reports -page-dump.
@@ -97,6 +103,8 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 		XochitlDir:         getenvDefault("XOCHITL_DIR", pagewatch.DefaultDir),
 		PagePollMs:         getenvIntDefault("PAGE_POLL_MS", 1000),
 		ToolFile:           getenvDefault("TOOL_FILE", toolhint.DefaultPath),
+		InkSocket:          getenvDefault("INK_SOCKET", "/run/codrawer/ink.sock"),
+		NativeAgentInk:     getenvBoolDefault("NATIVE_AGENT_INK", false),
 	}
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
@@ -126,6 +134,8 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 	flag.StringVar(&cfg.XochitlDir, "xochitl-dir", cfg.XochitlDir, "xochitl's data directory (read-only)")
 	flag.IntVar(&cfg.PagePollMs, "page-poll-ms", cfg.PagePollMs, "How often the page watcher checks xochitl's files (ms)")
 	flag.StringVar(&cfg.ToolFile, "tool-file", cfg.ToolFile, "xochitl's selected tool, written by the codrawer-layer XOVI extension (toolbar Eraser → eraser strokes); off disables")
+	flag.StringVar(&cfg.InkSocket, "ink-socket", cfg.InkSocket, "The codrawer-layer XOVI extension's socket (agent ink in, dock actions out); off disables")
+	flag.BoolVar(&cfg.NativeAgentInk, "native-agent-ink", cfg.NativeAgentInk, "Commit the router's ai-layer strokes as native xochitl ink on the codrawer: agent layer (needs the extension)")
 	flag.BoolVar(&pageDump, "page-dump", false, "Print the `page` message for the open document and page, then exit (read-only)")
 	flag.Parse()
 	return cfg, pageDump
