@@ -103,15 +103,31 @@ func ioctlInt(fd uintptr, req uintptr, val int) error {
 	return nil
 }
 
-// TypeText types s, pausing perChar after every keystroke so the UI keeps up. Newlines become
-// Enter, tabs Tab; see keystrokes for what else is substituted or dropped.
-func (k *VirtualKeyboard) TypeText(s string, perChar time.Duration) error {
-	for _, ks := range keystrokes(s) {
-		if err := k.press(ks.code, ks.shift); err != nil {
+// TypeText types s, paced by perChar and grouped into writes by batch (typer.go, plan). Newlines
+// become Enter, tabs Tab; see keystrokes for what else is substituted or dropped.
+func (k *VirtualKeyboard) TypeText(s string, perChar time.Duration, batch typeBatch) error {
+	for _, b := range plan(s, perChar, batch) {
+		if err := k.writeBurst(b); err != nil {
 			return err
 		}
-		time.Sleep(perChar)
 	}
+	return nil
+}
+
+// writeBurst writes one burst's events in a single write(), then pauses.
+func (k *VirtualKeyboard) writeBurst(b burst) error {
+	buf := make([]byte, 0, 24*len(b.events))
+	for _, e := range b.events {
+		var ev [24]byte
+		binary.LittleEndian.PutUint16(ev[16:18], e.etype)
+		binary.LittleEndian.PutUint16(ev[18:20], e.code)
+		binary.LittleEndian.PutUint32(ev[20:24], uint32(e.value))
+		buf = append(buf, ev[:]...)
+	}
+	if _, err := k.f.Write(buf); err != nil {
+		return err
+	}
+	time.Sleep(b.pause)
 	return nil
 }
 
@@ -123,40 +139,7 @@ func (k *VirtualKeyboard) Close() error {
 	return k.f.Close()
 }
 
-// press sends one key press and release (with Shift held around it if asked), each half closed
-// by a SYN_REPORT.
-func (k *VirtualKeyboard) press(code int, shift bool) error {
-	if shift {
-		if err := k.emit(pen.EvKey, KEY_LEFTSHIFT, 1); err != nil {
-			return err
-		}
-	}
-	if err := k.emit(pen.EvKey, uint16(code), 1); err != nil {
-		return err
-	}
-	if err := k.emit(pen.EvSyn, pen.SynReport, 0); err != nil {
-		return err
-	}
-	if err := k.emit(pen.EvKey, uint16(code), 0); err != nil {
-		return err
-	}
-	if shift {
-		if err := k.emit(pen.EvKey, KEY_LEFTSHIFT, 0); err != nil {
-			return err
-		}
-	}
-	return k.emit(pen.EvSyn, pen.SynReport, 0)
-}
 
-// emit writes one input_event record.
-func (k *VirtualKeyboard) emit(etype, code uint16, value int32) error {
-	var ev [24]byte
-	binary.LittleEndian.PutUint16(ev[16:18], etype)
-	binary.LittleEndian.PutUint16(ev[18:20], code)
-	binary.LittleEndian.PutUint32(ev[20:24], uint32(value))
-	_, err := k.f.Write(ev[:])
-	return err
-}
 
 // ── text → keystrokes ───────────────────────────────────────────────────────
 

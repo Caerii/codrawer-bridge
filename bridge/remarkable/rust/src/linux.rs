@@ -17,7 +17,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::devices::find_keyboard_device;
 use crate::input::*;
-use crate::keymap::{text_to_keystrokes, KeyTranslator, OutKey, KEY_LEFTSHIFT, VIRTUAL_KEYBOARD_NAME};
+use crate::keymap::{KeyTranslator, OutKey, VIRTUAL_KEYBOARD_NAME};
+use crate::typer::{plan, Batch, Burst};
 
 // ── ioctl encoding (Linux _IOC) ────────────────────────────────────────────
 
@@ -460,35 +461,29 @@ impl VirtualKeyboard {
         Ok(VirtualKeyboard { f })
     }
 
-    fn emit(&mut self, etype: u16, code: u16, value: i32) -> io::Result<()> {
-        self.f.write_all(&encode_event24(etype, code, value))
+    /// Writes one burst's events in a single `write()`, then pauses (see [`crate::typer`]).
+    fn write_burst(&mut self, b: &Burst) -> io::Result<()> {
+        let mut buf = Vec::with_capacity(b.events.len() * 24);
+        for &(etype, code, value) in &b.events {
+            buf.extend_from_slice(&encode_event24(etype, code, value));
+        }
+        self.f.write_all(&buf)?;
+        sleep(b.pause);
+        Ok(())
     }
 
-    fn press(&mut self, code: u16, shift: bool) -> io::Result<()> {
-        if shift {
-            self.emit(EV_KEY, KEY_LEFTSHIFT, 1)?;
-        }
-        self.emit(EV_KEY, code, 1)?;
-        self.emit(EV_SYN, SYN_REPORT, 0)?;
-        self.emit(EV_KEY, code, 0)?;
-        if shift {
-            self.emit(EV_KEY, KEY_LEFTSHIFT, 0)?;
-        }
-        self.emit(EV_SYN, SYN_REPORT, 0)
-    }
-
-    /// Types `s`, pacing keystrokes by `per_char` so the UI keeps up.
-    pub fn type_text(&mut self, s: &str, per_char: Duration) -> io::Result<()> {
-        for (code, shift) in text_to_keystrokes(s) {
-            self.press(code, shift)?;
-            sleep(per_char);
+    /// Types `s`, paced by `per_char` and grouped by `batch` so the UI keeps up ([`crate::typer`]).
+    pub fn type_text(&mut self, s: &str, per_char: Duration, batch: Batch) -> io::Result<()> {
+        for b in plan(s, per_char, batch) {
+            self.write_burst(&b)?;
         }
         Ok(())
     }
 }
 
-/// Owns the virtual keyboard and types whatever arrives on `rx`.
+/// Owns the virtual keyboard and types whatever arrives on `rx`, grouped as `TYPE_BATCH` says.
 pub fn typer_forever(rx: Receiver<String>, per_char: Duration, debug: bool) {
+    let batch = Batch::from_env_value(std::env::var("TYPE_BATCH").ok().as_deref());
     loop {
         let mut kb = match VirtualKeyboard::open(VIRTUAL_KEYBOARD_NAME) {
             Ok(kb) => kb,
@@ -498,13 +493,13 @@ pub fn typer_forever(rx: Receiver<String>, per_char: Duration, debug: bool) {
                 continue;
             }
         };
-        println!("[typer] virtual keyboard ready");
+        println!("[typer] virtual keyboard ready ({batch:?} batches, {per_char:?} pause)");
         loop {
             let Ok(s) = rx.recv() else { return }; // the bridge is gone
             if debug {
                 println!("[typer] {s:?}");
             }
-            if let Err(e) = kb.type_text(&s, per_char) {
+            if let Err(e) = kb.type_text(&s, per_char, batch) {
                 println!("[typer] write failed ({e}); reopening");
                 break;
             }

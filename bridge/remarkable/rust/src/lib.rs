@@ -24,6 +24,7 @@
 //! - [`release`]: build, sign and verify tablet releases (package release, release_cmd.go)
 //! - [`toolhint`]: follows the tool selected in xochitl's toolbar, reported by the codrawer-layer
 //!   XOVI extension (package toolhint)
+//! - [`typer`]: how a reply becomes paced writes to the virtual keyboard (typer.go, uinput.go)
 //! - `linux` (Linux only): evdev ioctls, device probing, pen/keyboard readers, uinput (linux_input.go,
 //!   device_select.go, keyboard.go, uinput.go)
 
@@ -40,6 +41,7 @@ pub mod release;
 pub mod rmlines;
 pub mod router;
 pub mod toolhint;
+pub mod typer;
 pub mod util;
 pub mod ws_client;
 
