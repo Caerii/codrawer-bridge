@@ -32,6 +32,8 @@ xochitl_restart() {
     echo "7f00 r-xp /usr/lib/libc.so.6" > /tmp/fproc/$pid/maps
   fi
   echo active > /tmp/x/state
+  # /tmp/dies: with XOVI, xochitl ends up failed (no automatic restart left)
+  grep -q ' /etc/systemd/system/xochitl.service.d ' /tmp/fproc/mounts 2>/dev/null && [ -e /tmp/dies ] && echo failed > /tmp/x/state
   echo $(($(cat /tmp/x/starts) + 1)) > /tmp/x/starts
 }
 case "$cmd" in
@@ -274,6 +276,12 @@ grep -q 'restarted by systemd' $R/XOVI_DISABLED || fail "kill switch written wit
 sh $R/current/boot.sh doctor | grep -q '^xovi=disabled (xochitl restarted by systemd' || fail "doctor: disabled after a crash"
 boot_now "after a crash" # and the next boot stays stock
 ! xovi_running && [ "$(cat /tmp/x/starts)" = 0 ] || fail "stays stock at the next boot"
+rm $R/XOVI_DISABLED
+touch /tmp/dies
+boot_now "xochitl fails"
+rm /tmp/dies
+! xovi_running && [ "$(cat /tmp/x/state)" = active ] || fail "xochitl back up, stock, after it failed with XOVI"
+grep -q 'xochitl failed' $R/XOVI_DISABLED || fail "disabled: xochitl failed ($(cat $R/XOVI_DISABLED 2>&1))"
 rm $R/XOVI_DISABLED
 pass "crash after start: stock + disabled"
 
