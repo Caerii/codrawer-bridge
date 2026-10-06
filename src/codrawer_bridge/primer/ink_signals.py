@@ -8,7 +8,7 @@ twice, a line struck through. The Primer uses these as evidence in two places: t
 learner.py) and the policy (the Primer does not speak while the learner is mid-thought, and
 offers help where the pen hesitated, policy.py). The vision site puts it as "stroke timing and
 pauses as signal"; writing research has long read pauses as planning and difficulty (Alamargot,
-Chesnet, Dansac & Ros 2006, "Eye and pen", *Written Language & Literacy* 9(2); Wengelin 2006 on
+Chesnet, Dansac & Ros 2006, "Eye and pen", *Behavior Research Methods* 38(2); Wengelin 2006 on
 pause analysis), and pen interfaces as a window on cognitive load (Oviatt 2006, "Human-centered
 design meets cognitive load theory", ACM Multimedia). The thresholds below are starting values to
 be calibrated per learner, not results from that literature.

@@ -258,9 +258,11 @@ structure in short nudges, never lectures:
 
 ### 8. Entry points and the wire (`docs/protocol.md`)
 
-- `primer_request` (`proof`, `hint`, `plan`, `forget`, `coach_on`, `coach_off`) from the
-  phone's Proof panel; keyboard lines `/proof`, `/hint`, `/coach`; the tablet dock's
-  `dock_action` `practice_coach`, `ask_page` and `ask_selection` (ADR 009 §4; the lasso's
+- `primer_request` from the phone's Proof panel (`proof` with an optional confidence, `hint`,
+  `grade`, `plan`, `forget`, the coach, mock, review, goals, consent, dispute and report requests:
+  `docs/protocol.md`); keyboard lines `/proof`, `/hint`, `/grade`, `/coach`, `/review`, `/sure N`,
+  `/mock start`, `/p N`; the tablet dock's `dock_action` `practice_coach`, `ask_page`,
+  `ask_selection`, `grade_page`, `grade_selection` and `my_progress` (ADR 009 §4; the lasso's
   `bbox` arrives in xochitl's scene units and is normalized).
 - The Primer answers with one `primer` message per reading: the proof (steps with stroke ids and
   bounds, the `.tex`, the check), findings, the grade estimate, the move, the learner summary, the
@@ -283,6 +285,204 @@ structure in short nudges, never lectures:
 - **Handwritten replies** are ADR 009's call and response: the move's text written by a
   `packages/hand` persona onto the page, on the agent layer. Agent ink never touches her layer.
 
+### 10. The teacher's markup (`primer/markup.py`)
+
+The first learner asked for feedback that looks like a teacher marking up her page. So grading
+can end in red pen on her own ink, as another layer:
+
+- **Vocabulary.** From the assessed proof: a **caret** where a missing assumption belongs (the
+  gap opens there), a **circle** with a **"?"** around the claim where it bites (on a long line the
+  circle hugs its last words, as a teacher circles a word, not a paragraph), a **strike-through**
+  across a step that rests on a wrong belief, an **underline** under a minor gap, **ticks** on the
+  key steps that stand (the ones later steps cite most), a short **comment** in free margin space
+  with an **arrow** when it is not beside its step, the **score** circled in the top corner with
+  "est.", and a one-line **summary** under the proof ("Good idea; why is 'both even' a
+  contradiction?"). Unreadable steps get "can't read: rewrite?", never a guess.
+- **Pedagogy.** Comments are at most eight words and point ("lowest terms?", "why? justify p² even
+  ⇒ p even"), never write the fix: the hint ladder's first rung (§5). The fix comes only if she
+  asks.
+- **Placement.** Every comment, "?", tick and the score lands on free paper: the page's user stroke
+  boxes (and marks already placed) are occupied; candidates are beside the step, the left margin,
+  the gap just above or below its line nearest the anchor, then the nearest free spot on the page.
+  Tested on the fixtures: no text mark over her ink or another text mark.
+- **Looks.** Red (#d03030), fineliner, written by a new **Teacher** persona in `packages/hand`
+  (quick, confident, slightly slanted print; its parameters live in the persona data). Letters go
+  through the simulated hand (one batch run, `scripts/dev/hand_batch.ts`); circles, strikes and
+  ticks are timed by the Primer as a quick pen (the simulated arm smooths a line-sized loop into a
+  blob). The strokes carry real timestamps and are performed at that pace, pausing while her pen is
+  down.
+- **Layer.** Agent ink on the `ai` layer with `author: "primer:teacher"` and `ink_layer: "codrawer:
+  teacher"`: the named native layer a tablet with native agent ink commits them to (ADR 009), so
+  they hide and undo as one layer there; on the phone the panel's "Hide marks" hides them by
+  author, "Remove marks" takes them back for everyone (`stroke_delete`), and the stage draws them
+  even with the AI layer off (they are feedback she asked for).
+- **Triggers.** The dock's "Grade this page" and "Grade selection" (`grade_page`,
+  `grade_selection`), `/grade`, the panel's "Mark it up", and a mock's write-ups: graded the next
+  morning, their marks are put on when each write-up's page is on screen.
+- **Phone parity.** The `markup` block lists every mark with its short text, the long explanation
+  and the step's LaTeX; tapping a mark (on the page or in the list) picks out its strokes and opens
+  the long version. The tablet carries the short version; the phone the long one.
+
+### 11. Putnam mock-exam mode (`primer/mock.py`; the roadmap's first item)
+
+- Four 90-minute sessions of three problems with the exam's breaks (15 min, 1 h 45, 15 min) on the
+  wall clock, persisted so a restarted router resumes. Problems are drawn per session (one she
+  should finish, one at her edge, one beyond, shuffled) or given.
+- At each session's start the problems go out as text (panel and glasses) and, with
+  `CODRAWER_PRIMER_INK=1` (set when the tablet runs native agent ink), as `packages/hand` ink once
+  she is on a fresh page (the Primer asks her to turn the page if the current one has ink).
+- Ink during a session is collected per problem (`/p 2` or the panel picks the problem being
+  written) and per page; ink during breaks is not. The Primer does not tutor while a mock runs.
+- The glasses show a quiet countdown ("Mock S2/4 · 47 min · P1"), updated at most once a minute
+  (ADR 006); the app counts down from the phase's end time, so the Primer sends only phase changes.
+- Write-ups are graded at 06:00 the next day (or on request): 0–10 each, labelled as estimates,
+  rigour and exposition, out of 120, fed to the learner model, the attempt log and the teacher's
+  markup. Mocks sit on the plan's fixed Saturdays (24 Oct, 7 Nov, 21 Nov), and a problem of the day
+  (the same all day, from the top of her queue) fills the days between; the dock's "Practice
+  coach" writes it onto the page.
+- LaTeX goes to the phone panel, never typed into a tablet text box: xochitl's text boxes drop
+  `[ ] { } ^ \ ~` when typed (the keyboard study, `docs/investigations/`), so the tablet carries
+  ink and the phone carries typeset mathematics, unless the native `text_insert` path is used.
+
+### 12. Two layers of memory: mastery (BKT) and items (FSRS) (`primer/fsrs.py`)
+
+BKT (§2) estimates whether she *knows* a concept. It does not say whether she will *recall* it on
+the day. Memory is item by item, so a second layer schedules **items**: techniques ("when to use
+the extremal principle"), key lemmas, her own past mistakes (the error journal), and problems to
+re-attempt. Each item has the FSRS memory state (Ye, Su & Cao 2022; Su et al. 2023; the
+open-spaced-repetition project): retrievability R = (1 + 19/81 · t/S)^−0.5, stability S in days,
+difficulty D in 1..10, updated from a rating 1 Again … 4 Easy with the 17 FSRS-4.5 default weights
+until her own review log is long enough to fit them. FSRS replaces the half-life model for any
+concept that has items.
+
+How the layers interact:
+
+- **Up:** a review is BKT evidence on the item's concepts at half weight (recall is not a proof):
+  Good/Easy credit 1, Hard 0.5, Again 0.
+- **Down:** BKT gates FSRS: an item is scheduled for recall only once its concepts' mastery is at
+  least 0.3; below that the policy teaches (worked examples, hints) instead of testing recall.
+- **Ratings come from the medium:** a re-attempt read by the Primer (error → Again; a gap, hints
+  or marked hesitation → Hard; fluent and quick → Easy; else Good), or her own rating of a quick
+  recall on the phone or glasses.
+- **Items are created by her work:** a finding creates a mistake item (seen again: a lapse; a clean
+  proof on its concepts: a success), a graded problem a re-attempt item, a complete proof a "when
+  would you reach for this?" technique item.
+- **Reviews happen in the medium:** the prompt or the problem written onto a fresh page as agent
+  ink, or a quick recall line on the glasses, rated with one tap.
+
+### 13. Metacognition (`primer/metacog.py`)
+
+Knowing what you know decides where exam minutes go; monitoring one's understanding improves
+learning (Flavell 1979; Schraw & Dennison 1994), and people are systematically miscalibrated, the
+least skilled most (Lichtenstein, Fischhoff & Phillips 1982; Kruger & Dunning 1999).
+
+- **Calibration.** Before a check she may rate how sure she is (a slider, or `/sure 70`). After
+  the grade the pair is kept; the Learner tab shows her calibration curve, the mean gap and the
+  Brier score, and per technique flags over- or under-confidence (|gap| ≥ 0.2 over ≥ 3 proofs)
+  with one kind, specific nudge.
+- **Self-explanation.** After a complete proof the debrief asks for the key idea in her words
+  (Chi et al. 1989, 1994), which goes into the technique notebook.
+- **Planning and monitoring.** Triage under time (§6, §11) is coached at lulls in timed sessions.
+- **The error journal** is the set of mistake items: hers to read, annotate and review; the
+  patterns are hers, not the Primer's verdicts.
+- **Productive struggle versus floundering.** The ink signals tell them apart: pauses followed by
+  new lines are thinking (silence); long stalls with repeated erasures and rewrites and no new
+  progress over several minutes are floundering, where a first-rung hint may be offered (only if
+  her nudging setting allows it, and never during a mock). Productive failure (Kapur 2008) is
+  protected; floundering is not left alone.
+- **Reflection** at the end of a session and on the report's last page: what went well, where she
+  got stuck and what got her unstuck, what she will do differently.
+
+### 14. Goals she agrees to, and consent per feature
+
+- **Goals are a conversation**, never a setting the Primer imposes (Locke & Latham 2002 on
+  specific goals; Deci & Ryan 2000 on autonomy): her target (score or percentile, in her words),
+  topics, weekly hours, how much nudging she wants, and which features may watch her. Every change
+  is recorded with its date and who proposed it; only her edits mark them agreed; a weekly revisit
+  is offered, not forced, and they change any time.
+- **Consent per feature**, each off until she turns it on: reading position, attempt log, ink
+  signals, reviews, nudges, activity review (`metacog.FEATURES`).
+- **She sees and edits everything the model believes**: mastery, calibration, goals, insights.
+  "That's wrong" on a mastery estimate is evidence at weight 0.3 (her word counts without
+  overruling her proofs); "not right" on an insight dismisses it and teaches the model.
+
+### 15. Inspiration, grounded
+
+Practice for two months needs reasons beyond the deadline: occasional curiosity hooks (a beautiful
+problem, the story behind a technique, a connection to something she loved), noticing streaks and
+breakthroughs without shallow gamification (no points or badges; a sentence when something
+genuinely changed, such as a misconception not seen for two weeks), and now and then a delight
+problem chosen for beauty rather than weakness. Every story and attribution must be cited or
+skipped: no fabricated anecdotes. The citations come from the grounded context and library system
+designed on the branch `research/grounded-context`; until it lands, the Primer offers problems
+from its own bank and says nothing it cannot cite.
+
+### 16. The reflective layer (`primer/reflect.py`, `primer/report.py`)
+
+A background reader of her own record, opt-in (`activity_review`), kind and specific: her mirror,
+not surveillance.
+
+- **Activity review:** problems attempted with outcomes; weaknesses (concepts, techniques,
+  recurring mistakes) with evidence; an **approach profile** from her own work, each line with its
+  basis ("reaches for contradiction first: 5 of 10 attempts"; "little sign of testing small cases";
+  "most marks are for missing justification rather than wrong ideas"); topics with time spent and
+  the trend of mastery.
+- **Blind spots:** patterns invisible from inside: the same mistake across topics, over- or
+  under-confidence on a technique, time sinks (long attempts ending at 2/10 or less), stalling at
+  the same kind of step across problems, a topic gone untouched for two weeks, a technique the hard
+  problems needed that never appears in her work. Each has evidence (attempts with links to replay
+  the page at that moment, `apps/even-g2` thinking replay, and thumbnails of her ink), a
+  confidence, and one suggestion; she confirms or dismisses each, and dismissed ones stay gone.
+- **Reports:** weekly and on demand (the dock's "My progress"), typeset with the proofs' LaTeX
+  pipeline (Tectonic or pdfLaTeX; an HTML-and-KaTeX rendering is the fallback design where no TeX
+  engine exists): goals against progress, mastery and calibration charts, weaknesses with trends,
+  the approach profile, blind spots with ink thumbnails, the error journal, the next problems with
+  their reasons, and a page of reflective prompts to answer by hand. They accumulate into a
+  portfolio under `<state>/primer/reports/<learner>/`, served by the desktop router to her phone.
+  Putting a report on the tablet as a document is a write in xochitl's documented format (the PDF
+  with a `.metadata` and `.content` beside it under `xochitl/`, then the sync or a restart): left
+  for the extension and automation work, and only with her OK.
+- The ink signals here use the same units and thresholds as the app's thinking replay
+  (`apps/even-g2/src/replay/moments.ts`: speeds in page widths per second with y × 4/3, the 4 s
+  absolute pause, the 70 % slowdown), so a "hesitation" means the same thing on both sides.
+
+### 17. Evaluation, and the prompt rules (`primer/scoring.py`)
+
+- **Prompt rules** adopted from the smart_remarkable study (`docs/investigations/
+  smart-remarkable-integration.md`; their prompts are MIT): the lasso's selection is image 1 and
+  the whole page image 2; never assume content off the page; agent ink is never rendered, so earlier
+  replies cannot pass for her instructions; act only on what the writing explicitly asks (read and
+  assess, never complete); and return the literal `received_text` and a `kind` before the
+  structure, so a reading can be audited against what was seen.
+- **A scored evaluation**, because their harness was a gallery: recognition is scored against the
+  fixtures' gold transcriptions (step count, LaTeX token F1, concept and line-assignment Jaccard),
+  grading against expected findings, score, band and move on the fixtures and on transcript-only
+  cases (`tests/fixtures/eval/grading/`). Offline runs gate at exact; live runs record replies with
+  latency and tokens (`--record`), and replaying the recordings gates a model's measured quality in
+  CI without a network.
+
+### 18. The data model (one learner file, `<state>/primer/learners/<name>.json`)
+
+| Field | What it holds | Who writes it |
+| --- | --- | --- |
+| `concepts` | per concept: BKT P(known), opportunities, half-life, last evidence | readings, reviews, her corrections |
+| `misconceptions` | per catalog entry: count, last turn, clean streak | readings |
+| `evidence` | every observation: concept, credit, weight, hesitation, mastery before and after | the Primer |
+| `items` | FSRS items: kind, prompt, concepts, S, D, due, reps, lapses, review log | readings, her review ratings |
+| `judgments` | confidence before a check, and the outcome | her, then the grade |
+| `goals` | target, topics, weekly hours, nudging, revisit days, agreed date, change history | her (the Primer may propose) |
+| `features` | consent per kind of watching | her |
+| `attempts` | the attempt log: problem, minutes, hints, wrong steps, score, mistakes, reading position, thumbnail, her note | the coach (with consent); she may edit |
+| `reading` | document, title, page and when | the coach (with consent) |
+| `notebook` | techniques from solved problems, key idea, her own explanation | the debrief, her |
+| `corrections`, `insight_verdicts` | her "that's wrong" and her verdicts on insights | her |
+| `sessions` | timed sessions and mocks with scores | mock mode |
+
+Beside it, per learner: `mocks/` (each mock's write-ups and report), `thumbs/` (ink thumbnails for
+evidence) and `reports/` (the portfolio). All local to the desktop, all deleted with `forget` (the
+learner file) or by removing the folder; nothing is sent anywhere but the minimum a live reading
+needs (§2).
+
 ## Alternatives considered
 
 - **Local handwriting recognition** (InkML-trained math recognizers, image-to-LaTeX models): no
@@ -292,6 +492,11 @@ structure in short nudges, never lectures:
 - **Deep or IRT-style knowledge tracing**: better fits with a population of learners; with one
   learner and two months, BKT's four interpretable parameters per concept, with bounds, are
   easier to trust and to explain.
+- **SM-2 (or the half-life model alone) for review**: SM-2's ease factor has no model of
+  retrievability; FSRS predicts recall and fits its weights to a review log, and its three numbers
+  are explainable to her ("you'd recall this with 72 % chance today").
+- **Marks drawn entirely by the simulated hand**: the arm model turns a loop the size of a line of
+  writing into a blob; letters by the hand, shapes timed by the Primer, look like a teacher's pen.
 - **Grading with a model only**: kept for live readings, but always alongside the catalog, the
   rubric's bands and an "estimate" label, with the prover as the only thing allowed to say
   "checked".
@@ -314,14 +519,20 @@ structure in short nudges, never lectures:
 Built and tested offline: the concept graph and catalog, BKT and the learner file, ink signals and
 the lull detector, offline recognition, assessment and grading, the Lean check (Lean 4.30 here:
 the fixtures check or fail as expected), LaTeX (compiled with Tectonic here), the policy and hint
-ladder, timed sessions, mocks, the queue and the plan, the coach (consent, reading positions,
-attempts, weaknesses, problems in `packages/hand` ink), the desktop router integration, relays on
-the Go and Rust routers, the Proof panel with step highlighting, and a demo against the Rust
-router (`docs/media/primer-*.png`). Not yet run: a live model reading (no key on the build
-machine). Not built: the bridge writing `dock.json` from `dock_entries`; the page watcher
+ladder, timed sessions, the queue and the plan, the coach (consent, reading positions, attempts,
+weaknesses, problems in `packages/hand` ink), the teacher's markup (selection, placement, the
+Teacher persona, performance, the phone's list and tap-to-explain), mock-exam mode (sessions,
+breaks, collection, next-morning grading, the glasses' countdown, the Mock tab), FSRS items,
+calibration, goals and per-feature consent with her corrections as evidence, the activity review,
+blind spots and the progress report (`docs/media/primer-report-sample.pdf`, from fixture data),
+the scored evaluation, the desktop router integration and report route, relays on the Go and Rust
+routers, and demos against the Rust router (`docs/media/primer-*.png`). Not yet run: a live model
+reading (no key on the build machine). Not built: the bridge writing `dock.json` from
+`dock_entries`, and committing `ink_layer` strokes to a named native layer; the page watcher
 reporting the open page's index and the document's kind (both engines, keeping their byte-for-byte
-parity) so reading positions map to textbook sections; the guardian view; the mock-exam mode's
-proctoring (the roadmap's first item, built on this ADR); handwritten replies in the loop.
+parity) so reading positions map to textbook sections; the floundering detector's hint offer;
+grounded inspiration (waiting for the grounded-context library); the guardian view; the report's
+HTML fallback and tablet import; handwritten replies in the loop.
 
 ## References
 
@@ -329,6 +540,24 @@ proctoring (the roadmap's first item, built on this ADR); handwritten replies in
   writing. *Behavior Research Methods* 38(2).
 - Baker, Corbett & Aleven (2008). More accurate student modeling through contextual estimation of
   slip and guess probabilities in Bayesian Knowledge Tracing. *ITS 2008*.
+- Chi, Bassok, Lewis, Reimann & Glaser (1989). Self-explanations: how students study and use
+  examples in learning to solve problems. *Cognitive Science* 13(2); Chi, de Leeuw, Chiu &
+  LaVancher (1994). Eliciting self-explanations improves understanding. *Cognitive Science* 18(3).
+- Deci & Ryan (2000). The "what" and "why" of goal pursuits: human needs and the
+  self-determination of behavior. *Psychological Inquiry* 11(4).
+- Flavell (1979). Metacognition and cognitive monitoring. *American Psychologist* 34(10).
+- Kruger & Dunning (1999). Unskilled and unaware of it. *Journal of Personality and Social
+  Psychology* 77(6).
+- Lichtenstein, Fischhoff & Phillips (1982). Calibration of probabilities: the state of the art to
+  1980. In *Judgment under Uncertainty* (Kahneman, Slovic & Tversky, eds.).
+- Locke & Latham (2002). Building a practically useful theory of goal setting and task
+  motivation. *American Psychologist* 57(9).
+- Schraw & Dennison (1994). Assessing metacognitive awareness. *Contemporary Educational
+  Psychology* 19(4).
+- Su, Ye, Cao et al. (2023). Optimizing spaced repetition schedule by capturing the dynamics of
+  memory. *IEEE TKDE*; Ye, Su & Cao (2022). A stochastic shortest path algorithm for optimizing
+  spaced repetition scheduling. *KDD 2022*; the FSRS algorithm and weights:
+  github.com/open-spaced-repetition.
 - Cepeda, Pashler, Vul, Wixted & Rohrer (2006). Distributed practice in verbal recall tasks.
   *Psychological Bulletin* 132(3).
 - Corbett & Anderson (1995). Knowledge tracing: modeling the acquisition of procedural knowledge.
