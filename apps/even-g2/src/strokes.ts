@@ -12,6 +12,7 @@
 
 import { zlibSync } from 'fflate'
 import { DEFAULT_ERASE_RADIUS, EraseIndex, PAGE_H, PAGE_W, emptyBox, fullyErased, type Box } from './erase'
+import { Playout, visibleCount } from './playout'
 
 /** user: the tablet's own ink · peer: another participant (phone, web, …) · ai: agent ink */
 export type Layer = 'user' | 'ai' | 'peer'
@@ -56,6 +57,11 @@ export interface Stroke {
    */
   gone?: Uint8Array
   goneCount?: number
+  /**
+   * AI strokes with sender times: this device's clock minus the sender's, so the point stamped t
+   * shows at t + playOffset (playout.ts). Absent: every point shows as it arrives.
+   */
+  playOffset?: number
 }
 
 /** A `page` message (docs/protocol.md): the tablet's saved page, authoritative up to `rev`. */
@@ -131,6 +137,8 @@ export class StrokeStore {
    * stroke_begin with the same id is a new stroke and lifts it. Bounded: the oldest are forgotten.
    */
   private deleted = new Set<string>()
+  /** when timed AI points show (playout.ts) */
+  private playout = new Playout()
 
   begin(id: string, layer: Layer, brush = 'pen', ts?: number, peer?: { color?: string; author?: string }) {
     this.deleted.delete(id)
@@ -307,7 +315,13 @@ export class StrokeStore {
       const y = p[1]
       s.pts.push([x, y, p.length >= 3 ? p[2] : 0.6])
       // a sender's t is Unix ms (docs/protocol.md); anything else is not a time we can use
-      times.push(p.length >= 4 && typeof p[3] === 'number' && p[3] > 1e12 ? p[3] : now)
+      const sent = p.length >= 4 && typeof p[3] === 'number' && p[3] > 1e12
+      times.push(sent ? p[3] : now)
+      // agent ink with its hand's own timing plays at that timing (playout.ts)
+      if (sent && s.layer === 'ai') {
+        if (s.pts.length === 1) s.playOffset = this.playout.start(p[3], now)
+        if (s.playOffset !== undefined) this.playout.extend(p[3], s.playOffset)
+      }
       this.nPoints++
       if (x < b[0]) b[0] = x
       if (y < b[1]) b[1] = y
@@ -365,6 +379,7 @@ export class StrokeStore {
   /** Drop every stroke, or only one layer's. */
   clear(layer?: Layer) {
     this.indexStale = true
+    if (!layer || layer === 'ai') this.playout.reset()
     if (!layer) {
       this.strokes.clear()
       this.deleted.clear()
@@ -399,6 +414,16 @@ export class StrokeStore {
       this.indexStale = true
     }
     return dropped > 0
+  }
+
+  /** How many of `s`'s points show at `now` (Unix ms): all, unless it is playing out. */
+  visible(s: Stroke, now = Date.now()): number {
+    return s.playOffset === undefined || !s.times ? s.pts.length : visibleCount(s.times, s.playOffset, now)
+  }
+
+  /** Whether timed AI ink is still to show at `now`. */
+  playing(now = Date.now()): boolean {
+    return this.playout.pending(now)
   }
 
   all(): Stroke[] {

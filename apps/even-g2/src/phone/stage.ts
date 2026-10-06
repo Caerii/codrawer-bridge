@@ -600,7 +600,14 @@ export class Stage {
 
   private draw() {
     this.dirty = false
-    const strokes = this.store.all()
+    const now = Date.now()
+    // agent ink plays out at its own timing (playout.ts): a stroke still playing is drawn live,
+    // cut to the points due so far, and the next frame comes
+    const strokes = this.store.all().map((s) => {
+      const v = this.store.visible(s, now)
+      return v < s.pts.length ? { ...s, pts: s.pts.slice(0, v), done: false } : s
+    })
+    if (this.store.playing(now)) this.dirty = true
     const done = strokes.filter((s) => s.done)
     const cam = this.cam
     const camMoved = cam.cx !== this.camAt.cx || cam.cy !== this.camAt.cy || cam.h !== this.camAt.h
