@@ -29,7 +29,7 @@ user was not typing during the work, so no real-typing tap (`keylat.py tap`) was
 
 | Hop | Before | After |
 | --- | --- | --- |
-| BLE (interval 20–25 ms, peripheral latency 20) | ~11 / 25 (mean / max wait for a connection event) | same; ~6 / 15 with `KEYBOARD_FAST_LINK=1` |
+| BLE (interval 25 ms, peripheral latency 20; btmon) | ~12 / 25 (mean / max wait for a connection event) | same; ~4–8 / 15 with `KEYBOARD_FAST_LINK=1` |
 | kernel → bridge | < 1 | < 1 |
 | router + Wi-Fi (tablet router → LAN client) | 16 / 51 | 16 / 51 (unchanged) |
 | app wait, keys 150 ms apart | 77 / 171 | 0 / 0 |
@@ -82,12 +82,17 @@ Latency=20       # may skip 20 events while idle (≈0.5 s)
 Timeout=210      # 2.1 s supervision timeout
 ```
 
+and btmon on two reconnects saw `LE Enhanced Connection Complete`: interval 25.00 ms, latency
+20, supervision timeout 2100 ms. That is what a key report waits for: up to 25 ms, ~12 ms on
+average.
+
 debugfs is not available on this kernel (no `debugfs` in /proc/filesystems), so the kernel-wide
 `conn_min_interval` knobs cannot be changed, and `btmgmt` is not installed. `hcitool lecup`
 (HCI LE Connection Update, sent by the central) is: `KEYBOARD_FAST_LINK=1` in bridge.env makes the
 keeper request interval 7.5–15 ms, latency 30, timeout 2.1 s on every connect. A key report
-waits for the next connection event, so the mean radio wait drops from ~11 ms to ~6 ms (max 25 →
-15). With latency 30 an idle keyboard still wakes its radio about every 0.47 s (vs ~0.5 s now);
+waits for the next connection event, so the mean radio wait drops from ~12 ms to ~4–8 ms (max 25
+→ 15). Its effect on the controller was not exercised on the device (the keyboard slept
+throughout), only in keeper_test.sh. With latency 30 an idle keyboard still wakes its radio about every 0.47 s (vs ~0.5 s now);
 while typing it exchanges up to 3× more packets, so battery life drops somewhat. Default off: the
 saving (~5 ms) is small next to the app's, and the keyboard may renegotiate its own parameters.
 

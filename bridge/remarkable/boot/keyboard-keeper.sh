@@ -23,7 +23,7 @@
 #
 # KEYBOARD_FAST_LINK=1 (bridge.env, default off) asks the controller for a 7.5–15 ms connection
 # interval on every connect, instead of the 20–25 ms the K380s asks for. A key report waits for
-# the next connection event, so this halves the radio's share of key latency (mean ~11 ms → ~6 ms).
+# the next connection event, so this halves the radio's share of key latency (mean ~12 ms → ~4–8 ms; btmon saw 25 ms).
 # The peripheral latency rises from the keyboard's 20 to 30 so an idle keyboard still wakes its
 # radio about as rarely (every 31 × 15 ms ≈ 0.47 s vs 21 × 25 ms ≈ 0.5 s); while typing it
 # exchanges up to 3× more packets, so expect somewhat shorter battery life. The keyboard may ask
