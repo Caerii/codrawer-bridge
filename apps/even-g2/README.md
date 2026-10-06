@@ -152,8 +152,10 @@ Enter on a single match completes too. A pending terminal permission (`y / a / n
 takes the next whole line. Rows are filled from the bottom with our own conservative wrapping
 so the input line is always the last visible row.
 
-Text updates follow keystrokes at a 150 ms floor while typing, then fall back to the quiet
-2 s cadence so they never compete with ink. `?view=text` starts in the text view.
+While typing, a keystroke goes to the glasses on the key event itself, one text update in
+flight at a time and always the newest line (keys typed during an update coalesce into the
+next); the phone's Glasses panel echoes at once. Otherwise text falls back to the quiet 2 s
+cadence so it never competes with ink. `?view=text` starts in the text view.
 
 | Gesture | Effect |
 | --- | --- |

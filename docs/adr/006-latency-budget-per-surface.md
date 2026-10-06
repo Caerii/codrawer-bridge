@@ -25,7 +25,9 @@ string `imageData`; PNG bytes as a number array is the working encoding (1-bit P
   nearly free), latest-wins, drawn just in time when the link frees up. The full canvas refreshes
   after a lull in the writing. Two image sends never overlap (the glasses refuse it).
 - **Text never competes with ink.** Status updates are held during a stroke and sent at most
-  every 2 s, except while typing (150 ms floor) so the line follows the keys.
+  every 2 s, except while typing, when the line follows the keys at the link's own pace: one text
+  update in flight, always the newest text, sent on the key event (2026-10-06, replacing a 150 ms
+  floor; docs/investigations/keyboard-latency.md).
 - **Budgets:** pen-to-glasses loupe ≤ 250 ms (one ~200 ms send plus the router hop; the old
   ≤ 150/80 ms targets are below what the glasses can do); keystroke-to-glasses ≤ 200 ms; terminal token-to-glasses ≤ 300 ms after coalescing; a page rebuild
   (view switch) ≤ 200 ms and never mid-stroke.

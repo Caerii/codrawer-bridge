@@ -160,6 +160,13 @@ export const BENCH = cfg('bench', '0') === '1'
 /** `?probe=1`: one-shot link probe after the page is up (probe.ts). Never remembered. */
 export const PROBE = once('probe') === '1'
 
+/**
+ * `?simtext=70`: dev builds only, hold every glasses text update this long (ms) before the host
+ * call, so the simulator (whose text updates take ~4 ms) paces like the G2 (~60–80 ms; ADR 006)
+ * in latency runs (scripts/dev/keylat.py). Never remembered; 0 everywhere else.
+ */
+export const SIM_TEXT_MS = import.meta.env.DEV ? Math.max(0, Number(once('simtext') ?? 0) || 0) : 0
+
 /** The loupe's writing-aware camera (`?loupe_cam=0`: plain re-centring on the pen every frame). */
 export const LOUPE_CAM = cfg('loupe_cam', '1') !== '0'
 

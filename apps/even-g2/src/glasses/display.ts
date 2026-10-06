@@ -16,7 +16,7 @@
  * flows). Both send only once our page is up ({@link glasses}.bridge).
  */
 import { ImageRawDataUpdate, ImageRawDataUpdateResult, TextContainerUpgrade } from '@evenrealities/even_hub_sdk'
-import { BINARIZE, CANVAS_MIN_MS, ENC, FMT, HAS_LOUPE, IMG_H, IMG_W, INFLIGHT, INITIAL_LOUPE_ZOOM, LOUPE_CAM, LOUPE_H, LOUPE_MIN_MS, LOUPE_W, remember } from '../config'
+import { BINARIZE, CANVAS_MIN_MS, ENC, FMT, HAS_LOUPE, IMG_H, IMG_W, INFLIGHT, INITIAL_LOUPE_ZOOM, LOUPE_CAM, LOUPE_H, LOUPE_MIN_MS, LOUPE_W, remember, SIM_TEXT_MS } from '../config'
 import { glasses, isWide, store, view } from '../state'
 import { LoupeCamera, rasterize, type RasterOptions } from '../strokes'
 import { makeEncoder } from './encode'
@@ -170,6 +170,7 @@ export const keyTrace = import.meta.env.DEV ? new KeyLatency(PACING, (b) => cons
 export const textPusher = new TextPusher(async (content, renderedAt) => {
   const done = keyTrace?.sending(renderedAt)
   try {
+    if (SIM_TEXT_MS) await new Promise((r) => setTimeout(r, SIM_TEXT_MS))
     return await sendStatusText(content)
   } finally {
     done?.()

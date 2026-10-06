@@ -20,7 +20,8 @@
  *
  *   router ──link.ts──▶ handlers (session.ts, hud/, doc/, phone/) ──▶ state.ts + dirty flags
  *   ring/menu ──glasses/input.ts──▶ actions.ts ──────────────────────▶ state.ts + dirty flags
- *   loop.ts (every 50 ms) ──▶ glasses/display.ts ──▶ scheduler / text pacing ──▶ the glasses
+ *   loop.ts (every 50 ms; keys flush the text at once) ──▶ glasses/display.ts ──▶ scheduler /
+ *     text pacing ──▶ the glasses
  *   phone/stage.ts redraws itself on animation frames from the same stroke store
  *
  * This file only wires the modules together, in the order the page needs them. Outside the Even
@@ -38,7 +39,7 @@ import { attachGlasses, releaseIfStale } from './glasses/page'
 import { onKey } from './hud/keyboard'
 import { onTerm } from './hud/terminal'
 import { link } from './link'
-import { tick } from './loop'
+import { flushText, tick } from './loop'
 import { keepScreenAwake } from './phone/awake'
 import { setupCamera } from './phone/camera'
 import { installDevLog } from './phone/devlog'
@@ -95,6 +96,7 @@ link.on('clear', session.onClear)
 link.on('key', (m) => {
   keyTrace?.key(m.ts)
   onKey(m)
+  flushText() // the key shows now, not on the next render tick
 })
 link.on('doc_update', onDocUpdate)
 link.on('doc_compact', onDocCompact)

@@ -14,6 +14,7 @@
  *    stroke end or at most every CANVAS_MIN_MS.
  * 4. Text: when dirty (or when the typing view just expired), render it, show it in the phone's
  *    Glasses panel and offer it to the glasses; a deferred offer stays dirty for the next tick.
+ *    Keys do not wait for the tick: the key handler flushes the text itself ({@link flushText}).
  * 5. The document autosaves 2 s after its last edit.
  *
  * In the wide fit view (config.ts INITIAL_WIDE_FIT) there is no loupe: the canvas is the live view,
@@ -72,12 +73,21 @@ export function tick() {
   const typingNow = isTyping()
   if (wasTyping && !typingNow) dirty.text = true // the typing view expired: back to status
   wasTyping = typingNow
-  if (dirty.text) {
-    dirty.text = false
-    const line = renderText()
-    showStatus(`${glasses.status}\n${line}`)
-    if (glasses.bridge && !textPusher.push(line, { typingAt: hud.typingAt, inkActive: ink.active, lastInkAt: ink.lastAt })) dirty.text = true // deferred: retry next tick
-  }
+  flushText()
 
   autosaveIfDue()
+}
+
+/**
+ * Step 4 on its own: when the text is dirty, render it, show it on the phone and offer it to the
+ * glasses; a deferred offer stays dirty for the next tick. The key handler (main.ts) runs it too,
+ * so a keystroke shows on the phone at once and on the glasses as soon as the link is free
+ * (glasses/text.ts), not up to a tick later.
+ */
+export function flushText() {
+  if (!dirty.text) return
+  dirty.text = false
+  const line = renderText()
+  showStatus(`${glasses.status}\n${line}`)
+  if (glasses.bridge && !textPusher.push(line, { typingAt: hud.typingAt, inkActive: ink.active, lastInkAt: ink.lastAt })) dirty.text = true // deferred: retry next tick
 }
