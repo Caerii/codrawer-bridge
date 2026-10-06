@@ -16,10 +16,11 @@
  *    Glasses panel and offer it to the glasses; a deferred offer stays dirty for the next tick.
  * 5. The document autosaves 2 s after its last edit.
  *
- * In the wide fit view (config.ts INITIAL_WIDE_FIT) there is no loupe: the canvas is the only view,
- * so it goes as with no loupe, as two tiles (the right one through the loupe's container).
+ * In the wide fit view (config.ts INITIAL_WIDE_FIT) there is no loupe: the canvas is the live view,
+ * so it goes as fast as the link allows (WIDE_CANVAS_MIN_MS), as two tiles (the right one through
+ * the loupe's container); a tile the lens already shows is skipped, so ink in one half costs one send.
  */
-import { CANVAS_LULL_MS, CANVAS_MIN_MS, HAS_LOUPE } from './config'
+import { CANVAS_LULL_MS, CANVAS_MIN_MS, HAS_LOUPE, WIDE_CANVAS_MIN_MS } from './config'
 import { autosaveIfDue } from './doc/document'
 import { canvasFrame, drawCanvas, drawLoupe, loupeFrame, rightTileFrame, scheduler, textPusher } from './glasses/display'
 import { isTyping, renderText } from './hud/render'
@@ -54,9 +55,11 @@ export function tick() {
     drawCanvas()
     canvasUnsent = true
   }
-  const canvasDue = HAS_LOUPE && !wide
-    ? dirty.flushCanvas && !ink.active && now - ink.lastAt >= CANVAS_LULL_MS
-    : dirty.flushCanvas || now - scheduler.startedAt('canvas') >= CANVAS_MIN_MS
+  const canvasDue = wide
+    ? dirty.flushCanvas || now - scheduler.startedAt('canvas') >= WIDE_CANVAS_MIN_MS // the live view: as fast as the link allows
+    : HAS_LOUPE
+      ? dirty.flushCanvas && !ink.active && now - ink.lastAt >= CANVAS_LULL_MS
+      : dirty.flushCanvas || now - scheduler.startedAt('canvas') >= CANVAS_MIN_MS
   if (canvasUnsent && canvasDue) {
     canvasUnsent = false
     dirty.flushCanvas = false

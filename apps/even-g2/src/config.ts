@@ -121,6 +121,13 @@ export const LOUPE_MIN_MS = Number(cfg('frame_ms', '60')) || 60
 export const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 /** With a loupe, the canvas is resent after this long without ink, ms (`?lull_ms=`). */
 export const CANVAS_LULL_MS = Number(cfg('lull_ms', '600')) || 600
+/**
+ * Wide fit refresh floor (`?wide_ms=`). The wide view has no loupe, so its canvas is the live view:
+ * it is resent as fast as the link takes it (one ~200 ms image send at a time, ADR 006), and only
+ * the tile that changed goes (the scheduler skips a tile the lens already shows). Writing and
+ * erasing then show within a few hundred ms instead of CANVAS_MIN_MS.
+ */
+export const WIDE_CANVAS_MIN_MS = Number(cfg('wide_ms', '150')) || 150
 
 /**
  * Frame encoding (`?fmt=`). png: the browser's PNG (the documented encoded-image path; the host
