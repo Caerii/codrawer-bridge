@@ -1,0 +1,21 @@
+{
+  "name": "hand",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A biomechanical handwriting simulator for codrawer's AI ink: sigma-lognormal motor plans, a damped arm, tremor, pressure and cognitive timing",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "cli": "tsx src/cli.ts",
+    "glyphs": "uv run --with Hershey-Fonts python scripts/gen_glyphs.py"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0"
+  }
+}

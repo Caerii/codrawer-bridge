@@ -1,2 +1,6 @@
+# The TypeScript side of codrawer: the glasses app, the handwriting simulator and its lab.
+# model-server keeps its own lockfile (its AI SDK betas move on their own schedule).
 packages:
   - apps/even-g2
+  - apps/hand-lab
+  - packages/*
