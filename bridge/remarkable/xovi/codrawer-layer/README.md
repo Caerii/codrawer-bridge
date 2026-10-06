@@ -83,6 +83,7 @@ a settled lasso refresh or create the injected UI.
 ```bash
 bridge/remarkable/xovi/codrawer-layer/build.sh      # needs Docker; output in out/
 bridge/remarkable/xovi/codrawer-layer/test.sh       # host tests of the pure headers (Docker, any g++ image)
+bridge/remarkable/xovi/codrawer-layer/qmltest.sh    # the injected QML, offscreen (Docker, Qt 6 QML runtime)
 scripts/dev/inktest.py                              # on-device regression: agent ink lands where aimed
 ```
 
@@ -176,6 +177,13 @@ selection. A tap sends a `dock_action` (docs/protocol.md). Where it goes is a li
 `inject.conf`, found with `tree` on the device; the release ships `dock.qml` and `inject.conf`
 into `exthome/codrawer-layer/` (xovi.sh).
 
+The button is xochitl's own `ArkControls.ToolButton` (the face of every toolbar button), created
+at run time, so it shows the native press feedback (a black cell, the icon inverted) and stays
+"selected" while its list is open, like the layers button. Like undo and redo it is an action:
+it never selects itself in the toolbar, so the drawing tool stays as it was. Without
+`ark.controls` it falls back to the same look in plain QtQuick. `qmltest.sh` loads the file
+offscreen on the desktop both ways and fails on any QML warning (one on the tablet would trip
+the XOVI_NO_INJECT gate).
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'
