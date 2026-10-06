@@ -101,8 +101,9 @@ object per line:
   "strokes":[{"tool","argb","thickness","pts":[[x,y,pressure,width_px],…]}]}` in page units
   (x centred). The extension refuses any page but the visible one, any tool that is not ink, more
   than 64 strokes or 4000 points, and out-of-range points; it commits into the layer
-  `codrawer: agent`, after mapping page coordinates through the tile manager's
-  `sceneToViewTransform` (Probe 1 found that `addDrawingLine` takes the pen's frame). It waits
+  `codrawer: agent` in page coordinates, unmapped (`addDrawingLine` takes page coordinates:
+  verified on the device 2026-10-06 at pan and zoom; native-multiplayer-layer.md, Probe 1
+  item 4). It waits
   while the user's pen is down. Answer: `ok <id> <n>` or `err <id> <why>`.
 - **Text**: `{"op":"text_insert","id","text"}` puts text into the focused text item of the visible
   page, as an input method's commit (Return between lines); `{"op":"text_read","id"}` answers
