@@ -85,7 +85,7 @@ export function renderText(): string {
   if (glasses.pageMode === 'canvas' && !isTyping()) {
     const plan = planLine()
     const lines = plan ? [plan, statusLine()] : [statusLine(), hud.notice]
-    return lines.filter(Boolean).join('\n')
+    return lines.filter(Boolean).join('\n') || ' ' // a blank strip: never send empty content
   }
 
   // Bottom-up fill: the input line (always, at most two rows), then the completion popup.
