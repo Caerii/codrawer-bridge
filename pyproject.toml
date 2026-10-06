@@ -9,6 +9,7 @@ description = "Core infra for a low-latency co-drawer bridge: Paper Pro pen even
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "anthropic>=1.11.0",
   "fastapi>=0.110",
   "httpx>=0.28.1",
   "pillow>=10.0",
@@ -52,5 +53,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"codrawer_bridge.primer" = ["fixtures/*"]
 
 

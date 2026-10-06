@@ -9,8 +9,9 @@
  *                    writing pauses; the text shows status, the keyboard transcript, the
  *                    terminal, or a full-screen document editor (hud/, doc/)
  *   on the phone     the page at full resolution, live, on paper, dark or the camera (phone/), and
- *                    a participant's pen: strokes drawn there join the session; and the user's
- *                    personal marks, learned and inspected here (marks/, phone/marks.ts)
+ *                    a participant's pen: strokes drawn there join the session; the user's
+ *                    personal marks, learned and inspected here (marks/, phone/marks.ts); and
+ *                    the Proof panel, the Primer's reading of a handwritten proof (primer/, ADR 010)
  *
  * The one fact that shapes the glasses side (ADR 006): an image update costs ~200 ms whatever its
  * size and only one can be on the wire, so live ink goes through the loupe alone, frames are
@@ -53,8 +54,11 @@ import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
 import { setupToolbar, showConnection } from './phone/toolbar'
 import { setupViews } from './phone/views'
+import { mockActive, mockLine } from './primer/mock'
+import { acceptReading, glanceFor, parseReading, primer } from './primer/model'
+import { onReading, setupPrimerPanel } from './primer/panel'
 import * as session from './session'
-import { dirty, glasses, view } from './state'
+import { dirty, glasses, hud, view } from './state'
 
 // ── 1. The phone page ─────────────────────────────────────────────────────────────────────────
 installDevLog() // first, so the console of everything below reaches the desktop in dev builds
@@ -65,6 +69,7 @@ setupDrawing()
 setupCamera()
 setupMenu()
 setupMarksUi()
+setupPrimerPanel()
 keepScreenAwake()
 loadDocument()
 
@@ -107,6 +112,33 @@ link.on('doc_compact', onDocCompact)
 link.on('doc', onPlainDoc)
 link.on('term', onTerm)
 setupMarks() // personal marks: its own handlers for mark_*, dock_action and the ink it reads
+link.on('primer', (m) => {
+  // The panel shows every reading; the glasses get the move's one line (the HUD's intent line),
+  // unless the Primer chose silence.
+  const r = parseReading(m)
+  if (!r) return
+  const shown = acceptReading(r)
+  onReading()
+  // During a mock exam the glasses show only its quiet countdown (refreshed below), never a move.
+  const line = mockActive(shown.mock) ? mockLine(shown.mock, Date.now()) : glanceFor(r.move)
+  if (line) {
+    hud.intent = line
+    dirty.text = true
+  }
+  console.log('[codrawer] primer', shown.mode, shown.move?.kind ?? '-', shown.proof?.steps.length ?? 0, 'steps')
+})
+
+// The mock exam's countdown on the glasses: one text update a minute at most (ADR 006), and only
+// while a mock runs or just after it ends.
+setInterval(() => {
+  const m = primer.latest?.mock ?? null
+  if (!m || (!mockActive(m) && m.status !== 'awaiting_grading')) return
+  const line = mockLine(m, Date.now())
+  if (line && line !== hud.intent) {
+    hud.intent = line
+    dirty.text = true
+  }
+}, 15_000)
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

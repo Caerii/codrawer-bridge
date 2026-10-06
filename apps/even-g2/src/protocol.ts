@@ -78,6 +78,11 @@ export interface Inbound {
   mark_feedback: MarkFeedback
   mark_query: MarkQuery
   marks: MarksSnapshot
+  /**
+   * A reading from the Primer (ADR 010): the proof re-typeset, findings, a score estimate, the
+   * next move, the learner and the plan. Normalized by primer/model.ts parseReading.
+   */
+  primer: Record<string, unknown>
 }
 
 export type InboundType = keyof Inbound

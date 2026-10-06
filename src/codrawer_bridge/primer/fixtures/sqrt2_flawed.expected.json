@@ -1,0 +1,10 @@
+{
+ "about": "What the offline Primer must conclude from sqrt2_flawed.transcript.json (tests/test_primer.py).",
+ "findings": [["sqrt2_no_lowest_terms", 1], ["sqrt2_no_lowest_terms", 6], ["square_parity_unproved", 3]],
+ "statuses": {"1": "gap", "2": "ok", "3": "gap", "4": "ok", "5": "ok", "6": "error"},
+ "grade": {"score": 2, "band": "partial"},
+ "check": "failed",
+ "check_step": 6,
+ "move": {"kind": "socratic", "step": 6, "finding": "sqrt2_no_lowest_terms"},
+ "hesitant_lines": [5, 6]
+}

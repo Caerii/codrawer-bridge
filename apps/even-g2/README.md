@@ -150,6 +150,15 @@ outside closes it and does nothing else):
   `{"ts": <Unix ms>, "dir": "in"|"out", "msg": {...}}` per line, so a session replays into any router:
   `uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://<router>/ws/<session>
   --in <file>.jsonl --only-t-prefix stroke_ --max-gap-ms 400` (or `scripts/dev/replay_to.py`).
+- **Proof panel** shows the Primer's latest reading of a handwritten proof (ADR 010,
+  `primer` in docs/protocol.md): the proof re-typeset with KaTeX (loaded on first open), each
+  step's status and note, what the Primer noticed, an *estimated* Putnam score, the formal check's
+  status, and its next move; *Read my proof*, *Hint* and *Download .tex*. Tapping a step picks out
+  its ink on the stage (a halo under the strokes and a dashed box; tap again to clear). The *Plan*
+  tab shows the weeks to the exam and the problem queue; *Learner* sets the learner name sent with
+  requests (remembered as `codrawer.primer.learner`), shows mastery and what is due, and can ask
+  the desktop to delete the learner's file. `?panel=proof|plan|learner` opens it at load. The
+  glasses show the move's one-line `glance` on the HUD's intent line.
 - **Diagnostics** (off by default: the Glasses panel here and the metrics line on the glasses) and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
@@ -243,11 +252,12 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `phone/replay.ts` | the replay bar: scrubber, markers, playback, the glasses canvas while replaying, clips |
 | `marks/host.ts`, `phone/marks.ts` | personal marks: the engine for this owner wired to the session; the My marks sheet, teach pad, ask card and chips |
 | `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
+| `primer/model.ts`, `primer/panel.ts` | pure: the Primer's readings, the learner name, `primer_request`s; the Proof panel (KaTeX, step highlight, plan, learner) |
 
 Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text
 pacing, reconnect policy, loupe geometry, view mirroring, the HUD text helpers, invite links,
-the palette, timelapse pacing, the session recording's JSONL, and the replay's timeline, cursor
-and moments.
+the palette, timelapse pacing, the session recording's JSONL, the replay's timeline, cursor
+and moments, and the Primer's readings.
 
 ## What the SDK actually does (learned in the simulator)
 

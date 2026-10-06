@@ -1,0 +1,9 @@
+{
+ "about": "What the offline Primer must conclude from sqrt2_correct.transcript.json (tests/test_primer.py).",
+ "findings": [],
+ "statuses": {"1": "ok", "2": "ok", "3": "ok", "4": "ok", "5": "ok", "6": "ok"},
+ "grade": {"score": 10, "band": "complete"},
+ "check": "checked",
+ "move": {"kind": "debrief"},
+ "hesitant_lines": []
+}

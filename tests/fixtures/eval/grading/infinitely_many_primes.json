@@ -1,0 +1,13 @@
+{
+ "about": "Euclid's argument, complete: no findings, a 10, a debrief.",
+ "proof": {
+  "title": "There are infinitely many primes", "goal": "|\\mathbb{P}|=\\infty", "technique": "contradiction", "problem": "infinitely_many_primes",
+  "steps": [
+   {"n": 1, "latex": "\\mathbb{P}=\\{p_1,\\dots,p_n\\}", "text": "Suppose the primes are exactly p₁, …, pₙ.", "justification": "assumption for contradiction", "concepts": ["contradiction", "primes"]},
+   {"n": 2, "latex": "N=p_1\\cdots p_n+1", "text": "Let N = p₁⋯pₙ + 1.", "justification": "construction", "concepts": ["primes"]},
+   {"n": 3, "latex": "p_i\\nmid N", "text": "No pᵢ divides N, since it leaves remainder 1.", "justification": "division leaves remainder 1", "refs": [2], "concepts": ["divisibility"]},
+   {"n": 4, "latex": "N>1 \\Rightarrow \\exists\\, q \\text{ prime},\\ q\\mid N", "text": "N > 1 has a prime factor q, which is not in the list: contradiction. ∎", "justification": "every integer > 1 has a prime factor", "refs": [1, 3], "concepts": ["primes", "contradiction"]}
+  ]
+ },
+ "expected": {"findings": [], "score": 10, "band": "complete", "move": "debrief"}
+}

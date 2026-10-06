@@ -14,7 +14,7 @@
  */
 
 export { simulate, strokeMs, type HandResult, type Point, type Stroke, type Flight, type SimulateInput, type SimulateOptions, type StrokeProfile, type Trace } from './simulate'
-export { PERSONAS, persona, definePersona, mirror, archivist, sketcher, elder, mathematician, calligrapher } from './persona'
+export { PERSONAS, persona, definePersona, mirror, archivist, sketcher, elder, mathematician, calligrapher, teacher } from './persona'
 export type { Persona, LetterParams, MotorParams, ArmParams, TremorParams, PressureParams, TimingParams, UserStats } from './persona'
 export { toProtocol, strokeMessages, dueAt, toJsonl, PAPER_PRO_MM, type HandMessage, type ProtocolOptions } from './protocol'
 export { perform, type PerformOptions, type Performance } from './perform'

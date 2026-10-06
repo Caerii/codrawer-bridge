@@ -151,6 +151,99 @@
       body.debug #debug { display: block; }
       #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; background: #000; }
       #status { margin-top: 6px; white-space: pre-wrap; color: var(--muted); }
+      /* The Proof panel (src/primer/panel.ts): a sheet on the right, from the bottom on phones */
+      #primer { position: fixed; z-index: 2; top: calc(max(8px, env(safe-area-inset-top)) + 54px); right: max(10px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); width: min(420px, calc(100vw - 20px)); display: flex; flex-direction: column; background: var(--bar); backdrop-filter: saturate(1.4) blur(16px); -webkit-backdrop-filter: saturate(1.4) blur(16px); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 34px rgba(0,0,0,0.20); overflow: hidden; }
+      #primer[hidden] { display: none; }
+      @media (max-width: 720px) { #primer { top: auto; left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); width: auto; height: 58vh; } }
+      #primer .ptop { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--line); }
+      #primer .ptabs { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--chip); }
+      #primer .ptabs button { height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; }
+      #primer .ptabs button[aria-selected='true'] { background: var(--chip-on); color: var(--chip-on-fg); }
+      #primer .pclose { margin-left: auto; }
+      #primer .pbody { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 16px; overflow-wrap: anywhere; }
+      #primer .pempty { color: var(--muted); margin: 6px 0 12px; }
+      #primer .ptitle { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+      #primer .pmath { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+      #primer .pmath.display { display: block; margin: 4px 0; }
+      #primer .pmath .katex-display { margin: 2px 0; text-align: left; }
+      #primer .pmath .katex-display > .katex { text-align: left; }
+      #primer .pmath code { font: 12px ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; color: var(--fg); }
+      #primer .pchips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+      #primer .pchip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12px; font-weight: 550; }
+      #primer .pchip.mode.live { color: var(--live); }
+      #primer .pchip.mode.offline { color: var(--off); }
+      #primer .pgrade { margin: 12px 0; padding: 10px 12px; border-radius: 12px; background: var(--chip); }
+      #primer .pscore { font-weight: 650; }
+      #primer .pfine { color: var(--muted); font-size: 12px; }
+      #primer .pline { margin-top: 4px; font-size: 13px; }
+      #primer .pmove { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--accent); border-radius: 0 12px 12px 0; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+      #primer .pmovehead { color: var(--accent); font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+      #primer .pmovetext { margin-top: 4px; font-size: 15px; line-height: 1.4; font-style: italic; }
+      #primer .pmove.coach { font-size: 15px; line-height: 1.4; }
+      #primer .pwatch { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--muted); }
+      #primer .pwatch .pdot { flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; border: 2px solid var(--muted); }
+      #primer .pwatch.on .pdot { background: var(--live); border-color: var(--live); }
+      #primer .pqueue li .pfine { display: block; margin-top: 2px; }
+      #primer .pclock { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+      #primer .pmockprob { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip); }
+      #primer .pmockprob.now { outline: 2px solid var(--accent); }
+      #primer .pscorecell { font-weight: 650; font-variant-numeric: tabular-nums; }
+      #primer .pmarks ul { list-style: none; padding: 0; margin: 6px 0; }
+      #primer .pmark { padding: 6px 8px; margin: 4px 0; border-left: 3px solid #d03030; border-radius: 0 8px 8px 0; cursor: pointer; }
+      #primer .pmark.open { background: color-mix(in srgb, #d03030 8%, transparent); }
+      #primer .pmarkhead { color: #d03030; font-size: 13px; font-weight: 600; }
+      #primer .psure { display: flex; gap: 10px; align-items: center; margin: 10px 0 2px; }
+      #primer .psure input { flex: 1; }
+      #primer .pgoals { display: grid; grid-template-columns: 1fr 7em; gap: 6px; margin: 6px 0; }
+      #primer .pgoals input, #primer .pgoals select { min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--chip); background: transparent; color: inherit; font: inherit; }
+      #primer .pgoals input:first-child { grid-column: 1 / -1; }
+      #primer .pfeatures { list-style: none; padding: 0; margin: 4px 0; font-size: 14px; }
+      #primer .pfeatures li { margin: 4px 0; }
+      #primer .plink { align-self: center; color: var(--accent); }
+      #primer .psteps { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+      #primer .pstep { padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; outline: none; }
+      #primer .pstep:hover, #primer .pstep:focus-visible { background: var(--chip); }
+      #primer .pstep.marked { box-shadow: 0 0 0 2px rgba(255,196,0,0.85); background: color-mix(in srgb, #ffc400 10%, transparent); }
+      #primer .pstep.gap { border-color: color-mix(in srgb, #d99a00 55%, transparent); }
+      #primer .pstep.error { border-color: color-mix(in srgb, var(--off) 60%, transparent); }
+      #primer .pstephead { display: flex; align-items: center; gap: 8px; }
+      #primer .pnum { font-weight: 650; }
+      #primer .pstatus { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; background: var(--chip); color: var(--muted); }
+      #primer .pstatus.ok { color: var(--live); }
+      #primer .pstatus.gap { color: #b07800; background: color-mix(in srgb, #ffc400 18%, transparent); }
+      #primer .pstatus.error { color: #fff; background: var(--off); }
+      #primer .pconf { color: var(--muted); font-size: 11px; }
+      #primer .ptext { font-size: 13px; }
+      #primer .pjust { font-size: 13px; color: var(--muted); }
+      #primer .pnote { margin-top: 4px; font-size: 13px; font-weight: 550; }
+      #primer .pstep.error .pnote { color: var(--off); }
+      #primer .plabel { margin: 12px 0 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+      #primer .pfindings ul, #primer .pbody > ul { margin: 0; padding-left: 18px; font-size: 13px; }
+      #primer .pcheck { margin: 10px 0; font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; }
+      #primer .pcheck.checked { color: var(--live); }
+      #primer .pcheck.failed { color: var(--off); }
+      #primer .pactions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      #primer button.go, #primer .pactions button, #primer .pforget button { font: inherit; font-weight: 600; border: 0; border-radius: 9px; padding: 7px 12px; cursor: pointer; background: var(--chip); color: var(--fg); }
+      #primer .pactions button.go { background: var(--chip-on); color: var(--chip-on-fg); }
+      #primer .pactions button:disabled { opacity: 0.45; cursor: default; }
+      #primer .pforget { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
+      #primer .pforget p { margin: 0 0 8px; font-size: 13px; }
+      #primer .pforget button.danger { background: var(--off); color: #fff; margin-right: 6px; }
+      #primer .pforget button.danger-link { background: transparent; color: var(--off); padding: 4px 0; }
+      #primer .pnotice { margin-top: 10px; color: var(--muted); font-size: 12px; }
+      #primer .pexam { font-weight: 650; margin-bottom: 8px; }
+      #primer .pweeks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+      #primer .pweek { padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; }
+      #primer .pweek.now { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+      #primer .pweekhead { display: flex; align-items: center; gap: 8px; }
+      #primer .pqueue li { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      #primer .pwho { display: flex; align-items: center; gap: 10px; }
+      #primer .pwho .plabel { margin: 0; }
+      #primer .pwho input { flex: 1; min-width: 0; font: inherit; padding: 6px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); }
+      #primer .pbody > ul.pbars, #primer .pbody > ul.pqueue { list-style: none; padding: 0; margin: 0; }
+      #primer .pbars li { display: grid; grid-template-columns: minmax(0, 1fr) 90px 36px; gap: 8px; align-items: center; margin: 4px 0; font-size: 13px; }
+      #primer .pbar { height: 6px; border-radius: 999px; background: var(--chip); overflow: hidden; }
+      #primer .pfill { display: block; height: 100%; background: var(--accent); }
     </style>
   </head>
   <body>
@@ -201,6 +294,8 @@
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="rec"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg><span>Record session</span></button>
       <button class="item" type="button" role="menuitem" data-act="rec-export"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Export recording (.jsonl)<span class="note"></span></button>
       <hr />
+      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="primer"><svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M8 11h3M8 15h6"/><path d="M13 8.5l1.5 1.5 3-3"/></svg>Proof panel</button>
+      <hr />
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="wide"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M12 7v10"/></svg>Glasses: wide fit view</button>
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="diag"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4"/></svg>Diagnostics</button>
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>Dark theme</button>
@@ -237,6 +332,13 @@
     <div id="markAsk" role="region" aria-label="What does this mark mean?" aria-live="polite" hidden></div>
     <div id="markChips" aria-live="polite"></div>
     <input id="replayFile" type="file" accept=".jsonl,.ndjson,application/x-ndjson,application/json,text/plain" hidden />
+    <aside id="primer" aria-label="Proof panel" hidden>
+      <div class="ptop">
+        <div class="ptabs" role="tablist"><button type="button" role="tab" data-tab="proof" aria-selected="true">Proof</button><button type="button" role="tab" data-tab="plan" aria-selected="false">Plan</button><button type="button" role="tab" data-tab="coach" aria-selected="false" title="Practice coach">Coach</button><button type="button" role="tab" data-tab="mock" aria-selected="false" title="Putnam mock exam">Mock</button><button type="button" role="tab" data-tab="learner" aria-selected="false">Learner</button></div>
+        <button class="icon pclose" type="button" aria-label="Close the Proof panel" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="pbody"></div>
+    </aside>
     <video id="camera" playsinline muted autoplay hidden></video>
     <div id="debug">
       <div style="display:flex;gap:12px;align-items:flex-start">

@@ -29,6 +29,7 @@ from codrawer_bridge.protocol.constants import (
     T_TERM_PROMPT,
 )
 
+from . import primer_link
 from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
 from .rendering import render_context_patch_png_b64, render_page_png, simplify_polylines
@@ -37,6 +38,9 @@ from .term_bridge import TermSettings, get_link
 from .viewer_page import render_viewer_html
 
 app = FastAPI()
+
+#: Primer and dock messages the router relays as they are (ADR 010).
+PRIMER_RELAY = frozenset({"primer", "primer_request", "dock_action", "dock_entries", "dock_query"})
 
 # Background tasks must stay referenced or the event loop may garbage-collect
 # them mid-flight (asyncio docs). Terminal prompts are launched from the socket
@@ -65,6 +69,23 @@ app.add_middleware(
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/primer/reports/{learner}/{name}")
+def primer_report(learner: str, name: str):
+    """A learner's progress report from her portfolio (primer/report.py): PDFs only, by exact name."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from codrawer_bridge.primer.learner import safe_name, state_dir
+
+    bad_name = not name.endswith(".pdf") or any(c in name for c in ("/", "\\", "..", ":"))
+    if not primer_link.enabled() or safe_name(learner) != learner or bad_name:
+        raise HTTPException(status_code=404)
+    path = state_dir() / "primer" / "reports" / learner / name
+    if not path.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="application/pdf")
 
 @app.get("/viewer/{session_id}", response_class=HTMLResponse)
 def viewer(session_id: str):
@@ -548,6 +569,13 @@ async def ws(session_id: str, ws: WebSocket):
             json.dumps({"t": "doc_update", "us": session.doc_updates[i : i + 256]}, separators=(",", ":"))
         )
 
+    # The Primer (ADR 010), opt-in: one agent per session, fed from this loop through a queue.
+    if primer_link.enabled():
+        if session.primer is None:
+            session.primer = primer_link.PrimerLink(lambda m, _s=session: broadcast(_s, m), _spawn)
+        for extra in session.primer.hello_extras():
+            await ws.send_text(json.dumps(extra, separators=(",", ":"), ensure_ascii=False))
+
     try:
         while True:
             raw = await ws.receive_text()
@@ -555,6 +583,15 @@ async def ws(session_id: str, ws: WebSocket):
             t = msg.get("t")
             if get_settings().debug_log_msgs:
                 print(f"[ws:{session_id}] in t={t} from={getattr(ws.client,'host',None)}")
+
+            if session.primer is not None:
+                session.primer.offer(msg)
+
+            # Primer traffic: relayed to the other clients, so a Primer that joined as a client
+            # (python -m codrawer_bridge.primer live) and every panel see it (docs/protocol.md).
+            if t in PRIMER_RELAY:
+                await broadcast(session, msg, exclude=ws)
+                continue
 
             # Track "activity" for auto AI behaviors (wait for user pause).
             if t in (T_STROKE_BEGIN, T_STROKE_PTS, T_STROKE_END, T_CURSOR, T_PROMPT, T_KEY):

@@ -1,0 +1,12 @@
+{
+ "about": "A 'proof' that starts from what it should prove: fatal.",
+ "proof": {
+  "title": "a² + b² ≥ 2ab", "goal": "a^2+b^2\\ge 2ab", "technique": "direct_proof", "problem": null,
+  "steps": [
+   {"n": 1, "latex": "a^2+b^2\\ge 2ab", "text": "a² + b² ≥ 2ab.", "justification": "what we want", "concepts": ["inequality_basics"]},
+   {"n": 2, "latex": "a^2-2ab+b^2\\ge 0", "text": "So a² − 2ab + b² ≥ 0.", "justification": "rearranging", "refs": [1], "concepts": ["inequality_basics"]},
+   {"n": 3, "latex": "(a-b)^2\\ge 0", "text": "That is (a−b)² ≥ 0, which is true, so the claim holds.", "justification": "", "refs": [2], "concepts": ["inequality_basics"]}
+  ]
+ },
+ "expected": {"findings": [["assumes_conclusion", 1]], "score": 2, "band": "partial", "move": "socratic"}
+}
