@@ -1,0 +1,240 @@
+"""
+One turn with Claude Code through even-terminal, start to answer.
+
+**Why even-terminal.** It runs Claude Code on the user's own subscription behind a small HTTP
+API, and the router's ``/term`` already uses it (server/term_bridge.py, whose overview lists the
+API). agentd needs only a sliver of it, so this is a separate, smaller client:
+
+    POST /api/prompt   {text, provider, cwd[, sessionId]}  → 202 {sessionId}  (no id: new one)
+    GET  /api/messages?sessionId=&after=<id>               → {messages:[{id, type, …}], state}
+    POST /api/permission-response {sessionId, decision:"deny"}
+    POST /api/question-response   {sessionId, answer:"skip"}
+    POST /api/interrupt           {sessionId}
+
+``/api/messages`` is the session's ring buffer (500 entries) with increasing ids, so polling it
+after the last id seen is the event stream without the race of subscribing to SSE after the
+prompt was posted.
+
+**One session, kept.** agentd keeps a session of its own (its id in ``state.json`` under the
+state directory) so later turns skip Claude Code's start-up (measured 2026-10-06: a new session
+answered "pong" in 12 s, its first text 8 s after the prompt). If the session is gone (even-terminal
+restarted without it), the prompt is posted again without an id and the new session is kept.
+
+**When the answer is done.** The turn ends with a ``result`` event carrying the final text,
+but that event can trail the text by seconds (5 s in the measurement above). The model Reads the
+image first and then writes its answer, so once a text segment has ended after a Read finished,
+and nothing new started for ``settle_s``, that segment is the answer. Otherwise the ``result``.
+
+Before the next prompt the session must be idle again (the earlier turn's ``result`` has
+arrived), so those trailing events are never read as the next turn's.
+
+**Nothing else may happen.** Every permission request is denied and every question skipped
+(prompt.py: page content is data). A turn that runs past its timeout is interrupted.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+
+@dataclass
+class Reply:
+    """A turn's outcome. Times are seconds after the prompt was posted."""
+
+    text: str = ""
+    ok: bool = False
+    error: str = ""
+    session_id: str = ""
+    first_text_s: float | None = None
+    done_s: float | None = None
+    cost_usd: float | None = None
+    tools: list[str] = field(default_factory=list)
+    denied: list[str] = field(default_factory=list)
+
+
+class Terminal:
+    """A client for one even-terminal session (module docstring)."""
+
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        cwd: str,
+        state_path: Path,
+        provider: str = "claude",
+        poll_s: float = 0.25,
+        settle_s: float = 1.5,
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.token = token
+        self.cwd = cwd
+        self.provider = provider
+        self.state_path = state_path
+        self.poll_s = poll_s
+        self.settle_s = settle_s
+        self.session_id = self._load()
+
+    # ── state ──────────────────────────────────────────────────────────────────────────────
+
+    def _load(self) -> str:
+        try:
+            return str(
+                json.loads(self.state_path.read_text(encoding="utf-8")).get("session_id") or ""
+            )
+        except (OSError, ValueError):
+            return ""
+
+    def _save(self) -> None:
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(
+                json.dumps({"session_id": self.session_id}), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    # ── HTTP ───────────────────────────────────────────────────────────────────────────────
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"}
+
+    async def _post(self, c: httpx.AsyncClient, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        r = await c.post(
+            f"{self.url}{path}", json={**body, "provider": self.provider}, headers=self._headers()
+        )
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, r.text
+
+    async def _messages(self, c: httpx.AsyncClient, after: int) -> tuple[list[dict[str, Any]], str]:
+        r = await c.get(
+            f"{self.url}/api/messages",
+            params={"sessionId": self.session_id, "after": after, "provider": self.provider},
+            headers=self._headers(),
+        )
+        data = r.json() if r.status_code == 200 else {}
+        return list(data.get("messages") or []), str(data.get("state") or "")
+
+    async def reachable(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get(f"{self.url}/", headers=self._headers())
+                return r.status_code < 500
+        except httpx.HTTPError:
+            return False
+
+    # ── a turn ─────────────────────────────────────────────────────────────────────────────
+
+    async def ask(self, text: str, timeout_s: float = 90.0) -> Reply:
+        """Post ``text`` and wait for the answer (module docstring); never raises on HTTP errors."""
+        out = Reply()
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                after = 0
+                if self.session_id:
+                    # An earlier turn accepted before its `result` may still be finishing: wait
+                    # for idle, so its trailing events are not read as this turn's.
+                    msgs, state = await self._messages(c, 0)
+                    deadline = time.monotonic() + 20
+                    while state == "busy" and time.monotonic() < deadline:
+                        await asyncio.sleep(0.5)
+                        msgs, state = await self._messages(c, 0)
+                    after = max((int(m.get("id") or 0) for m in msgs), default=0)
+                    code, data = await self._post(
+                        c, "/api/prompt", {"text": text, "sessionId": self.session_id}
+                    )
+                    if code >= 300:  # the session is gone: start a new one
+                        self.session_id, after = "", 0
+                if not self.session_id:
+                    code, data = await self._post(c, "/api/prompt", {"text": text, "cwd": self.cwd})
+                    if code >= 300 or not isinstance(data, dict) or not data.get("sessionId"):
+                        out.error = f"prompt failed ({code}): {str(data)[:120]}"
+                        return out
+                    self.session_id = str(data["sessionId"])
+                    self._save()
+                out.session_id = self.session_id
+                return await self._follow(c, after, t0, timeout_s, out)
+        except (httpx.HTTPError, OSError, ValueError) as e:
+            out.error = f"{type(e).__name__}: {e}"[:200]
+            return out
+
+    async def _follow(
+        self, c: httpx.AsyncClient, after: int, t0: float, timeout_s: float, out: Reply
+    ) -> Reply:
+        segment: list[str] = []
+        segments: list[str] = []
+        read_done = False
+        settled_at: float | None = None  # when the last text segment ended after a Read
+        while True:
+            now = time.monotonic() - t0
+            if now > timeout_s:
+                await self._post(c, "/api/interrupt", {"sessionId": self.session_id})
+                out.error = f"timed out after {timeout_s:.0f} s"
+                out.text = segments[-1] if segments else "".join(segment)
+                return out
+            msgs, _ = await self._messages(c, after)
+            for m in msgs:
+                after = max(after, int(m.get("id") or 0))
+                t = m.get("type")
+                if t == "text_delta" and isinstance(m.get("text"), str):
+                    if out.first_text_s is None:
+                        out.first_text_s = now
+                    segment.append(m["text"])
+                    settled_at = None
+                elif t == "status" and m.get("state") == "text_start":
+                    segment = []
+                    settled_at = None
+                elif t == "status" and m.get("state") == "text_end":
+                    segments.append("".join(segment).strip())
+                    segment = []
+                    settled_at = now if read_done else None
+                elif t == "tool_start":
+                    out.tools.append(str(m.get("name") or "?"))
+                    settled_at = None
+                elif t == "tool_end":
+                    read_done = read_done or str(m.get("name") or "") == "Read"
+                elif t == "permission_request":
+                    out.denied.append(str(m.get("toolName") or "?"))
+                    await self._post(
+                        c,
+                        "/api/permission-response",
+                        {"sessionId": self.session_id, "decision": "deny"},
+                    )
+                elif t == "user_question":
+                    await self._post(
+                        c,
+                        "/api/question-response",
+                        {"sessionId": self.session_id, "answer": "skip"},
+                    )
+                elif t == "result":
+                    out.done_s = now
+                    out.cost_usd = float(m.get("costUsd") or 0)
+                    out.ok = bool(m.get("success"))
+                    out.text = str(m.get("text") or "").strip() or (
+                        segments[-1] if segments else ""
+                    )
+                    if not out.ok and not out.error:
+                        out.error = out.text[:200] or "the turn failed"
+                    return out
+                elif t == "error":
+                    out.error = str(m.get("message") or "error")[:200]
+            if (
+                settled_at is not None
+                and segments
+                and segments[-1]
+                and now - settled_at >= self.settle_s
+            ):
+                out.done_s = now
+                out.ok = True
+                out.text = segments[-1]
+                return out
+            await asyncio.sleep(self.poll_s)
