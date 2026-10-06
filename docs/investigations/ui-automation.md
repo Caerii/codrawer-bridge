@@ -125,6 +125,15 @@ Sample flows (`scripts/dev/flows/`):
   tool may follow only the pen; then the lasso flow needs a synthesized tablet event), and the
   display buffer's pixel format (Probe 1's grabs came out with shifted colours).
 
+Run on the device (2026-10-06): `state`, `find`, `wait_for`, `grab` (the PNG is written; its
+content did not match the screen in one full-screen grab, so the display buffer choice is still
+open) and the guard answers.
+
+Since: `goto` was rebuilt and `goto_doc` / `folder` added on xochitl's own navigation functions
+(codrawer-layer `src/navigate.h`). The first `goto` searched for typed slots such as
+`goToPage(int)`, but QML functions appear with QVariant parameters (`openPage(QVariant,QVariant)`),
+and `invoke` did not yet pass QVariant arguments, so it could not have worked.
+
 ## Milestones
 
 1. This design, then `state`, `find`, `wait_for` on auto.sock (read-only), merged with tests of

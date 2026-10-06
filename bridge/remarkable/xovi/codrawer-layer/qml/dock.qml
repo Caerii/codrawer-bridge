@@ -1,10 +1,12 @@
-// The codrawer dock: one toolbar button that opens a small, non-modal list of actions.
+// The codrawer dock: one toolbar button that opens a small panel of actions beside it.
 //
 // Instantiated at run time by codrawer-layer (src/inject.h) inside xochitl's own QQmlEngine and
 // parented into xochitl's toolbar; nothing of xochitl's is changed. The extension sets `entries`
-// (from /run/codrawer/dock.json, or its built-in list), `status` and `page`, and listens to
+// (from /run/codrawer/dock.json, or its built-in list; an offer to go somewhere comes first,
+// src/navigate.h), `status`, `page` and `badge` (an offer is waiting), and listens to
 // `action(id)` and `opened()`. Selecting an entry emits `action(id)`; the extension sends it to
-// the bridge as a `dock_action`, except `status`, which it answers here.
+// the bridge as a `dock_action`, except `status`, which it answers here, and `goto_offer`, which
+// it carries out (the user's tap is what lets it navigate).
 //
 // Sizes are in xochitl's scene pixels (the Paper Pro's 1620 x 2160 portrait screen). On 3.29 the
 // toolbar is a GridLayout ("toolbarLayout") of 112 x 112 ToolLoaders (redo is
@@ -12,34 +14,47 @@
 // gives it the next cell. `anchorItem` (set by the extension: the item it was stacked after)
 // carries the toolbar's own state: when the toolbar collapses and hides redo, the dock hides too.
 //
-// # Looking and behaving like its neighbours
+// # The button
 //
 // xochitl's toolbar buttons are `ToolbarTool`s whose face is `ArkControls.ToolButton` (module
-// `ark.controls`, xochitl's own design system; an IconButton of type primary_inverted, size
-// Large): transparent with a black icon when idle, and a solid black cell with the icon inverted
-// to white when "selected". Undo and redo show that look while the finger is down
-// (`implicitlySelected: … || down`); the layers button keeps it while its panel is open. Neither
-// changes the drawing tool: undo and redo never call the toolbar's `_select`, and the pen stays
-// the selected tool. The dock does the same: it creates a real `ArkControls.ToolButton` (so the
-// press feedback, timing and e-ink look are xochitl's own), binds its state to "selected" while it
-// is pressed or the list is open, and never touches the toolbar's selection.
+// `ark.controls`): transparent with a black icon when idle, a solid black cell with the icon
+// inverted when "selected". Undo and redo show that look while pressed; the layers button keeps
+// it while its panel is open. Neither changes the drawing tool. The dock creates a real
+// `ArkControls.ToolButton` (Qt.createQmlObject in a try, with a plain-QtQuick fallback of the same
+// look), binds it to "selected" while pressed or open, and never touches the toolbar's selection.
+// Confirmed on the device (2026-10-06).
 //
-// The native button is created with Qt.createQmlObject inside a try, so a build without
-// `ark.controls` (or a changed ToolButton) costs only the native look: the fallback below draws
-// the same black cell with plain QtQuick, and nothing here fails to load (a load error in this
-// file would trip boot/xovi.sh's XOVI_NO_INJECT gate and remove the dock).
+// # The panel
 //
-// A tap that lands while the list is open closes it: the Popup closes itself on that press
-// (CloseOnPressOutside), and `toggle` then ignores the click that follows within 400 ms, instead
-// of opening the list again.
+// xochitl's toolbar panels (the layers panel, the pen foldouts) are not Popups: a
+// `ToolbarFoldout` is an ordinary child item of its button, shown and hidden, drawn as a white
+// fill with a 2 px black border, no radius, no shadow, with a touch sink under it; its rows are
+// 112 px high with 32 px padding and a 32 px Medium label (reMarkable Sans), black with the label
+// inverted when selected or pressed, and 2 px black dividers (extracted xochitl QML, 6.0.105:
+// ToolbarFoldout, ArkControls.FoldoutItem and the toolbar tokens). The panel below is drawn to
+// that spec in plain QtQuick (ToolbarFoldout itself needs the toolbar's private state), as a child
+// of the dock, so it lives in xochitl's item tree like theirs.
+//
+// The first version used a QtQuick.Controls Popup; on the device its white fills did not cover
+// the page (the ruled lines showed through and each row looked like a loose overlay). A Popup is
+// moved into the window's overlay, outside the item tree, where none of xochitl's e-paper screen
+// mode regions (`xofm.libs.epaper` ScreenModeItem: Content for the page, Overlay for UI drawn on
+// it) applies to it. The panel therefore marks itself as an Overlay region like xochitl's own
+// on-canvas UI, and blocks the pen under it (`PenInputBlocker`, with the toolbar's pen-input
+// surface manager). Both are created in tries: without them the panel still works, only the
+// e-paper hint and the pen block are missing.
+//
+// The status reply is the panel's last row. A tap outside the open panel closes it (and is used up
+// by that, as a menu's outside tap is); a tap on the button closes it too; an action closes it,
+// `status` keeps it open to show the reply.
 import QtQuick
-import QtQuick.Controls
 
 Item {
     id: root
     property var entries: []
     property string status: ""
     property string page: ""
+    property bool badge: false
     property var anchorItem: null
     signal action(string id)
     signal opened()
@@ -49,40 +64,78 @@ Item {
     width: implicitWidth
     height: implicitHeight
     visible: anchorItem ? anchorItem.visible : true
+    // above the neighbouring toolbar cells while the panel is open, as a ToolLoader with an open
+    // foldout is
+    z: open ? 1 : 0
 
+    // The panel is showing.
+    property bool open: false
     // xochitl's ArkControls.ToolButton, or null when it could not be created (fallback face).
     property var nativeButton: null
     // The finger is on the button.
     readonly property bool down: nativeButton ? nativeButton.down : tap.pressed
-    // The native "selected" look: while pressed, and while the list is open.
-    readonly property bool highlighted: down || dock.visible
-    // When the list last closed (ms), so the tap that closed it does not reopen it.
-    property real closedAt: 0
+    // The native "selected" look: while pressed, and while the panel is open.
+    readonly property bool highlighted: down || open
 
     function toggle() {
-        if (dock.visible) {
-            dock.close();
+        if (open) {
+            open = false;
             return;
         }
-        if (Date.now() - closedAt < 400) return;
+        const p = root.mapToItem(null, 0, 0);  // the catcher covers the window from here
+        outside.x = -p.x;
+        outside.y = -p.y;
         root.opened();
-        dock.open();
+        open = true;
+    }
+
+    // Creates `qml` as a child of `parentItem`; null (and nothing logged) when xochitl lacks a
+    // module or a property, so a changed build costs only the native extra.
+    function tryCreate(qml, parentItem, name) {
+        try {
+            return Qt.createQmlObject(qml, parentItem, name);
+        } catch (e) {
+            return null;
+        }
     }
 
     Component.onCompleted: {
-        try {
-            const b = Qt.createQmlObject(
-                'import QtQuick\n' +
-                'import ark.controls as ArkControls\n' +
-                'ArkControls.ToolButton { focusPolicy: Qt.NoFocus; ditherOnDisabled: false }',
-                root, "codrawer-dock-button");
+        const b = tryCreate('import QtQuick\n' +
+                            'import ark.controls as ArkControls\n' +
+                            'ArkControls.ToolButton { focusPolicy: Qt.NoFocus; ditherOnDisabled: false }',
+                            root, "codrawer-dock-button");
+        if (b) {
             b.anchors.fill = root;
             b.z = 0;
-            b.state = Qt.binding(function() { return !b.enabled ? "disabled" : (b.down || dock.visible ? "selected" : "idle"); });
+            b.state = Qt.binding(function() { return !b.enabled ? "disabled" : (b.down || root.open ? "selected" : "idle"); });
             b.clicked.connect(root.toggle);
             nativeButton = b;
+        }
+        tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
+                  'Epaper.ScreenModeItem { objectName: "codrawer-dock-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
+                  panel, "codrawer-dock-screenmode");
+        attachPenBlocker();
+    }
+    onAnchorItemChanged: attachPenBlocker()
+
+    // The pen blocker needs the toolbar's pen-input surface manager, reached through the anchor
+    // item (a ToolLoader: toolbar.penInput.surfaceManager). Made once, when that is known.
+    property var penBlocker: null
+    function attachPenBlocker() {
+        if (penBlocker) return;
+        const t = root.anchorItem ? root.anchorItem.toolbar : null;
+        const mgr = t && t.penInput ? t.penInput.surfaceManager : null;
+        if (!mgr) return;
+        const blocker = tryCreate('import QtQuick\nimport xofm.libs.peninput\nPenInputBlocker { objectName: "codrawer-dock-penblock"; anchors.fill: parent }',
+                                  panel, "codrawer-dock-penblock");
+        if (!blocker) return;
+        // Assigned once, in a try: a JS assignment of the wrong type throws (caught here), where a
+        // binding would print a warning naming this file (the XOVI_NO_INJECT gate).
+        try {
+            blocker.manager = mgr;
+            penBlocker = blocker;
         } catch (e) {
-            nativeButton = null;
+            blocker.destroy();
         }
     }
 
@@ -99,7 +152,8 @@ Item {
         onClicked: root.toggle()
     }
 
-    // The icon: a 48 px "c" in a ring (the toolbar's icon size), inverted with the cell.
+    // The icon: a 48 px "c" in a ring (the toolbar's icon size), inverted with the cell, with a
+    // dot when an offer waits.
     Item {
         z: 2
         anchors.centerIn: parent
@@ -119,59 +173,108 @@ Item {
             font.bold: true
             color: root.highlighted ? "white" : "black"
         }
+        Rectangle {
+            visible: root.badge
+            width: 16
+            height: 16
+            radius: 8
+            x: parent.width - 10
+            y: -6
+            color: root.highlighted ? "white" : "black"
+        }
     }
 
-    Popup {
-        id: dock
-        // Beside the button, away from the toolbar's edge; kept on screen.
-        x: root.width + 8
+    // While open: a tap anywhere outside the panel and the button closes it.
+    MouseArea {
+        id: outside
+        z: -1
+        visible: root.open
+        enabled: root.open
+        width: root.Window.width > 0 ? root.Window.width : 1620
+        height: root.Window.height > 0 ? root.Window.height : 2160
+        onPressed: root.open = false
+    }
+
+    // The panel, beside the button (a ToolbarFoldout's place for the left toolbar).
+    Rectangle {
+        id: panel
+        objectName: "codrawer-dock-panel"
+        z: 3
+        visible: root.open
+        x: root.width
         y: 0
         width: 520
-        padding: 0
-        modal: false
-        focus: false
-        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-        onClosed: root.closedAt = Date.now()
-        background: Rectangle { color: "white"; border.color: "black"; border.width: 3; radius: 6 }
+        height: rows.height
+        color: "white"
 
-        contentItem: Column {
-            width: dock.width
+        MultiPointTouchArea { anchors.fill: parent }  // taps on the panel never reach the page
+
+        Column {
+            id: rows
+            width: panel.width
             Repeater {
                 model: root.entries
                 delegate: Rectangle {
-                    width: dock.width
-                    height: 92
+                    required property var modelData
+                    required property int index
+                    width: rows.width
+                    height: 112
                     color: rowTap.pressed ? "black" : "white"
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
-                        anchors.leftMargin: 28
+                        anchors.right: parent.right
+                        anchors.leftMargin: 32
+                        anchors.rightMargin: 32
                         text: modelData.label
-                        font.pixelSize: 34
+                        elide: Text.ElideRight
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 32
+                        font.weight: Font.Medium
                         color: rowTap.pressed ? "white" : "black"
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#888888" }
+                    Rectangle {  // the divider below each row
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 2
+                        color: "black"
+                    }
                     MouseArea {
                         id: rowTap
                         anchors.fill: parent
                         onClicked: {
                             root.action(modelData.id);
-                            if (modelData.id !== "status") dock.close();
+                            if (modelData.id !== "status") root.open = false;
                         }
                     }
                 }
             }
-            Text {
-                width: dock.width - 56
-                x: 28
-                topPadding: 16
-                bottomPadding: 16
+            // the status reply: the panel's last row
+            Item {
+                width: rows.width
+                height: statusText.implicitHeight + 48
                 visible: root.status.length > 0
-                text: root.status
-                wrapMode: Text.Wrap
-                font.pixelSize: 26
-                color: "#444444"
+                Text {
+                    id: statusText
+                    x: 32
+                    y: 24
+                    width: parent.width - 64
+                    text: root.status
+                    wrapMode: Text.Wrap
+                    font.family: "reMarkable Sans"
+                    font.pixelSize: 28
+                    color: "black"
+                }
             }
+        }
+
+        // the 2 px border, over the rows (ToolbarFoldout's Border)
+        Rectangle {
+            anchors.fill: parent
+            z: 10
+            color: "transparent"
+            border.width: 2
+            border.color: "black"
         }
     }
 }

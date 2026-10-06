@@ -31,23 +31,24 @@ on, the data flow, the threading). Read them in this order:
 
 | # | module | lines | what it is |
 | --- | --- | --- | --- |
-| 1 | `src/entry.cpp` | 98 | `_xovi_construct`, the extension's thread, and the wiring of the modules (hooks) |
+| 1 | `src/entry.cpp` | 102 | `_xovi_construct`, the extension's thread, and the wiring of the modules (hooks) |
 | 2 | `src/log.{h,cpp}`, `src/paths.h` | 146 | one stamped log line per fact; every file and socket path |
-| 3 | `src/qtmeta.{h,cpp}` | 291 | meta-calls by name (`invoke`), signals into functions (`Relay`), `waitFor` |
+| 3 | `src/qtmeta.{h,cpp}` | 303 | meta-calls by name (`invoke`), signals into functions (`Relay`), `waitFor` |
 | 4 | `src/scene.{h,cpp}` | 347 | the item tree, the visible page (`findOpenPage`), layers, selectors, `tree` |
 | 5 | `src/line_layout.h` *(pure)*, `src/line.{h,cpp}` | 323 | xochitl's `Line` bytes; building one from our points, reading one back |
 | 6 | `src/ink.{h,cpp}` | 370 | the commit chain: our layer, `addDrawingLine`, the user's layer back; the queue |
 | 7 | `src/toolfollow.{h,cpp}` | 258 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
 | 8 | `src/text.{h,cpp}` | 204 | text into the focused text box (route A `replaceText`, route B input method) |
-| 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 468 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, status, actions |
+| 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 514 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, goto, status, actions |
 | 10 | `src/selection.{h,cpp}` | 171 | the last lasso selection (`areaSelected`) |
-| 11 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 414 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
-| 12 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
-| 13 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 137 | `grab`: the display buffer copied out of xochitl's memory |
-| 14 | `src/autoinput.{h,cpp}` | 247 | synthesized taps and swipes behind the deny list; navigation; text |
-| 15 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
-| 16 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 212 | the command file `/tmp/codrawer-layer/cmd` |
-| 17 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
+| 11 | `src/goto_req.h` *(pure)*, `src/navigate.{h,cpp}` | 491 | "take me there": open a document by id, turn to a page, flash a region; folders; offers |
+| 12 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 438 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
+| 13 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
+| 14 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 140 | `grab`: the display buffer copied out of xochitl's memory |
+| 15 | `src/autoinput.{h,cpp}` | 258 | synthesized taps and swipes behind the deny list; navigation; text |
+| 16 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
+| 17 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 242 | the command file `/tmp/codrawer-layer/cmd` |
+| 18 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
 
 What each module uses (besides `log`, `paths` and `qtmeta`, which nearly all use); the graph has
 no cycle:
@@ -60,21 +61,22 @@ line       <- line_layout
 toolfollow <- scene
 text       <- toolfollow
 ink        <- line, scene, toolfollow, ink_protocol
-inksock    <- ink, text, ink_protocol
+navigate   <- scene, toolfollow, goto_req
+inksock    <- ink, text, navigate, ink_protocol
 selection  <- scene, toolfollow
 autostate  <- scene, toolfollow
-inject     <- inksock, selection, autostate, inject_conf
+inject     <- inksock, selection, autostate, navigate, inject_conf
 grab       <- procmaps
-autoinput  <- autostate, grab, text, auto_rules
+autoinput  <- autostate, grab, text, navigate, auto_rules
 automation <- autoinput, autostate, inksock, auto_rules
 probes     <- ink, line, scene;  watch <- line, scene
-commands   <- probes, watch, inject, toolfollow
+commands   <- probes, watch, inject, navigate, toolfollow
 entry      <- everything it wires
 ```
 
 Where a module must tell one that depends on it, it offers a hook that `entry.cpp` sets: the
 user's pen pauses automation; the bridge's status line, automation clients coming and going, and
-a settled lasso refresh or create the injected UI.
+a settled lasso and a "Go to …?" offer coming or going refresh or create the injected UI.
 
 *(pure)* headers use no Qt and are tested on the desktop (`test.sh`, `tests/*_test.cpp`).
 
@@ -148,11 +150,13 @@ that page is the one on screen.
 | `xform page=<uuid>` | Logs every view↔scene transform xochitl exposes for the page (read-only). |
 | `tree [match=<spec>] [depth=<n>]` | Logs the live QML item tree, or the items matching `class:`/`name:`/`text:`/`prop:` with their ancestry (read-only; for finding where to inject). |
 | `inject name=<n> parent=<spec>[^] qml=<file> [after=1]` | Creates our QML file in xochitl's engine, parented into the matched item (`^`: its parent; `after=1`: stacked after it). `uninject name=<n>` removes it. `exthome/codrawer-layer/inject.conf` lists the ones to make from load on. |
+| `goto_doc doc=<uuid> [page=<uuid\|index>] [region=x0,y0,x1,y1] [flash=0]` | Opens the document (any, by id), turns to the page, frames the region (normalised) for 2 s (`src/navigate.h`). Navigation: the open document closes. The automation socket has the same as `goto_doc`, plus `goto` (a page in the open document). |
+| `folder action=enter\|up\|home [id=<uuid>]` | Library folders through xochitl's explorer (`enter` closes the open document, as "show in folder" does). |
 
 ## The socket: agent ink, text, actions (`/run/codrawer/ink.sock`)
 
 A Unix socket (0600) the bridge connects to (`INK_SOCKET`, `agent_ink.go` / `agent_ink.rs`). On
-connect the extension says `hello codrawer-layer ink text_insert text_read`. Then, one JSON
+connect the extension says `hello codrawer-layer ink text_insert text_read goto`. Then, one JSON
 object per line:
 
 - **Agent ink** (with `NATIVE_AGENT_INK=1` on the bridge): `{"id","page","layer":"agent",
@@ -166,11 +170,17 @@ object per line:
 - **Text**: `{"op":"text_insert","id","text"}` puts text into the focused text item of the visible
   page, as an input method's commit (Return between lines); `{"op":"text_read","id"}` answers
   `text <id> {…}`. Refused (`err`) with no focused text item on the page, or while the pen is down.
+- **Take me there** (`src/navigate.h`): `{"op":"goto","id","doc","page","region","flash","mode",
+  "reason"}` opens the document through xochitl's own path (`MainView.onOpened`), turns to the page
+  (`DocumentView.openPage`) and frames the region for 2 s. `mode:"go"` (the bridge sets it only
+  for the user's own tap elsewhere) navigates; anything else is an offer, "Go to …?", first in the
+  dock with a dot on its button, carried out only when the user taps it. Answer: `ok <id> goto …`,
+  `ok <id> goto_offer` or `err <id> <why>`.
 - **Actions** (extension → bridge): `{"t":"dock_action",…}` from the dock and the selection.
 
 ## The dock (`qml/dock.qml`)
 
-A toolbar button with a non-modal list. Entries come from `/run/codrawer/dock.json`
+A toolbar button with a panel beside it. Entries come from `/run/codrawer/dock.json`
 (`{"entries":[{"id","label"},…]}`, re-read on change) or the built-in list: codrawer status
 (answered on the tablet), Agent ink on/off, Practice coach, Ask about this page, Ask about
 selection. A tap sends a `dock_action` (docs/protocol.md). Where it goes is a line in
@@ -181,9 +191,16 @@ The button is xochitl's own `ArkControls.ToolButton` (the face of every toolbar 
 at run time, so it shows the native press feedback (a black cell, the icon inverted) and stays
 "selected" while its list is open, like the layers button. Like undo and redo it is an action:
 it never selects itself in the toolbar, so the drawing tool stays as it was. Without
-`ark.controls` it falls back to the same look in plain QtQuick. `qmltest.sh` loads the file
-offscreen on the desktop both ways and fails on any QML warning (one on the tablet would trip
-the XOVI_NO_INJECT gate).
+`ark.controls` it falls back to the same look in plain QtQuick (confirmed on the device).
+
+The panel is built like xochitl's own toolbar foldouts (ToolbarFoldout): an item in the toolbar's
+tree, not a Popup; white, a 2 px black border, 112 px rows with 32 px Medium labels, 2 px
+dividers, a pressed row inverted, and the status reply as its last row. It marks itself an e-paper
+Overlay region (`xofm.libs.epaper` ScreenModeItem) and blocks the pen under it
+(`PenInputBlocker`), as xochitl's on-canvas UI does: the first version, a QtQuick.Controls Popup,
+let the page's ruled lines show through its white rows on the device. A tap outside closes it.
+`qmltest.sh` loads the file offscreen on the desktop with and without stand-ins for xochitl's
+modules and fails on any QML warning (one on the tablet would trip the XOVI_NO_INJECT gate).
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'

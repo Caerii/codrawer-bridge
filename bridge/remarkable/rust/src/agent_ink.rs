@@ -431,6 +431,124 @@ pub fn next_backoff(d: Duration) -> Duration {
     (d * 2).min(Duration::from_secs(30))
 }
 
+// ── "take me there": the router's `goto` ──────────────────────────────────────────────────
+//
+// A port of the Go package's `GotoOp` (agentink/goto.go, which explains the rules): a `goto` that
+// the user's own tap produced (`"origin":"user"`) navigates; any other becomes an offer the
+// extension shows in its dock, and only the user's tap on it navigates. `consent_allows` is the
+// ADR 011 §7 hook (allows everything until consent scopes reach the tablet). The line is built
+// by hand in a fixed key order so both engines send the same bytes.
+
+/// The longest `reason`, in characters (Go: `MaxGotoReason`).
+pub const MAX_GOTO_REASON: usize = 120;
+
+/// ADR 011 §7 consent scopes: whether a `goto` may open `doc`. A stub: everything is allowed.
+pub fn consent_allows(_doc: &str) -> bool {
+    true
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == b'-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
+}
+
+/// `page` as the JSON to send: a uuid string, or an index 0..99999 (a number or digits); `None`
+/// inside `Ok` when absent.
+fn goto_page(v: Option<&serde_json::Value>) -> Result<Option<String>, ()> {
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) if is_uuid(s) => {
+            let mut b = String::new();
+            push_string(&mut b, s);
+            Ok(Some(b))
+        }
+        Some(serde_json::Value::String(s)) => match s.parse::<i64>() {
+            Ok(n) if (0..=99999).contains(&n) && s.len() <= 5 => Ok(Some(n.to_string())),
+            _ => Err(()),
+        },
+        Some(serde_json::Value::Number(n)) => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && (0.0..=99999.0).contains(&f) => Ok(Some((f as i64).to_string())),
+            _ => Err(()),
+        },
+        _ => Err(()),
+    }
+}
+
+fn clean_reason(s: &str) -> String {
+    s.trim()
+        .chars()
+        .filter(|c| !c.is_control() && *c != char::REPLACEMENT_CHARACTER)
+        .take(MAX_GOTO_REASON)
+        .collect()
+}
+
+/// Checks one router message; the socket line for it, or why it is not a valid `goto`.
+pub fn goto_op(raw: &str, id: &str, consent: impl Fn(&str) -> bool) -> Result<String, String> {
+    let m: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw).map_err(|_| "not a goto".to_string())?;
+    if m.get("t").and_then(|v| v.as_str()) != Some("goto") {
+        return Err("not a goto".into());
+    }
+    let doc = m.get("doc").and_then(|v| v.as_str()).unwrap_or("");
+    if !is_uuid(doc) {
+        return Err("doc must be a uuid".into());
+    }
+    let page = goto_page(m.get("page")).map_err(|_| "page must be a uuid or an index".to_string())?;
+    let region: Option<Vec<f64>> = match m.get("region") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Array(a)) => {
+            let r: Vec<f64> = a.iter().filter_map(|v| v.as_f64()).collect();
+            if r.len() != 4 || a.len() != 4 || !(r[0] < r[2] && r[1] < r[3]) {
+                return Err("region must be [x0,y0,x1,y1] with x0<x1, y0<y1".into());
+            }
+            if r.iter().any(|v| !(-0.5..=1.5).contains(v)) {
+                return Err("region is off the page".into());
+            }
+            Some(r)
+        }
+        Some(_) => return Err("region must be [x0,y0,x1,y1] with x0<x1, y0<y1".into()),
+    };
+    if !consent(doc) {
+        return Err("outside the consent scopes".into());
+    }
+    let flash = region.is_some() && m.get("flash").and_then(|v| v.as_bool()).unwrap_or(true);
+    let mode = if m.get("origin").and_then(|v| v.as_str()) == Some("user") { "go" } else { "offer" };
+    let mut b = String::with_capacity(160);
+    b.push_str(r#"{"op":"goto","id":"#);
+    push_string(&mut b, id);
+    b.push_str(r#","doc":"#);
+    push_string(&mut b, doc);
+    if let Some(p) = page {
+        b.push_str(r#","page":"#);
+        b.push_str(&p);
+    }
+    if let Some(r) = &region {
+        b.push_str(r#","region":["#);
+        for (i, v) in r.iter().enumerate() {
+            if i > 0 {
+                b.push(',');
+            }
+            b.push_str(&num(round(*v, 1e4)));
+        }
+        b.push(']');
+    }
+    b.push_str(r#","flash":"#);
+    b.push_str(if flash { "true" } else { "false" });
+    b.push_str(r#","mode":"#);
+    push_string(&mut b, mode);
+    b.push_str(r#","reason":"#);
+    let reason = m.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    push_string(&mut b, &clean_reason(reason));
+    b.push('}');
+    Ok(b)
+}
+
 // ── text into the focused text box ─────────────────────────────────────────────────────────
 //
 // The extension greets with `hello codrawer-layer ink text_insert text_read`; from then on
@@ -560,6 +678,7 @@ pub fn start(
     let (msg_tx, msg_rx) = mpsc::channel::<String>(1024);
     let (text_tx, text_rx) = mpsc::channel::<String>(256);
     let (status_tx, status_rx) = mpsc::channel::<()>(1);
+    let (goto_tx, goto_rx) = mpsc::channel::<String>(16);
     let on = initial_agent_ink(AGENT_INK_STATE_FILE, cfg.native_agent_ink);
     let link = std::sync::Arc::new(Link {
         agent_on: on.into(),
@@ -573,6 +692,8 @@ pub fn start(
         // only stroke messages, and only while agent ink is on; the forwarder checks the layer
         if l.agent_on() && data.contains("\"stroke_") {
             let _ = msg_tx.try_send(data.to_string()); // far behind: dropped, never blocks the reader
+        } else if data.contains("\"goto\"") {
+            let _ = goto_tx.try_send(data.to_string()); // navigation works with agent ink off
         }
     }));
     println!("[ink] socket {path}, native agent ink {on}");
@@ -581,6 +702,7 @@ pub fn start(
         msg_rx,
         text_rx,
         status_rx,
+        goto_rx,
         act_tx,
         link.clone(),
         pages,
@@ -609,6 +731,7 @@ async fn forever(
     mut msgs: tokio::sync::mpsc::Receiver<String>,
     mut texts: tokio::sync::mpsc::Receiver<String>,
     mut status: tokio::sync::mpsc::Receiver<()>,
+    mut gotos: tokio::sync::mpsc::Receiver<String>,
     actions: tokio::sync::mpsc::Sender<String>,
     link: std::sync::Arc<Link>,
     pages: Option<crate::page_watch::PageFeed>,
@@ -678,7 +801,7 @@ async fn forever(
                                 }
                             }
                             TextReply::Other => {
-                                if l.starts_with("err") || debug {
+                                if l.starts_with("err") || l.starts_with("ok g") || debug {
                                     println!("[ink] extension: {l}");
                                 }
                             }
@@ -688,6 +811,23 @@ async fn forever(
                     _ => break,
                 },
                 _ = status.recv() => Some(status_line("rust", link.agent_on())),
+                g = gotos.recv() => match g {
+                    Some(raw) => {
+                        seq += 1;
+                        match goto_op(&raw, &format!("g{seq}"), consent_allows) {
+                            Ok(line) => {
+                                println!("[ink] goto {line}");
+                                Some(line)
+                            }
+                            Err(why) if why == "not a goto" => None,
+                            Err(why) => {
+                                println!("[ink] goto refused: {why}");
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                },
                 t = texts.recv() => match t {
                     Some(text) => {
                         seq += 1;
@@ -979,6 +1119,59 @@ mod tests {
         assert!(rx.try_recv().is_ok(), "a new status line was asked for");
         assert!(initial_agent_ink(&f, false), "the choice was kept");
         assert_eq!(status_line("go", true), "status codrawer go bridge: connected, agent ink on");
+    }
+
+    const G_DOC: &str = "4c0e2d44-91ad-4d94-a473-ac8187400cd7";
+    const G_PAGE: &str = "22227dbf-7a9e-4044-b2e8-42711dd3d680";
+
+    /// Go: `TestGotoOpFromTheUserGoes`, the same bytes.
+    #[test]
+    fn goto_from_the_user_goes() {
+        let raw = format!(r#"{{"t":"goto","doc":"{G_DOC}","page":"{G_PAGE}","region":[0.1,0.2,0.30004,0.4],"reason":"cited: Lemma 2","origin":"user"}}"#);
+        assert_eq!(
+            goto_op(&raw, "g1", consent_allows).unwrap(),
+            format!(r#"{{"op":"goto","id":"g1","doc":"{G_DOC}","page":"{G_PAGE}","region":[0.1,0.2,0.3,0.4],"flash":true,"mode":"go","reason":"cited: Lemma 2"}}"#)
+        );
+    }
+
+    /// Go: `TestGotoOpFromAnAgentIsAnOffer`.
+    #[test]
+    fn goto_from_an_agent_is_an_offer() {
+        for origin in [r#""agent""#, r#""""#, "null", r#""User""#] {
+            let raw = format!(r#"{{"t":"goto","doc":"{G_DOC}","page":3,"origin":{origin}}}"#);
+            assert_eq!(
+                goto_op(&raw, "g2", consent_allows).unwrap(),
+                format!(r#"{{"op":"goto","id":"g2","doc":"{G_DOC}","page":3,"flash":false,"mode":"offer","reason":""}}"#),
+                "origin {origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn goto_pages_flash_and_refusals() {
+        for (input, want) in [(r#""12""#, r#""page":12"#), ("0", r#""page":0"#)] {
+            let l = goto_op(&format!(r#"{{"t":"goto","doc":"{G_DOC}","page":{input}}}"#), "g", consent_allows).unwrap();
+            assert!(l.contains(want), "{l}");
+        }
+        let l = goto_op(&format!(r#"{{"t":"goto","doc":"{G_DOC}","flash":true}}"#), "g", consent_allows).unwrap();
+        assert!(l.contains(r#""flash":false"#), "no region, no flash: {l}");
+        for (input, why) in [
+            (r#"{"t":"page"}"#.to_string(), "not a goto"),
+            (r#"{"t":"goto","doc":"../../etc"}"#.to_string(), "doc must be a uuid"),
+            (format!(r#"{{"t":"goto","doc":"{G_DOC}","page":"x"}}"#), "page must be"),
+            (format!(r#"{{"t":"goto","doc":"{G_DOC}","page":-1}}"#), "page must be"),
+            (format!(r#"{{"t":"goto","doc":"{G_DOC}","page":1.5}}"#), "page must be"),
+            (format!(r#"{{"t":"goto","doc":"{G_DOC}","region":[0.3,0.1,0.2,0.4]}}"#), "region must be"),
+            (format!(r#"{{"t":"goto","doc":"{G_DOC}","region":[0,0,1,9]}}"#), "off the page"),
+        ] {
+            let got = goto_op(&input, "g", consent_allows).unwrap_err();
+            assert!(got.contains(why), "{input}: {got}");
+        }
+        let refused = goto_op(&format!(r#"{{"t":"goto","doc":"{G_DOC}","origin":"user"}}"#), "g", |d: &str| d != G_DOC);
+        assert_eq!(refused.unwrap_err(), "outside the consent scopes");
+        let long = "é".repeat(130);
+        let l = goto_op(&format!("{{\"t\":\"goto\",\"doc\":\"{G_DOC}\",\"reason\":\"  a\\u0007\\\"b{long}\"}}"), "g", consent_allows).unwrap();
+        assert!(l.ends_with(&format!("\"reason\":\"a\\\"b{}\"}}", "é".repeat(117))), "{l}");
     }
 
     #[test]

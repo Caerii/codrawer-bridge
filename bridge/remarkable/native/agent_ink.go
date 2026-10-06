@@ -17,6 +17,10 @@ package main
 //     `{"op":"text_insert","id":"tN","text":…}`, inserted the way an input method commits text,
 //     which the uinput keyboard cannot match (it drops the first characters after an Enter and
 //     has no ^ [ ] { } \ ` ~). An `err tN …` answer sends that text to the uinput typer instead.
+//   - bridge → extension: `goto` ("take me there", agentink/goto.go). The router's
+//     `{"t":"goto",…}` becomes `{"op":"goto","id":"gN",…}`: it navigates when the user's own tap
+//     produced it (`origin:"user"`), and is otherwise shown as an offer in the dock. It is relayed
+//     whether or not agent ink is on.
 //   - bridge → extension: `status <text>`, the line the dock shows under "codrawer status"
 //     (engine, agent ink on or off), sent on connect and whenever it changes.
 //
@@ -55,6 +59,7 @@ type inkLink struct {
 	fallback atomic.Value // func(string): the uinput typer, for refused inserts
 	pending  sync.Map     // id → text, until the extension answers
 	seq      atomic.Int64
+	gotoC    chan []byte // router `goto` messages, checked by agentink.GotoOp in the writer
 }
 
 // insertText queues s for the focused text box; false when the extension cannot take it now.
@@ -143,11 +148,18 @@ func startAgentInk(cfg BridgeConfig, pages *pageFeed) (func([]byte), <-chan []by
 	if path == "" || strings.EqualFold(path, "off") {
 		return nil, nil, nil
 	}
-	link := &inkLink{textC: make(chan string, 256), statusC: make(chan struct{}, 1)}
+	link := &inkLink{textC: make(chan string, 256), statusC: make(chan struct{}, 1), gotoC: make(chan []byte, 16)}
 	link.agentOn.Store(initialAgentInk(cfg.NativeAgentInk))
 	actions := make(chan []byte, 64)
 	msgs := make(chan []byte, 1024)
 	hook := func(b []byte) {
+		if bytes.Contains(b, []byte(`"goto"`)) && !bytes.Contains(b, []byte(`"stroke_`)) {
+			select {
+			case link.gotoC <- b: // navigation works with agent ink off
+			default:
+			}
+			return
+		}
 		// Only stroke messages can matter, and only while agent ink is on; the forwarder checks
 		// the layer.
 		if !link.agentOn.Load() || !bytes.Contains(b, []byte(`"stroke_`)) {
@@ -238,6 +250,18 @@ func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Fo
 			if !write(link.statusLine()) {
 				return
 			}
+		case raw := <-link.gotoC:
+			line, why := agentink.GotoOp(raw, fmt.Sprintf("g%d", link.seq.Add(1)))
+			if line == nil {
+				if why != "not a goto" {
+					fmt.Printf("[ink] goto refused: %s\n", why)
+				}
+				continue
+			}
+			fmt.Printf("[ink] goto %s\n", line)
+			if !write(line) {
+				return
+			}
 		case text := <-link.textC:
 			id := fmt.Sprintf("t%d", link.seq.Add(1))
 			link.pending.Store(id, text)
@@ -302,7 +326,7 @@ func readInkReplies(conn net.Conn, actions chan<- []byte, link *inkLink, page fu
 			default:
 				fmt.Printf("[ink] action dropped: router link backed up\n")
 			}
-		case bytes.HasPrefix(line, []byte("err")):
+		case bytes.HasPrefix(line, []byte("err")) || bytes.HasPrefix(line, []byte("ok g")):
 			fmt.Printf("[ink] extension: %s\n", line)
 		default:
 			if debug {

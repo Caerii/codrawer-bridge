@@ -20,6 +20,7 @@
 //   text                   text into the focused text box (replaceText, input method)
 //   ink_protocol, inksock  the bridge's socket: agent ink, text, status, actions
 //   selection, inject      the lasso follower; QML injected into xochitl (the dock), its actions
+//   goto_req, navigate     "take me there": open a document by id, a page, flash a region; offers
 //   auto_rules, autostate, autoinput, grab, automation   UI automation and its guardrails
 //   cmdline, commands, probes, watch                     the command file and the probes
 //
@@ -33,6 +34,7 @@
 //   inksock's status line       → the injected UI refreshes
 //   automation's clients change → the injected UI refreshes ("automation active")
 //   selection settled           → the selection-menu injections are tried
+//   a goto offer comes or goes  → the injected UI refreshes (the dock's offer entry and badge)
 //
 // # Threading
 //
@@ -50,6 +52,7 @@
 #include "inject.h"
 #include "inksock.h"
 #include "log.h"
+#include "navigate.h"
 #include "paths.h"
 #include "selection.h"
 #include "toolfollow.h"
@@ -68,6 +71,7 @@ void wireHooks() {
     setBridgeStatusHook([] { refreshAllInjections(); });
     setAutoClientsChangedHook([] { refreshAllInjections(); });
     setSelectionSettledHook([] { createSelectionInjections(); });
+    setOfferHook([] { refreshAllInjections(); });
 }
 
 void worker() {

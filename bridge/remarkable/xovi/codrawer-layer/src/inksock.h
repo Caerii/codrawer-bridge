@@ -5,7 +5,7 @@
 // The bridge (`agent_ink.go` / `agent_ink.rs`, with NATIVE_AGENT_INK) connects to this Unix
 // socket (0600, root only; one client at a time) and the extension greets it with
 //
-//   hello codrawer-layer ink text_insert text_read
+//   hello codrawer-layer ink text_insert text_read goto
 //
 // Then each side writes lines. bridge → extension, one JSON object or status line per line:
 //
@@ -14,6 +14,8 @@
 //                "pts":[[x,y,pressure,width],...]}]}           →  ok a7 <n> | err a7 <why>
 //   {"op":"text_insert","id":"t3","text":"…"}                   →  ok t3 text_insert <n> via=<route> | err t3 <why>
 //   {"op":"text_read","id":"t4"}                                →  text t4 {…} | err t4 <why>
+//   {"op":"goto","id":"g7","doc":…,"page":…,"region":[…],"flash":true,"mode":"go"|"offer","reason":"…"}
+//                                                               →  ok g7 goto … | ok g7 goto_offer | err g7 <why>
 //   status <text>                                               (no answer; shown in the dock)
 //
 // x, y are page coordinates (line_layout.h, "Units"); pressure is 0..1; width is the point's
@@ -31,7 +33,8 @@
 // characters; anything ink_protocol.h refuses (tools, counts, thickness, point ranges); a line
 // over 1 MiB (the connection is closed). On the GUI thread, ink.h requires the page to be the
 // visible one and waits for the user's pen to lift; text waits for nothing and is refused while
-// the pen is down.
+// the pen is down. A `goto` (navigate.h) navigates only in mode "go", which the bridge sets only
+// for the user's own tap; any other is an offer the user accepts in the dock.
 //
 // # Threading
 //

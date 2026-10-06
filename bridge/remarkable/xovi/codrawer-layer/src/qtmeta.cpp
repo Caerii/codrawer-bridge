@@ -104,12 +104,19 @@ bool invoke(QObject *o, const char *name, QVariantList args, QVariant *ret) {
         bool fits = true;
         for (int a = 0; a < conv.size() && fits; ++a) {
             const QMetaType want = m.parameterMetaType(a);
+            if (want.id() == QMetaType::QVariant) {
+                // A QML function's untyped parameter: the slot takes the QVariant itself.
+                argv[a + 1] = &conv[a];
+                continue;
+            }
             fits = conv[a].metaType() == want || conv[a].convert(want);
             argv[a + 1] = conv[a].data();
         }
         if (!fits) continue;  // another overload (sceneToView(QPointF) vs (QRectF)) may take them
         QVariant r;
-        if (m.returnMetaType().isValid() && m.returnMetaType().id() != QMetaType::Void) {
+        if (m.returnMetaType().isValid() && m.returnMetaType().id() == QMetaType::QVariant) {
+            argv[0] = &r;  // a QML function's return value: written into r itself
+        } else if (m.returnMetaType().isValid() && m.returnMetaType().id() != QMetaType::Void) {
             r = QVariant(m.returnMetaType());
             argv[0] = r.data();
         }
