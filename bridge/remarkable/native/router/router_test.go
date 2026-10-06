@@ -219,6 +219,33 @@ func TestDocSurvivesClear(t *testing.T) {
 	}
 }
 
+// typer_config: a request is relayed (to the bridge) but not kept; the bridge's acknowledgement
+// is relayed and kept, survives clear, and a late joiner gets the latest one.
+func TestTyperConfigRelaysAndLatestAckReplays(t *testing.T) {
+	srv := newServer(t)
+	phone := dial(t, srv, "s1")
+	bridge := dial(t, srv, "s1")
+	send(t, phone, `{"t":"typer_config","speed":"fast"}`)
+	if m := read(t, bridge); m["t"] != "typer_config" || m["speed"] != "fast" || m["ok"] != nil {
+		t.Fatalf("request relay: %v", m)
+	}
+	send(t, bridge, `{"t":"typer_config","speed":"careful","ok":true}`)
+	read(t, phone)
+	send(t, bridge, `{"t":"typer_config","speed":"fast","ok":true}`)
+	if m := read(t, phone); m["speed"] != "fast" || m["ok"] != true {
+		t.Fatalf("ack relay: %v", m)
+	}
+	send(t, bridge, `{"t":"typer_config","speed":"warp","ok":false}`) // a refusal is not the setting
+	read(t, phone)
+	send(t, phone, `{"t":"clear"}`)
+	read(t, bridge)
+	late := dial(t, srv, "s1")
+	if m := read(t, late); m["t"] != "typer_config" || m["speed"] != "fast" || m["ok"] != true {
+		t.Fatalf("replay: %v", m)
+	}
+	expectQuiet(t, late, 100*time.Millisecond) // the request itself was never kept
+}
+
 func TestBigPageReplayDoesNotDropJoiner(t *testing.T) {
 	srv := newServer(t)
 	tablet := dial(t, srv, "s1")

@@ -98,11 +98,31 @@ saving (~5 ms) is small next to the app's, and the keyboard may renegotiate its 
 
 ## Typer (replies into the tablet)
 
-Not measured on xochitl: the keyboard was asleep and the user's focused field unknown, so typing
-test strings into the tablet was not safe, and the simulator has no xochitl. Both engines now
-plan a reply as bursts (typer.rs, typer.go): the default is unchanged (one keystroke per write,
-`TYPE_CHAR_MS`=12 after each: ~4.8 s for 400 characters); `TYPE_BATCH=word` writes a word and its
-separator (≤ 16 keystrokes) in one `write()` and pauses once per word (~0.9 s for 400
-characters), keeping every keystroke in its own SYN frames so the event stream is identical. To
-verify: focus a scratch text box, set `TYPE_BATCH=word` (then lower `TYPE_CHAR_MS`) and compare a
-long reply character for character.
+Both engines plan a reply as bursts (typer.rs, typer.go), at a speed chosen at runtime with
+`typer_config` (docs/protocol.md): `careful` (one keystroke per write, 12 ms after each: ~4.8 s for
+400 characters), `fast` (a word and its separator, ≤ 16 keystrokes, per `write()`: ~0.9 s) and
+`instant` (bursts of up to 10 keystrokes 40 ms apart, never past an Enter: ~1.6 s). Every keystroke
+keeps its own SYN frames, so the event stream is the same at every speed. `instant`'s numbers are
+guesses until calibrated. The burst cap comes from an unverified reading of the kernel: evdev sizes
+each reader's buffer for a keyboard like the bridge's at 64 events, and a keystroke is 4 events
+(6 with Shift).
+
+**Baseline, 2026-10-06** (the 2b84fa9 release, `careful`, one run into a scratch text box, sent
+through a stand-in router as a `term` reply and read back from the saved `.rm` with rmscene):
+
+- Sent `\n--- careful ---\nThe quick brown fox … 0123456789.\nTHE QUICK BROWN FOX … DOG! @#$%^&*()-_=+[]{};:'",.<>/?|`~ end-careful\n`.
+- Arrived `-he quick brown fox … 0123456789.` / `THE QUICK BROWN FOX … DOG! @#$%&*()-_=+;:'",.<>/?| end-careful`.
+- ``^ [ ] { } ` ~`` never arrive: xochitl's text field produces nothing for those keys, even at
+  `careful`. The typer now leaves them out and logs them.
+- The leading `--- careful ---`, its Enter and the `T` after it were lost except one `-`. Two
+  explanations: (A) xochitl drops keys while it lays out the new paragraph after an Enter, or (B) a
+  leading `--` triggers an autoformat. Until a run separates them, every write that ends with Enter
+  is followed by at least `enter_ms` (150 ms).
+- Everything else arrived complete and in order.
+
+**Calibration** (`scripts/dev/typerbench.py`, with the user's go-ahead and a scratch text box
+focused): a stand-in router the bridge is pointed at for the duration. Its `calibrate` plan types
+`enter0` (a leading Enter, no settle), `enter150` (with the settle), `dash` (a line opening with
+`--` and no Enter: A against B), then `fast` and `instant` at 40, 20, 10 and 5 ms per 10-key burst
+and 10 ms per 16-key burst. `instant` should become the fastest run with no dropped or reordered
+characters, with margin: the next slower step.

@@ -44,6 +44,9 @@ pub(super) struct Session {
     pub(super) compact_from: usize,
     /// When it was asked.
     pub(super) compact_asked: Option<Instant>,
+    /// The bridge's latest `typer_config` acknowledgement (its reply typing speed), replayed
+    /// last; not ink, so `clear` keeps it.
+    pub(super) typer: Option<Utf8Bytes>,
 }
 
 /// A client as the session sees it.
@@ -89,6 +92,8 @@ pub(super) struct PageSnapshot {
     pub(super) page: Option<Utf8Bytes>,
     pub(super) strokes: Vec<StrokeSnap>,
     pub(super) doc: Vec<Arc<str>>,
+    /// The latest `typer_config` acknowledgement, replayed after the document.
+    pub(super) typer: Option<Utf8Bytes>,
 }
 
 /// One stroke of a [`PageSnapshot`].
@@ -119,6 +124,7 @@ impl PageSnapshot {
             let us: Vec<&str> = chunk.iter().map(|u| &**u).collect();
             out.push(json_msg(&ReplayDoc { t: "doc_update", us: &us }));
         }
+        out.extend(self.typer.clone());
         out
     }
 }
@@ -261,7 +267,7 @@ impl Session {
                 Some(StrokeSnap { id: id.clone(), begin: st.begin.clone(), blocks: st.blocks.clone(), ended: st.ended })
             })
             .collect();
-        PageSnapshot { page: self.page.clone(), strokes, doc: self.doc_log.clone() }
+        PageSnapshot { page: self.page.clone(), strokes, doc: self.doc_log.clone(), typer: self.typer.clone() }
     }
 
     /// Queues `raw` for every member but `from`; a member whose replay is still being queued

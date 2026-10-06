@@ -9,7 +9,10 @@
 //!   the pen events, so contact state is never lost while the network is down, and turns them into
 //!   encoded messages on the outbox. A full outbox skips whole strokes, never single events.
 //! - The keyboard reader thread does the same for a keyboard, producing `key` messages.
-//! - The typer thread owns the virtual keyboard and types `term` replies into the tablet.
+//! - The typer thread owns the virtual keyboard and types `term` replies into the tablet, at the
+//!   speed in a shared [`typer::Settings`]. A `typer_config` from the router changes that speed
+//!   on the socket reader ([`typer_hook`]); its acknowledgement goes back on the connection, and
+//!   every new connection starts by announcing the speed, so the router always has it.
 //! - The agent ink task ([`crate::agent_ink`]) hands the router's ai-layer strokes to the
 //!   codrawer-layer extension inside xochitl (NATIVE_AGENT_INK) and brings its `dock_action`s back.
 //! - The page thread ([`crate::page_watch`]) publishes xochitl's saved page as `page` snapshots
@@ -34,6 +37,7 @@ use crate::input::{AbsRanges, RawEvent};
 use crate::keymap::OutKey;
 use crate::page_watch::PageFeed;
 use crate::pen;
+use crate::typer;
 use crate::util::{go_duration, now_nanos};
 use crate::ws_client::{self, OnMessage, WsConn};
 
@@ -140,6 +144,11 @@ pub struct Sources {
     /// A message taken from the outbox or the keyboard but not written, because the tablet had
     /// just resumed and the socket was presumed dead: the next connection writes it first.
     pub held: Option<String>,
+    /// Messages the bridge answers the router with (`typer_config` acknowledgements).
+    pub ctl_rx: Option<mpsc::Receiver<String>>,
+    /// The typer's speed, announced (as an acknowledgement) on every new connection so the
+    /// router always holds the current one for late joiners.
+    pub typer: Option<std::sync::Arc<std::sync::Mutex<typer::Settings>>>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -209,35 +218,34 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         None => (None, None, None),
     };
 
-    // Terminal replies typed into the tablet (uinput).
-    let typer: Option<OnMessage> = if cfg.type_replies {
+    // Terminal replies typed into the tablet (uinput), at the speed `typer_config` last set.
+    let (typed, typer, ctl_rx) = if cfg.type_replies {
         let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1024);
-        let per_char = Duration::from_millis(cfg.type_char_ms.max(1) as u64);
-        std::thread::Builder::new()
-            .name("typer".into())
-            .spawn(move || linux::typer_forever(rx, per_char, debug))
-            .map_err(|e| e.to_string())?;
+        let settings = std::sync::Arc::new(std::sync::Mutex::new(typer_settings(&cfg)));
+        {
+            let settings = settings.clone();
+            std::thread::Builder::new()
+                .name("typer".into())
+                .spawn(move || linux::typer_forever(rx, settings, debug))
+                .map_err(|e| e.to_string())?;
+        }
         // With the codrawer-layer extension offering text_insert, a reply goes into the focused
-        // text box through it; the virtual keyboard is the fallback, also for refused inserts.
+        // text box through it, all at once (the typing speed does not apply); the virtual
+        // keyboard is the fallback, also for refused inserts.
         if let Some(link) = &link {
             let tx = tx.clone();
             link.set_fallback(Box::new(move |s| {
                 let _ = tx.try_send(s);
             }));
         }
-        Some(std::sync::Arc::new(move |data: &str| {
-            if let Some(s) = typed_reply(data) {
-                if link.as_ref().is_some_and(|l| l.insert_text(&s)) {
-                    return;
-                }
-                let _ = tx.try_send(s);
-            }
-        }))
+        let (ctl_tx, ctl_rx) = mpsc::channel(16);
+        let typed: OnMessage = std::sync::Arc::new(typer_hook(tx, link, settings.clone(), ctl_tx));
+        (Some(typed), Some(settings), Some(ctl_rx))
     } else {
-        None
+        (None, None, None)
     };
 
-    let on_message: Option<OnMessage> = match (typer, ink_hook) {
+    let on_message: Option<OnMessage> = match (typed, ink_hook) {
         (Some(a), Some(b)) => Some(std::sync::Arc::new(move |d: &str| {
             a(d);
             b(d);
@@ -245,7 +253,38 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         (a, b) => a.or(b),
     };
 
-    run_connections(cfg, Sources { out_rx, key_rx, pages, actions_rx, held: None }, on_message).await
+    run_connections(cfg, Sources { out_rx, key_rx, pages, actions_rx, held: None, ctl_rx, typer }, on_message).await
+}
+
+/// The typer's starting speed from the environment and `-type-char-ms` ([`typer::Settings::from_env`]).
+pub fn typer_settings(cfg: &Config) -> typer::Settings {
+    let env = |k| std::env::var(k).ok();
+    let int = |k, unset| env(k).and_then(|v| v.trim().parse().ok()).unwrap_or(unset);
+    let (burst, enter_ms) = (int("TYPE_BURST", 0), int("TYPE_ENTER_MS", -1));
+    typer::Settings::from_env(env("TYPE_SPEED").as_deref(), env("TYPE_BATCH").as_deref(), cfg.type_char_ms, burst, enter_ms)
+}
+
+/// What the bridge does with a message from the router: a `term` reply goes to the
+/// codrawer-layer extension's text insertion when `ink` takes it, else to the typer thread; a
+/// `typer_config` request changes the shared speed at once and its acknowledgement goes on `ctl`
+/// for the connection to send. Runs on the socket reader, so it never blocks: a full queue drops
+/// the reply (the typer is far behind) or the acknowledgement.
+pub fn typer_hook(
+    replies: std::sync::mpsc::SyncSender<String>,
+    ink: Option<std::sync::Arc<crate::agent_ink::Link>>,
+    settings: std::sync::Arc<std::sync::Mutex<typer::Settings>>,
+    ctl: mpsc::Sender<String>,
+) -> impl Fn(&str) + Send + Sync {
+    move |data: &str| {
+        if let Some(s) = typed_reply(data) {
+            if !ink.as_ref().is_some_and(|l| l.insert_text(&s)) {
+                let _ = replies.try_send(s);
+            }
+        } else if let Some(ack) = typer::apply_config(data, &mut settings.lock().unwrap()) {
+            println!("[typer] {ack}");
+            let _ = ctl.try_send(ack);
+        }
+    }
 }
 
 /// Runs the stroke state machine for the life of the process: drains pen events into encoded
@@ -410,6 +449,13 @@ pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Rec
             return e;
         }
     }
+    if let Some(settings) = &src.typer {
+        let now = typer::ack(&settings.lock().unwrap(), None);
+        let mut dropped = None; // not held: every new connection announces it anyway
+        if let Err(e) = write_checked(ws, now, &mut check, &mut dropped).await {
+            return e;
+        }
+    }
     loop {
         let r = tokio::select! {
             e = err_rx.recv() => {
@@ -421,11 +467,25 @@ pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Rec
                 write_checked(ws, msg, &mut check, &mut src.held).await
             }
             a = recv_opt(&mut src.actions_rx) => match a {
-                Some(a) => write_checked(ws, a, &mut check, &mut src.held).await,
+                Some(a) => {
+                    // A dock tap may set the typing speed (typer::dock_request): applied here,
+                    // relayed as usual, then acknowledged like a request from the router.
+                    let ack = src.typer.as_ref().and_then(|t| {
+                        typer::dock_request(&a).and_then(|req| typer::apply_config(&req, &mut t.lock().unwrap()))
+                    });
+                    match (write_checked(ws, a, &mut check, &mut src.held).await, ack) {
+                        (Ok(()), Some(ack)) => write_checked(ws, ack, &mut check, &mut src.held).await,
+                        (r, _) => r,
+                    }
+                }
                 None => Ok(()),
             },
             k = recv_opt(&mut src.key_rx) => match k {
                 Some(k) => write_checked(ws, serde_json::to_string(&k).expect("serialize"), &mut check, &mut src.held).await,
+                None => Ok(()),
+            },
+            c = recv_opt(&mut src.ctl_rx) => match c {
+                Some(c) => write_checked(ws, c, &mut check, &mut src.held).await,
                 None => Ok(()),
             },
             page = next_page(&mut src.pages) => {
@@ -519,7 +579,7 @@ mod tests {
         cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
         let (_out_tx, out_rx) = mpsc::channel(8);
         let (page_tx, page_rx) = tokio::sync::watch::channel(Some(r#"{"t":"page","rev":1}"#.to_string()));
-        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), actions_rx: None, held: None };
+        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), actions_rx: None, held: None, ctl_rx: None, typer: None };
         tokio::spawn(run_connections(cfg, src, None));
 
         let mut first = accept_ws(&listener).await;
@@ -531,6 +591,44 @@ mod tests {
         // a new snapshot reaches the live connection
         page_tx.send_replace(Some(r#"{"t":"page","rev":2}"#.to_string()));
         assert_eq!(next_text(&mut second).await, r#"{"t":"page","rev":2}"#);
+    }
+
+    /// `typer_config` end to end: the bridge announces its speed on every connection, applies a
+    /// request from the router at once and acknowledges it on the same socket; replies still
+    /// reach the typer queue.
+    #[tokio::test]
+    async fn typer_config_is_applied_and_acknowledged() {
+        use futures_util::SinkExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut cfg = Config::from_env();
+        cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
+        let (_out_tx, out_rx) = mpsc::channel(8);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(8);
+        let settings = std::sync::Arc::new(std::sync::Mutex::new(typer::Settings::preset(typer::Speed::Careful)));
+        let (ctl_tx, ctl_rx) = mpsc::channel(16);
+        let hook: OnMessage = std::sync::Arc::new(typer_hook(reply_tx, None, settings.clone(), ctl_tx));
+        let src = Sources { out_rx, key_rx: None, pages: None, actions_rx: None, held: None, ctl_rx: Some(ctl_rx), typer: Some(settings.clone()) };
+        tokio::spawn(run_connections(cfg, src, Some(hook)));
+
+        let mut ws = accept_ws(&listener).await;
+        let v = |s: String| serde_json::from_str::<serde_json::Value>(&s).unwrap();
+        let hello = v(next_text(&mut ws).await);
+        assert_eq!((hello["t"].as_str(), hello["speed"].as_str(), hello["ok"].as_bool()), (Some("typer_config"), Some("careful"), Some(true)));
+
+        let send = |s: &'static str| tokio_tungstenite::tungstenite::Message::text(s);
+        ws.send(send(r#"{"t":"typer_config","speed":"instant","char_ms":20}"#)).await.unwrap();
+        let ack = v(next_text(&mut ws).await);
+        assert_eq!((ack["speed"].as_str(), ack["char_ms"].as_u64(), ack["ok"].as_bool()), (Some("instant"), Some(20), Some(true)));
+        assert_eq!(*settings.lock().unwrap(), typer::Settings { char_ms: 20, ..typer::Settings::preset(typer::Speed::Instant) });
+
+        ws.send(send(r#"{"t":"term","kind":"text","text":"hi"}"#)).await.unwrap();
+        let got = tokio::task::spawn_blocking(move || reply_rx.recv_timeout(Duration::from_secs(10))).await.unwrap();
+        assert_eq!(got.as_deref(), Ok("hi"));
+
+        // a new connection announces the speed now in force
+        drop(ws);
+        let mut again = accept_ws(&listener).await;
+        assert_eq!(v(next_text(&mut again).await)["speed"], "instant");
     }
 
     fn cfg() -> pen::Config {

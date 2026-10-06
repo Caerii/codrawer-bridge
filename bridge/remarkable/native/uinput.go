@@ -103,10 +103,10 @@ func ioctlInt(fd uintptr, req uintptr, val int) error {
 	return nil
 }
 
-// TypeText types s, paced by perChar and grouped into writes by batch (typer.go, plan). Newlines
+// TypeText types s, grouped into writes and paced as how says (typer.go, plan). Newlines
 // become Enter, tabs Tab; see keystrokes for what else is substituted or dropped.
-func (k *VirtualKeyboard) TypeText(s string, perChar time.Duration, batch typeBatch) error {
-	for _, b := range plan(s, perChar, batch) {
+func (k *VirtualKeyboard) TypeText(s string, how typerSettings) error {
+	for _, b := range plan(s, how) {
 		if err := k.writeBurst(b); err != nil {
 			return err
 		}

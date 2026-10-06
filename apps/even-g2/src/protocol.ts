@@ -67,6 +67,8 @@ export interface Inbound {
   /** A plain-text document; `crdt: true` marks copies from live-editing clients. */
   doc: { text?: unknown; crdt?: boolean }
   term: TermMessage
+  /** The tablet's reply typing speed: a request (no `ok`) or the bridge's answer (typer.ts). */
+  typer_config: { speed?: unknown; char_ms?: unknown; burst?: unknown; ok?: unknown }
 }
 
 export type InboundType = keyof Inbound

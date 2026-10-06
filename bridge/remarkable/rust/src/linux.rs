@@ -10,6 +10,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::devices::find_keyboard_device;
 use crate::input::*;
 use crate::keymap::{KeyTranslator, OutKey, VIRTUAL_KEYBOARD_NAME};
-use crate::typer::{plan, Batch, Burst};
+use crate::typer::{plan, untypable, Burst, Settings};
 
 // ── ioctl encoding (Linux _IOC) ────────────────────────────────────────────
 
@@ -472,18 +473,18 @@ impl VirtualKeyboard {
         Ok(())
     }
 
-    /// Types `s`, paced by `per_char` and grouped by `batch` so the UI keeps up ([`crate::typer`]).
-    pub fn type_text(&mut self, s: &str, per_char: Duration, batch: Batch) -> io::Result<()> {
-        for b in plan(s, per_char, batch) {
+    /// Types `s`, grouped and paced as `how` says so the UI keeps up ([`crate::typer`]).
+    pub fn type_text(&mut self, s: &str, how: &Settings) -> io::Result<()> {
+        for b in plan(s, how) {
             self.write_burst(&b)?;
         }
         Ok(())
     }
 }
 
-/// Owns the virtual keyboard and types whatever arrives on `rx`, grouped as `TYPE_BATCH` says.
-pub fn typer_forever(rx: Receiver<String>, per_char: Duration, debug: bool) {
-    let batch = Batch::from_env_value(std::env::var("TYPE_BATCH").ok().as_deref());
+/// Owns the virtual keyboard and types whatever arrives on `rx`, paced as `settings` says when
+/// each reply starts (a `typer_config` takes effect from the next reply, [`crate::typer`]).
+pub fn typer_forever(rx: Receiver<String>, settings: Arc<Mutex<Settings>>, debug: bool) {
     loop {
         let mut kb = match VirtualKeyboard::open(VIRTUAL_KEYBOARD_NAME) {
             Ok(kb) => kb,
@@ -493,13 +494,18 @@ pub fn typer_forever(rx: Receiver<String>, per_char: Duration, debug: bool) {
                 continue;
             }
         };
-        println!("[typer] virtual keyboard ready ({batch:?} batches, {per_char:?} pause)");
+        println!("[typer] virtual keyboard ready ({:?})", *settings.lock().unwrap());
         loop {
             let Ok(s) = rx.recv() else { return }; // the bridge is gone
+            let now = *settings.lock().unwrap();
             if debug {
-                println!("[typer] {s:?}");
+                println!("[typer] {s:?} ({now:?})");
             }
-            if let Err(e) = kb.type_text(&s, per_char, batch) {
+            let skipped = untypable(&s);
+            if !skipped.is_empty() {
+                println!("[typer] skipped {skipped:?}: xochitl's text field drops them");
+            }
+            if let Err(e) = kb.type_text(&s, &now) {
                 println!("[typer] write failed ({e}); reopening");
                 break;
             }

@@ -11,6 +11,7 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 | `keytail.py <logfile> <secs>` | persistent key decoder: appends committed and partial lines to a file |
 | `deploy-tablet.sh` | builds the bridge and deploys it + boot files to the tablet, restarts, health-checks |
 | `replay_to.py <ws-url> <recording.jsonl> <secs>` | streams a recording's strokes into any session, capping idle gaps |
+| `typerbench.py [--plan calibrate\|quick] [RUN…]` | typer calibration: a stand-in router on :8590 that the tablet bridge is pointed at (DESKTOP_WS); types a test reply at each speed via `typer_config` + `term` and writes what it sent to `typerbench-expected.txt`. Types into the tablet's focused field: only with the user's go-ahead and a scratch text box. |
 | `termdirect.py` | sends one `term_prompt` (edit the text / `attach` field) and prints the reply |
 | `showcase.py` | the README showcase: eight scripted scenes (pens, a simulated agent, `stroke_delete` animation) played into a Rust router on :8580 and recorded from the simulator (:9902) and a headless browser into `docs/media/showcase.{mp4,gif}`; `--preview DIR` renders each scene's page without a router. Run line in its header. |
 

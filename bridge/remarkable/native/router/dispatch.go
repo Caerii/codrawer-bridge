@@ -10,6 +10,8 @@ package router
 //	stroke_delete          forget the strokes the sender may delete, relay those ids
 //	key, cursor, doc       relay
 //	dock_action            relay (a tap in the tablet's injected dock, sent by the bridge)
+//	typer_config           relay; the latest acknowledgement (ok:true, from the bridge) is kept
+//	                       and replayed to joiners, so every client shows the current speed
 //	clear                  forget the recorded page and the base, relay
 //	page                   becomes the page's base (session.go), relay
 //	doc_update             append to the document log, relay, maybe ask for compaction
@@ -37,6 +39,7 @@ type envelope struct {
 	Rev   int64    `json:"rev"`  // page: the snapshot covers everything up to this time (ms)
 	Doc   string   `json:"doc"`  // page: the open document's id
 	Page  string   `json:"page"` // page: the open page's id
+	OK    *bool    `json:"ok"`   // typer_config: present on the bridge's acknowledgement
 }
 
 // strokeDelete is a stroke_delete re-encoded with only the ids the router accepted, when it
@@ -95,6 +98,13 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 		s.mu.Unlock()
 	case "key", "cursor", "doc", "dock_action":
 		s.mu.Lock()
+		s.broadcastLocked(raw, c)
+		s.mu.Unlock()
+	case "typer_config":
+		s.mu.Lock()
+		if m.OK != nil && *m.OK {
+			s.typer = append([]byte(nil), raw...)
+		}
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()
 	case "clear":

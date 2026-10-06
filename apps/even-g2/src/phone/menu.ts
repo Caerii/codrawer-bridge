@@ -7,6 +7,10 @@
  *   Clear my strokes        takes back every stroke drawn here; both count only strokes drawn
  *                           on this connection, the ones the router lets us delete (phone/draw.ts)
  *   My colour               the colour of the strokes this device draws from now on (remembered)
+ *   Reply typing speed      Careful / Fast / Instant: how fast the tablet types terminal replies
+ *                           into its focused text field (typer.ts). The tick follows the tablet
+ *                           bridge's acknowledgement, not the tap; with no word from the bridge
+ *                           yet, none is ticked and the items say so
  *   Download page as PNG    the whole page at its own resolution (1620 px wide), as the phone
  *                           draws it on the current theme
  *   Copy invite link        this page joined to the same session (phone/invite.ts)
@@ -42,6 +46,7 @@ import { stage } from './screen'
 import { shareOrDownload, stampedName } from './share'
 import { refreshTimelapse, timelapseAction, timelapseEscape, timelapseMenuClosed } from './timelapse'
 import { diagnosticsShown, toggleDiagnostics, toggleTheme } from './toolbar'
+import { readTyperAck, TYPER_SPEED_NOTES, typerRequest, type TyperSetting, type TyperSpeed } from '../typer'
 
 const button = document.getElementById('menuBtn') as HTMLButtonElement
 const menu = document.getElementById('menu') as HTMLDivElement
@@ -100,8 +105,32 @@ function refresh() {
     item(act).title = n === 0 ? none : ''
   }
   ;(item('clear-mine').querySelector('.note') as HTMLSpanElement).textContent = n ? String(n) : ''
+  refreshTyper()
   refreshTimelapse()
   refreshRecorder()
+}
+
+// ── Reply typing speed ────────────────────────────────────────────────────────────────────────
+
+/** The tablet bridge's acknowledged typing speed; null until it has said (typer.ts). */
+let typer: TyperSetting | null = null
+
+/** Tick the acknowledged speed; each note says what the speed does, or that the tablet is silent. */
+function refreshTyper() {
+  for (const b of Array.from(menu.querySelectorAll<HTMLButtonElement>('[data-act="typer"]'))) {
+    const speed = b.dataset.speed as TyperSpeed
+    b.setAttribute('aria-checked', String(typer?.speed === speed))
+    ;(b.querySelector('.note') as HTMLSpanElement).textContent = typer ? TYPER_SPEED_NOTES[speed] : 'no word from the tablet'
+    b.title = typer?.speed === speed ? `${typer.charMs} ms after each write` : ''
+  }
+}
+
+/** The router told us the bridge's setting (its answer, or the router's replay of the latest). */
+function onTyperConfig(m: unknown) {
+  const s = readTyperAck(m)
+  if (!s) return
+  typer = s
+  if (isOpen()) refreshTyper()
 }
 
 // ── The actions ───────────────────────────────────────────────────────────────────────────────
@@ -179,12 +208,20 @@ export function setupMenu() {
     swatches.append(s)
   }
   setupRecorder()
+  // A new connection may reach another router or bridge: forget the old answer, then ask (a
+  // router that kept one replays it right after hello anyway).
+  link.on('hello', () => {
+    typer = null
+    link.send(typerRequest())
+  })
+  link.on('typer_config', onTyperConfig)
 
   button.onclick = () => (isOpen() ? close(true) : open())
   menu.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
     const act = target.closest<HTMLElement>('[data-act]')?.dataset.act
     if (act?.startsWith('tl') || target.closest('#tlBox')) timelapseAction(act ?? '', target)
+    else if (act === 'typer') link.send(typerRequest(target.closest<HTMLElement>('[data-speed]')?.dataset.speed as TyperSpeed)) // ticked when the bridge answers
     else if (act === 'rec') toggleRecording()
     else if (act === 'rec-export') void exportRecording()
     else if (act === 'undo') {

@@ -86,6 +86,14 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                 }
             }
             "key" | "cursor" | "doc" | "dock_action" => sess.lock().unwrap().broadcast(&raw, cid),
+            "typer_config" => {
+                // The bridge's acknowledgement is its current speed: kept for joiners.
+                let mut s = sess.lock().unwrap();
+                if m.ok == Some(true) {
+                    s.typer = Some(raw.clone());
+                }
+                s.broadcast(&raw, cid);
+            }
             "clear" => {
                 let mut s = sess.lock().unwrap();
                 s.clear();

@@ -33,6 +33,9 @@ type session struct {
 	compactWho   *client   // asked for a doc_state, or nil
 	compactFrom  int       // docLog length when it was asked
 	compactAsked time.Time // when it was asked
+	// the bridge's latest typer_config acknowledgement (its reply typing speed), or nil; it is
+	// not ink, so clear keeps it
+	typer []byte
 }
 
 // stroke is one recorded live stroke.

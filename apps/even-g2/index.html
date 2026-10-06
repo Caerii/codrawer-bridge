@@ -42,6 +42,8 @@
       #menu .item svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); }
       #menu .item[role='menuitemcheckbox']::after { content: ''; margin-left: auto; width: 30px; height: 18px; border-radius: 999px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--line); transition: background 0.15s; }
       #menu .item[aria-checked='true']::after { background: var(--accent); }
+      #menu .item[role='menuitemradio']::before { content: ''; width: 14px; height: 14px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--muted); }
+      #menu .item[role='menuitemradio'][aria-checked='true']::before { box-shadow: inset 0 0 0 4px var(--accent); }
       #menu .item[aria-disabled='true'] { color: var(--muted); cursor: default; }
       #menu .note { margin-left: auto; color: var(--muted); font-size: 12px; }
       #menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
@@ -98,6 +100,13 @@
       <hr />
       <div class="label" id="colorLabel">My colour</div>
       <div class="swatches" role="group" aria-labelledby="colorLabel"></div>
+      <hr />
+      <div class="label" id="typerLabel">Reply typing speed</div>
+      <div role="group" aria-labelledby="typerLabel">
+        <button class="item" type="button" role="menuitemradio" aria-checked="false" data-act="typer" data-speed="careful">Careful<span class="note"></span></button>
+        <button class="item" type="button" role="menuitemradio" aria-checked="false" data-act="typer" data-speed="fast">Fast<span class="note"></span></button>
+        <button class="item" type="button" role="menuitemradio" aria-checked="false" data-act="typer" data-speed="instant">Instant<span class="note"></span></button>
+      </div>
       <hr />
       <button class="item" type="button" role="menuitem" data-act="png"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Download page as PNG</button>
       <button class="item" type="button" role="menuitem" data-act="invite"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Copy invite link</span></button>
