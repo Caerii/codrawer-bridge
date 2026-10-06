@@ -124,6 +124,60 @@ function zeroPhase(src: Float64Array, tau: number): Float64Array {
   return out
 }
 
+/**
+ * A pen-up travel longer than this (mm) is a carriage return or a jump across the page, not the
+ * gap between letters or words (a word space is 3–8 mm): the forearm relocates during it.
+ */
+export const RELOCATE_MM = 25
+
+/** How long before touchdown a relocating forearm has arrived, s (it then holds still). */
+const RELOCATE_SETTLE = 0.12
+
+/** The pen-ups during which the forearm relocates: sample indices [lift, land). */
+export function relocations(plan: Trajectory, pens: PenDown[]): [number, number][] {
+  const n = plan.x.length, dt = plan.dt
+  const out: [number, number][] = []
+  for (let k = 1; k < pens.length; k++) {
+    const lift = Math.min(n - 1, Math.max(0, Math.round(pens[k - 1].up / dt)))
+    const land = Math.min(n - 1, Math.max(0, Math.round(pens[k].down / dt)))
+    if (land <= lift + 1) continue
+    if (Math.hypot(plan.x[land] - plan.x[lift], plan.y[land] - plan.y[lift]) > RELOCATE_MM) out.push([lift, land])
+  }
+  return out
+}
+
+/**
+ * The carriage filter, line by line. A zero-phase low-pass over the whole plan would smear a
+ * carriage return over ± the filter's time constant: the forearm would still be travelling back
+ * when the next line starts, and the wrist and fingers, which take the remainder linearly (an
+ * arc about the pivot), would write that line's first letters at a large, changing wrist angle,
+ * skewed by millimetres. A writer instead moves the forearm to the new line while the pen is up
+ * and starts writing with the hand at rest. So: each stretch between relocations is filtered on
+ * its own, and across a relocation the target moves smoothly (smoothstep) from where the last
+ * stretch ended to where the next begins, arriving RELOCATE_SETTLE s before touchdown.
+ */
+function carriageFilter(src: Float64Array, tau: number, moves: [number, number][], dt: number): Float64Array {
+  if (!moves.length) return zeroPhase(src, tau)
+  const out = new Float64Array(src.length)
+  let from = 0
+  const spans: [number, number][] = []
+  for (const [lift, land] of moves) {
+    spans.push([from, lift + 1])
+    from = land
+  }
+  spans.push([from, src.length])
+  for (const [a, b] of spans) if (b > a) out.set(zeroPhase(src.subarray(a, b), tau), a)
+  for (const [lift, land] of moves) {
+    const a = out[lift], b = out[land]
+    const arrive = Math.max(lift + 1, land - Math.round(RELOCATE_SETTLE / dt))
+    for (let i = lift + 1; i < land; i++) {
+      const u = Math.min(1, (i - lift) / (arrive - lift))
+      out[i] = a + (b - a) * u * u * (3 - 2 * u)
+    }
+  }
+  return out
+}
+
 /** Gain of a joint (λ → q) at angular frequency w: ω² / |ω² − w² + 2iζωw|. */
 function jointGain(omega: number, zeta: number, w: number): number {
   return (omega * omega) / Math.hypot(omega * omega - w * w, 2 * zeta * omega * w)
@@ -151,7 +205,9 @@ export function runArm(
   const r0: [number, number] = [mx * G.tipFromPivot[0], G.tipFromPivot[1]]
   const l0 = Math.hypot(r0[0], r0[1])
 
-  // --- the carriage target W*(t): the slow part of the plan, offset from tip to pivot
+  // --- the carriage target W*(t): the slow part of the plan, offset from tip to pivot, line by
+  // line (carriageFilter: the forearm relocates while the pen is up, not into the next line)
+  const moves = relocations(plan, pens)
   let cx: Float64Array
   if (arm.carriageMode === 'word' && pens.length) {
     // hold each word's centre while it is written; glide between words
@@ -169,11 +225,11 @@ export function runArm(
       while (k < pens.length && pens[k].down / dt <= i + 0.15 * PLAN_HZ) cur = centre.get(pens[k++].word) ?? cur
       step[i] = cur.c ? cur.s / cur.c : plan.x[i]
     }
-    cx = zeroPhase(step, 0.12 * PLAN_HZ)
+    cx = carriageFilter(step, 0.12 * PLAN_HZ, moves, dt)
   } else {
-    cx = zeroPhase(plan.x, arm.carriage * PLAN_HZ)
+    cx = carriageFilter(plan.x, arm.carriage * PLAN_HZ, moves, dt)
   }
-  const cy = zeroPhase(plan.y, 0.5 * arm.carriage * PLAN_HZ)
+  const cy = carriageFilter(plan.y, 0.5 * arm.carriage * PLAN_HZ, moves, dt)
 
   // --- the rest pose: pivot under the first point; shoulder fixed relative to it
   const W0: [number, number] = [cx[0] - r0[0], cy[0] - r0[1]]
