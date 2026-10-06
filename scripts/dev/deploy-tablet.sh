@@ -18,7 +18,9 @@ LAN_IP="${CODRAWER_LAN_IP:-192.168.50.2}"
 KEYDIR="${CODRAWER_KEYDIR:-$HOME/.codrawer}"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@$TABLET")
 NATIVE="$ROOT/bridge/remarkable/native"
-VERSION="$(date -u +%Y.%m.%d-%H%M)-$(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet || echo -dirty)"
+# Seconds and a random suffix keep two deploys of the same commit in the same minute from writing
+# into one release folder (it happened: two builds' binaries mixed, and `release verify` failed).
+VERSION="$(date -u +%Y.%m.%d-%H%M%S)-$(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet || echo -dirty)-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
 STAGE="$ROOT/.codrawer/releases/$VERSION"
 
 echo "[deploy] building release $VERSION"
@@ -82,6 +84,22 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 timeout 8 "${SSH[@]}" true || { echo; echo "[deploy] tablet unreachable"; exit 1; }
+
+# One deploy at a time, from any machine or agent: a lock directory on the tablet's /run (tmpfs,
+# so a reboot clears it). mkdir is atomic. A lock older than 15 minutes is a crashed deploy and is
+# taken over; otherwise wait up to 10 minutes for it.
+LOCK=/run/codrawer/deploy.lock
+LOCK_OWNER="$VERSION $(hostname) $$"
+for i in $(seq 1 60); do
+  got=$(timeout 15 "${SSH[@]}" "mkdir -p /run/codrawer; if mkdir $LOCK 2>/dev/null; then echo '$LOCK_OWNER' > $LOCK/owner; echo ok; else
+    age=\$(( \$(date +%s) - \$(stat -c %Y $LOCK) )); if [ \$age -gt 900 ]; then echo '$LOCK_OWNER' > $LOCK/owner; touch $LOCK; echo stale; else cat $LOCK/owner; fi; fi" 2>/dev/null || echo unreachable)
+  case "$got" in ok|stale) break ;; esac
+  [ "$i" = 1 ] && echo "[deploy] waiting: another deploy holds the tablet ($got)"
+  [ "$i" = 60 ] && { echo "[deploy] gave up waiting for the deploy lock ($got)"; exit 1; }
+  sleep 10
+done
+# Release the lock on any exit, but only if it is still ours.
+trap 'timeout 15 "${SSH[@]}" "grep -qx \"$LOCK_OWNER\" $LOCK/owner 2>/dev/null && rm -rf $LOCK" 2>/dev/null || true' EXIT
 
 # keep the tablet awake for the whole deploy (it autosleeps within seconds and drops Wi-Fi)
 timeout 20 "${SSH[@]}" 'echo "codrawer-deploy 300000000000" > /sys/power/wake_lock' 2>/dev/null || true
