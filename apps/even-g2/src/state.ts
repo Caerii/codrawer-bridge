@@ -16,7 +16,7 @@
 import type { EvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { StrokeStore, type RasterOptions } from './strokes'
 import type { PageMode } from './glasses/layout'
-import { ERASE_RADIUS, IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WIDE_FIT, INITIAL_WINDOW, PAGE_ASPECT, PREDICT_ERASE, SHOW_AI } from './config'
+import { ERASE_RADIUS, IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WIDE_FIT, INITIAL_DIAGNOSTICS, INITIAL_WINDOW, PAGE_ASPECT, PREDICT_ERASE, SHOW_AI } from './config'
 
 /**
  * The session's page: every stroke we know of, on its layer (user, peer, ai). Written by the
@@ -102,6 +102,8 @@ export const glasses = {
   pageMode: INITIAL_PAGE_MODE as PageMode,
   /** Wide fit is on (config.ts INITIAL_WIDE_FIT); it shows only in the fit view, see {@link isWide}. */
   wideFit: INITIAL_WIDE_FIT,
+  /** Diagnostics are showing (config.ts INITIAL_DIAGNOSTICS): metrics on the lens, the phone's panel. */
+  diagnostics: INITIAL_DIAGNOSTICS,
   /** One line about the glasses for the phone's Glasses panel. */
   status: 'waiting for the Even bridge…',
 }

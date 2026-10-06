@@ -111,7 +111,7 @@ outside closes it and does nothing else):
   `{"ts": <Unix ms>, "dir": "in"|"out", "msg": {...}}` per line, so a session replays into any router:
   `uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://<router>/ws/<session>
   --in <file>.jsonl --only-t-prefix stroke_ --max-gap-ms 400` (or `scripts/dev/replay_to.py`).
-- **Glasses diagnostics** and **Dark theme** repeat the toolbar's glasses and moon buttons, which
+- **Diagnostics** (off by default: the Glasses panel here and the metrics line on the glasses) and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
 Follow-up, not done: *Undo my last stroke* and *Clear my strokes*. Removing a stroke for everyone

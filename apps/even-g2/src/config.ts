@@ -209,6 +209,14 @@ export const INITIAL_PAGE_MODE: PageMode = ((v) => (v === 'text' || v === 'edit'
 /** Phone theme (`?theme=paper|dark`; remembered on every toggle). */
 export const INITIAL_THEME: 'paper' | 'dark' = cfg('theme', 'paper') === 'dark' ? 'dark' : 'paper'
 
+/**
+ * Diagnostics (`?diag=1`): the glasses' status strip shows the metrics line (ink counts, framing,
+ * per-container round trips and sends) and the phone shows the Glasses panel. Off by default: a
+ * user sees ink and what matters (notices, "reconnecting…"), not developer numbers. Remembered;
+ * toggled from the ⋯ menu and the toolbar's glasses button.
+ */
+export const INITIAL_DIAGNOSTICS = cfg('diag', '0') === '1'
+
 /** Phone view for this load only (`?stage=page|focus|follow`); otherwise it mirrors the glasses. */
 export const STAGE_OVERRIDE = once('stage')
 

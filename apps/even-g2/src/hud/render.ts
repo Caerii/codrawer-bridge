@@ -52,6 +52,15 @@ function metricsLine(): string {
   return `${c.user} user · ${ai} · ${view.mode} · ${conn}${l}${k}${bad}`
 }
 
+/**
+ * The status line a user sees: the metrics line with diagnostics on; otherwise nothing while all
+ * is well, and "reconnecting…" when the router is unreachable.
+ */
+function statusLine(): string {
+  if (glasses.diagnostics) return metricsLine()
+  return link.connected ? '' : 'reconnecting…'
+}
+
 /** The agent's plan, when there is one and the AI layer is shown. */
 function planLine(): string | null {
   return hud.intent && view.showAi !== false ? `AI: ${hud.intent}` : null
@@ -75,9 +84,8 @@ export function renderText(): string {
   const rows = glasses.pageMode === 'text' ? FULL_ROWS : STRIP_ROWS
   if (glasses.pageMode === 'canvas' && !isTyping()) {
     const plan = planLine()
-    const head = plan ?? metricsLine()
-    const foot = plan ? metricsLine() : hud.notice
-    return foot ? `${head}\n${foot}` : head
+    const lines = plan ? [plan, statusLine()] : [statusLine(), hud.notice]
+    return lines.filter(Boolean).join('\n')
   }
 
   // Bottom-up fill: the input line (always, at most two rows), then the completion popup.
@@ -113,7 +121,7 @@ export function renderText(): string {
   // A spare row on top: in the text layout a header (notice, plan or metrics); on the canvas
   // strip, the notice if there is one.
   if (glasses.pageMode === 'text' && budget > 0) {
-    above.unshift(hud.notice || (planLine() ?? metricsLine()))
+    above.unshift(hud.notice || (planLine() ?? statusLine()))
     budget--
   } else if (glasses.pageMode === 'canvas' && hud.notice && budget > 0) {
     above.unshift(hud.notice)

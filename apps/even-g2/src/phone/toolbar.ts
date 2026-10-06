@@ -10,6 +10,7 @@
  * the tap ended a drag of the loupe box.
  */
 import { INITIAL_THEME, remember } from '../config'
+import { dirty, glasses } from '../state'
 import { stage } from './screen'
 import type { Theme } from './stage'
 
@@ -36,20 +37,32 @@ export function toggleTheme() {
   applyTheme(stage.theme === 'paper' ? 'dark' : 'paper')
 }
 
-/** Show or hide the Glasses panel (the glasses button, and the menu's "Glasses diagnostics"). */
-export function toggleDiagnostics() {
-  const on = document.body.classList.toggle('debug')
+/**
+ * Show or hide diagnostics (the glasses button, and the menu's "Diagnostics"): the phone's Glasses
+ * panel and the metrics line on the glasses' status strip (hud/render.ts). Remembered.
+ */
+export function setDiagnostics(on: boolean) {
+  glasses.diagnostics = on
+  document.body.classList.toggle('debug', on)
   ;(document.getElementById('debugBtn') as HTMLButtonElement).setAttribute('aria-pressed', String(on))
+  remember('diag', on ? '1' : '0')
+  dirty.text = true // the status strip changes with it
 }
 
-/** Whether the Glasses panel is showing. */
+/** Flip diagnostics on or off. */
+export function toggleDiagnostics() {
+  setDiagnostics(!glasses.diagnostics)
+}
+
+/** Whether diagnostics are showing. */
 export function diagnosticsShown(): boolean {
-  return document.body.classList.contains('debug')
+  return glasses.diagnostics
 }
 
 /** Wire the toolbar's theme and Glasses-panel buttons and the tap-to-hide on the page. */
 export function setupToolbar() {
   applyTheme(INITIAL_THEME)
+  setDiagnostics(glasses.diagnostics)
   themeBtn.onclick = toggleTheme
   ;(document.getElementById('debugBtn') as HTMLButtonElement).onclick = toggleDiagnostics
   // tap the page to hide the bar (clean projection); tap again to bring it back

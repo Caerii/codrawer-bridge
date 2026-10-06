@@ -13,7 +13,8 @@
  *   Record session          keep every message to and from the router; a red dot in the toolbar
  *                           while on (phone/recorder.ts)
  *   Export recording        what was recorded, as JSONL the replay tools play into any router
- *   Glasses diagnostics     the Glasses panel (also the toolbar's glasses button)
+ *   Diagnostics             off by default: the Glasses panel here and the metrics line on the
+ *                           glasses' status strip (also the toolbar's glasses button)
  *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
  *   Dark theme              paper or dark (also the toolbar's moon/sun button)
  *
