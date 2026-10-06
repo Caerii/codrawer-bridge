@@ -16,8 +16,8 @@ What it shows, act by act (each opened by a title card in the recording):
    ink on the one-colour lens (apps/even-g2/src/strokes.ts), but at the fit view's scale the 1-bit
    render closes the gaps, so in this recording it reads as solid.
 4. Look around: a ring tap switches the glasses from follow to fit and the phone follows it
-   (phone/mirror.ts); the long-press menu's *Wide fit on / off* then spreads the page across the
-   lens' full width as two 288 x 144 tiles (glasses/layout.ts).
+   (phone/mirror.ts); the long-press menu's *View: follow / fit / wide* then moves on to wide
+   fit, the page across the lens' full width as two 288 x 144 tiles (glasses/layout.ts).
 
 Nothing in the two screens is mocked. Ink and keys are ordinary protocol messages (docs/protocol.md)
 sent to a real router over three WebSocket connections (one per participant), the app in the
@@ -575,10 +575,10 @@ async def act_look(tl: Timeline, ring: Ring):
     tl.mark("caption", "ring tap: follow → fit, on the glasses and the phone")
     ring("click")
     await asyncio.sleep(2.6)
-    tl.mark("caption", "long-press menu → Wide fit: the page across the whole lens")
+    tl.mark("caption", "menu → View: follow / fit / wide, on to wide fit: the whole lens")
     ring("context_menu")
     await asyncio.sleep(0.8)
-    for _ in range(6):  # "Wide fit on / off" is the seventh entry (glasses/layout.ts)
+    for _ in range(5):  # "View: follow / fit / wide" is the sixth entry (glasses/layout.ts)
         ring("down")
         await asyncio.sleep(0.2)
     await asyncio.sleep(0.4)
