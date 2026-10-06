@@ -11,6 +11,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+# KEYBOARD_FAST_LINK and friends (keyboard-keeper.sh)
+EnvironmentFile=-/home/root/codrawer/bridge.env
 ExecStart=/bin/sh /home/root/codrawer/current/bt-up.sh
 Restart=always
 RestartSec=30
