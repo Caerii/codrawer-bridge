@@ -16,7 +16,10 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
 ## Layer semantics
 
 - `layer="user"`: user ink (from Paper Pro).
-- `layer="ai"`: AI ghost ink (server→clients). **AI never overwrites user ink**.
+- `layer="peer"`: another participant's ink (a phone, a browser), with its `color` and `author`.
+- `layer="ai"`: AI ghost ink (server→clients). **AI never overwrites user ink**. On the Go and
+  Rust routers, which carry no `ai_stroke_*`, an agent joins as a client and draws with
+  `stroke_*` on `layer:"ai"` (optionally with its own `color` and `author`).
 
 ## Routers
 
@@ -72,6 +75,35 @@ Each point is `[x, y, p, t]`.
 ```
 
 **AI triggering rule**: the server enqueues AI work **only** on `stroke_end` (micro-pauses may be added later), and enforces strict throttling (see `docs/latency_budget.md`).
+
+### `stroke_delete` (client → server → broadcast)
+
+Take strokes back: an undo, "clear my strokes", or an agent replacing a frame of an animation.
+
+```json
+{"t":"stroke_delete","ids":["p_k3j9x0ab_m1x2","ai_frame_41"],"ts":1730000000500}
+```
+
+Fields:
+- `ids`: the strokes to remove (their `stroke_begin` ids).
+- `ts` (optional): ms timestamp.
+
+Rules (the Go and Rust routers, `bridge/remarkable/native/router`, `bridge/remarkable/rust/src/router`):
+- A client may delete only the strokes it began: the owner is the **connection** that sent the
+  `stroke_begin`, so after a reconnect a client no longer owns what it drew before.
+- Exception: strokes on the `ai` layer may be deleted by any client (agent ink is a proposal any
+  participant may take back, ADR 003).
+- Unknown ids are ignored: never seen, already deleted, evicted, cleared, or covered by a `page`
+  snapshot (the tablet's saved page is the tablet's to change; its erases arrive in the next `page`).
+- The router drops the deleted strokes from its replay log, so late joiners never see them, and
+  relays the message to every other client. If it refused or did not know some ids, it relays
+  `{"t":"stroke_delete","ids":[…the accepted ones…],"ts":…}` instead; if none were accepted, nothing.
+- Points that still arrive for a deleted stroke are relayed but not recorded; clients ignore them
+  too (the app keeps the deleted ids until the next `clear`). A new `stroke_begin` with the same
+  id is a new stroke.
+
+Clients apply their own deletes locally before sending (the sender gets no echo). The Python
+router does not handle `stroke_delete` yet.
 
 ### `cursor` (optional, bridge/client → server → broadcast)
 

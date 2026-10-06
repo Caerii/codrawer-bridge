@@ -113,6 +113,36 @@ func (s *session) evictLocked() {
 	}
 }
 
+// deleteLocked forgets the recorded strokes a stroke_delete from `by` may remove and returns
+// their ids, in the order asked. A client may delete only strokes it began (their owner is the
+// connection that sent the stroke_begin), with one exception: strokes on the `ai` layer, which any
+// participant may take back (agent ink is a proposal, ADR 003). Unknown ids (never recorded,
+// already deleted, evicted, cleared, or covered by a `page`) and refused ones are skipped. A
+// deleted stroke leaves the replay log, so late joiners never see it; points still arriving for
+// it are relayed live but not recorded (pointsLocked).
+func (s *session) deleteLocked(ids []string, by *client) []string {
+	var gone []string
+	for _, id := range ids {
+		st := s.strokes[id]
+		if st == nil || st.owner != by && st.layer != "ai" {
+			continue
+		}
+		s.points -= len(st.pts)
+		delete(s.strokes, id)
+		gone = append(gone, id)
+	}
+	if len(gone) > 0 {
+		order := s.order[:0:0]
+		for _, id := range s.order {
+			if s.strokes[id] != nil {
+				order = append(order, id)
+			}
+		}
+		s.order = order
+	}
+	return gone
+}
+
 // resetLocked forgets every recorded stroke (clear). The caller drops the page base too.
 func (s *session) resetLocked() {
 	s.order = nil

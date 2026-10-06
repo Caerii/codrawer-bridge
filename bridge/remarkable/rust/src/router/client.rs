@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};
 
 use super::http::Prefixed;
-use super::messages::{json_msg, Envelope, Term};
+use super::messages::{json_msg, Envelope, StrokeDelete, Term};
 use super::session::Session;
 use super::{PING_EVERY, PONG_WAIT, TERM_STATUS, WRITE_WAIT};
 
@@ -75,6 +75,15 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                 let mut s = sess.lock().unwrap();
                 s.record(&m, &raw, cid);
                 s.broadcast(&raw, cid);
+            }
+            "stroke_delete" => {
+                let mut s = sess.lock().unwrap();
+                let gone = s.delete_strokes(&m.ids, cid);
+                if !gone.is_empty() && gone.len() == m.ids.len() {
+                    s.broadcast(&raw, cid); // every id stood: forward as sent, extra fields intact
+                } else if !gone.is_empty() {
+                    s.broadcast(&json_msg(&StrokeDelete { t: "stroke_delete", ids: &gone, ts: m.ts }), cid);
+                }
             }
             "key" | "cursor" | "doc" => sess.lock().unwrap().broadcast(&raw, cid),
             "clear" => {

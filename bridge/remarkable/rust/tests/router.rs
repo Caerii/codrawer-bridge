@@ -544,3 +544,54 @@ async fn page_turn_drops_other_participants_strokes() {
     let next = tokio::time::timeout(std::time::Duration::from_millis(300), late.next()).await;
     assert!(next.is_err(), "the peer's stroke from page p1 was replayed: {next:?}");
 }
+
+/// Go: TestLateJoinerDoesNotGetDeletedStrokes. The owner's delete reaches everyone and the
+/// stroke leaves the replay; ai-layer ink may be taken back by anyone; unknown ids are dropped.
+#[tokio::test]
+async fn late_joiner_does_not_get_deleted_strokes() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut agent = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_1","layer":"user","ts":1}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_pts","id":"u_1","pts":[[0.1,0.1,0.5,2]]}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_1"}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_2","layer":"user","ts":3}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_2"}"#).await;
+    for _ in 0..5 {
+        read(&mut agent).await;
+    }
+    send(&mut agent, r#"{"t":"stroke_begin","id":"ai_1","layer":"ai","ts":4}"#).await;
+    send(&mut agent, r#"{"t":"stroke_end","id":"ai_1"}"#).await;
+    read(&mut tablet).await;
+    read(&mut tablet).await;
+
+    send(&mut tablet, r#"{"t":"stroke_delete","ids":["u_1","ai_1","nope"],"ts":5}"#).await;
+    let m = read(&mut agent).await;
+    assert!(m["t"] == "stroke_delete" && m["ids"] == serde_json::json!(["u_1", "ai_1"]), "want the accepted ids relayed: {m}");
+
+    let mut late = dial(&srv, "s1").await;
+    let m = read(&mut late).await;
+    assert!(m["t"] == "stroke_begin" && m["id"] == "u_2", "want only u_2 replayed: {m}");
+    let m = read(&mut late).await;
+    assert!(m["t"] == "stroke_end" && m["id"] == "u_2", "want u_2's end: {m}");
+    expect_quiet(&mut late, Duration::from_millis(150)).await;
+}
+
+/// Go: TestNonOwnerCannotDeleteUserInk. Nothing is relayed and the stroke stays in the replay.
+#[tokio::test]
+async fn non_owner_cannot_delete_user_ink() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut peer = dial(&srv, "s1").await;
+    send(&mut tablet, r#"{"t":"stroke_begin","id":"u_1","layer":"user","ts":1}"#).await;
+    send(&mut tablet, r#"{"t":"stroke_end","id":"u_1"}"#).await;
+    read(&mut peer).await;
+    read(&mut peer).await;
+    send(&mut peer, r#"{"t":"stroke_delete","ids":["u_1"],"ts":2}"#).await;
+    send(&mut peer, r#"{"t":"key","key":"a","char":"a"}"#).await; // a marker: the delete was handled before it
+    let m = read(&mut tablet).await;
+    assert_eq!(m["t"], "key", "a refused delete was relayed: {m}");
+    let mut late = dial(&srv, "s1").await;
+    let m = read(&mut late).await;
+    assert!(m["t"] == "stroke_begin" && m["id"] == "u_1", "the refused delete removed u_1 anyway: {m}");
+}

@@ -191,6 +191,29 @@ impl Session {
         }
     }
 
+    /// A `stroke_delete` from client `by`: forgets the recorded strokes it may remove and returns
+    /// their ids, in the order asked. A client may delete only strokes it began ([`Stroke::owner`],
+    /// the connection that sent the stroke_begin), with one exception: strokes on the `ai` layer,
+    /// which any participant may take back (agent ink is a proposal, ADR 003). Unknown ids (never
+    /// recorded, already deleted, evicted, cleared, or covered by a `page`) and refused ones are
+    /// skipped. A deleted stroke leaves the replay log, so late joiners never see it; points still
+    /// arriving for it are relayed live but not recorded ([`Session::record`]). (Go: `deleteLocked`.)
+    pub(super) fn delete_strokes(&mut self, ids: &[String], by: u64) -> Vec<String> {
+        let mut gone = Vec::new();
+        for id in ids {
+            let allowed = self.strokes.get(id).is_some_and(|st| st.owner == by || st.layer == "ai");
+            if let Some(st) = allowed.then(|| self.strokes.remove(id)).flatten() {
+                self.points -= st.n_pts;
+                gone.push(id.clone());
+            }
+        }
+        if !gone.is_empty() {
+            let strokes = &self.strokes;
+            self.order.retain(|id| strokes.contains_key(id));
+        }
+        gone
+    }
+
     /// A `clear`: forgets the base and every recorded stroke. The shared document stays.
     pub(super) fn clear(&mut self) {
         self.page = None;

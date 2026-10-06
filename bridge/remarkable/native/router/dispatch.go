@@ -7,6 +7,7 @@ package router
 // reach the other clients intact. A message is never echoed to its sender.
 //
 //	stroke_begin/pts/end   record for replay, relay
+//	stroke_delete          forget the strokes the sender may delete, relay those ids
 //	key, cursor, doc       relay
 //	clear                  forget the recorded page and the base, relay
 //	page                   becomes the page's base (session.go), relay
@@ -30,10 +31,19 @@ type envelope struct {
 	U   string            `json:"u"`   // doc_update, doc_state: a base64 Yjs update
 	Ts  int64             `json:"ts"`  // stroke_begin: when the stroke started (ms)
 	// stroke_begin: "user" (the tablet's ink), "peer" (another participant), "ai"
-	Layer string `json:"layer"`
-	Rev   int64  `json:"rev"`  // page: the snapshot covers everything up to this time (ms)
-	Doc   string `json:"doc"`  // page: the open document's id
-	Page  string `json:"page"` // page: the open page's id
+	Layer string   `json:"layer"`
+	IDs   []string `json:"ids"`  // stroke_delete: the strokes to remove
+	Rev   int64    `json:"rev"`  // page: the snapshot covers everything up to this time (ms)
+	Doc   string   `json:"doc"`  // page: the open document's id
+	Page  string   `json:"page"` // page: the open page's id
+}
+
+// strokeDelete is a stroke_delete re-encoded with only the ids the router accepted, when it
+// refused or did not know some of those asked for.
+type strokeDelete struct {
+	T   string   `json:"t"`
+	IDs []string `json:"ids"`
+	Ts  int64    `json:"ts,omitempty"`
 }
 
 // termUnavailable answers term_* requests on this router.
@@ -73,6 +83,14 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 		s.mu.Lock()
 		s.recordLocked(m, raw, c)
 		s.broadcastLocked(raw, c)
+		s.mu.Unlock()
+	case "stroke_delete":
+		s.mu.Lock()
+		if gone := s.deleteLocked(m.IDs, c); len(gone) == len(m.IDs) && len(gone) > 0 {
+			s.broadcastLocked(raw, c) // every id stood: forward as sent, extra fields intact
+		} else if len(gone) > 0 {
+			s.broadcastLocked(mustJSON(strokeDelete{"stroke_delete", gone, m.Ts}), c)
+		}
 		s.mu.Unlock()
 	case "key", "cursor", "doc":
 		s.mu.Lock()
