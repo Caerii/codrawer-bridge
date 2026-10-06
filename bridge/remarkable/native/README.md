@@ -124,7 +124,8 @@ All flags have equivalent env vars (env is the default, flags override).
   - `-type-replies` / `TYPE_REPLIES` (default `true`): `term` replies from the router are typed into whatever text field the tablet has focused
   - `TYPE_SPEED` (`careful`, the default; `fast`; `instant`): the starting typing speed, changed at runtime by a `typer_config` message (docs/protocol.md); `TYPE_BATCH=word` still selects `fast`
   - `-type-char-ms` / `TYPE_CHAR_MS` (default `0`, the speed's own: 12 ms, or 40 for instant): pause after each write; `TYPE_BURST` (10) and `TYPE_ENTER_MS` (150) tune instant's burst and the settle after Enter
-  - characters xochitl's text field drops (``^ [ ] { } ` ~``) are left out and logged
+  - keys come from xochitl's own table for its keyboard language (`epaper_keymaps.json`, `InputLocale` in xochitl.conf, `TYPE_KEYMAP` overrides); what it cannot type (``^ [ ] { } ` ~`` under US) is left out, or substituted with `TYPE_SUBSTITUTE=1`, and reported in a `typer_note`
+  - each write waits until the pen is out of range and the screen untouched (`TOUCH_DEVICE`, default auto, `off`), and a reply after pen activity or a pause starts with End
   - registers as `codrawer virtual keyboard`; the prompt echo is skipped, notes/permissions get their own line
 
 - **Debugging**

@@ -10,6 +10,7 @@ package router
 //	stroke_delete          forget the strokes the sender may delete, relay those ids
 //	key, cursor, doc       relay
 //	dock_action            relay (a tap in the tablet's injected dock, sent by the bridge)
+//	typer_note             relay (what a typed reply lost, from the bridge)
 //	typer_config           relay; the latest acknowledgement (ok:true, from the bridge) is kept
 //	                       and replayed to joiners, so every client shows the current speed
 //	clear                  forget the recorded page and the base, relay
@@ -96,7 +97,7 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 			s.broadcastLocked(mustJSON(strokeDelete{"stroke_delete", gone, m.Ts}), c)
 		}
 		s.mu.Unlock()
-	case "key", "cursor", "doc", "dock_action":
+	case "key", "cursor", "doc", "dock_action", "typer_note":
 		s.mu.Lock()
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()

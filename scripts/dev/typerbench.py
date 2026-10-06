@@ -13,10 +13,12 @@ everything it asked to be typed to OUT (default typerbench-expected.txt), run by
 with what arrived: read back from the saved page (rmscene on the page's .rm), a framebuffer grab,
 or the user's eyes.
 
-Characters xochitl is known to drop (``^ [ ] { } ` ~``) are never sent: the bridge leaves them
-out anyway (typer.rs, "What xochitl accepts"). The first runs separate the two explanations for
-keys lost after a leading Enter on 2026-10-06: `enter0` types a leading Enter with no settle,
-`enter150` with the 150 ms settle, and `dash` a line starting with "--" and no leading Enter.
+Characters the US keyboard table cannot type (``^ [ ] { } ` ~``) are never sent: the bridge
+leaves them out anyway and says so in a `typer_note`, which this script prints. The first runs
+check the fixes for the keys lost after a leading Enter on 2026-10-06: `enter0` types a leading
+Enter with no settle, `enter150` with the 150 ms settle, and `dash` a line starting with "--" and
+no leading Enter. Keep the pen away from the screen and the hand off it while a run types: the
+bridge waits until both are clear, which is the point, but it makes a run slower.
 
     uv run python scripts/dev/typerbench.py [--port 8590] [--out FILE] [--plan calibrate|quick] [RUN…]
 
@@ -116,6 +118,8 @@ async def bench(port: int, runs: list[dict], out_path: str) -> None:
             m = json.loads(raw)
             if m.get("t") == "typer_config":
                 await inbox.put(m)
+            elif m.get("t") == "typer_note":
+                print(f"[bench] the bridge left out {m.get('dropped')!r} ({m.get('keymap')} keyboard)")
 
     async with websockets.serve(handler, "0.0.0.0", port):
         print(f"[bench] waiting for the bridge on :{port} (DESKTOP_WS=ws://<this PC>:{port}/ws/bench)")

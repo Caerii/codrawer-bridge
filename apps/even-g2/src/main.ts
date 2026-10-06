@@ -52,6 +52,7 @@ import { setupToolbar, showConnection } from './phone/toolbar'
 import { setupViews } from './phone/views'
 import * as session from './session'
 import { dirty, glasses, view } from './state'
+import { typerNoteText } from './typer'
 
 // ── 1. The phone page ─────────────────────────────────────────────────────────────────────────
 installDevLog() // first, so the console of everything below reaches the desktop in dev builds
@@ -102,6 +103,11 @@ link.on('doc_update', onDocUpdate)
 link.on('doc_compact', onDocCompact)
 link.on('doc', onPlainDoc)
 link.on('term', onTerm)
+link.on('typer_note', (m) => {
+  // what the tablet's typer could not type shows on the glasses' status strip
+  const text = typerNoteText({ t: 'typer_note', ...m })
+  if (text) onTerm({ kind: 'status', text })
+})
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

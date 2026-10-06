@@ -127,7 +127,8 @@ func startPageWatch(cfg BridgeConfig) *pageFeed {
 }
 
 // typerLink connects the typer to the router: replies go to the typer goroutine, typer_config
-// requests change the shared speed and their acknowledgements go out on ctl. A nil *typerLink
+// requests change the shared speed, and their acknowledgements and the typer's typer_notes go
+// out on ctl. A nil *typerLink
 // (TYPE_REPLIES off) ignores everything and announces nothing.
 type typerLink struct {
 	replies chan string
@@ -145,15 +146,16 @@ func startTyper(cfg BridgeConfig, ink *inkLink) *typerLink {
 	if !cfg.TypeReplies {
 		return nil
 	}
-	l := newTyperLink(typerSettingsFromProcess(cfg.TypeCharMs))
+	l := newTyperLink(typerFromProcess(cfg.TypeCharMs))
 	l.ink = ink
-	go typerForever(l.replies, l.shared, cfg.Debug)
+	go typerForever(l.replies, l.shared, l.ctl, cfg.Debug)
+	go touchGateForever(os.Getenv("TOUCH_DEVICE")) // the typer's gate follows the touchscreen
 	ink.setFallback(l.typeKeys)
 	return l
 }
 
-func newTyperLink(s typerSettings) *typerLink {
-	return &typerLink{replies: make(chan string, 1024), shared: &sharedTyper{s: s}, ctl: make(chan []byte, 16)}
+func newTyperLink(shared *sharedTyper) *typerLink {
+	return &typerLink{replies: make(chan string, 1024), shared: shared, ctl: make(chan []byte, 16)}
 }
 
 // typeKeys queues text for the virtual keyboard, dropping it rather than blocking when the typer
@@ -192,7 +194,7 @@ func (l *typerLink) announcement() []byte {
 	if l == nil {
 		return nil
 	}
-	return ackTyper(l.shared.get(), "")
+	return l.shared.ack()
 }
 
 // dockAction applies a dock tap that sets the typing speed (dockRequest); its acknowledgement

@@ -24,11 +24,16 @@ export const TYPER_SPEED_NOTES: Record<TyperSpeed, string> = {
   instant: 'bursts; uncalibrated',
 }
 
-/** The acknowledged setting: the speed, its pause after each write (ms) and instant's burst size. */
+/**
+ * The acknowledged setting: the speed, its pause after each write (ms), instant's burst size,
+ * and the tablet keyboard table with the ASCII it cannot type.
+ */
 export interface TyperSetting {
   speed: TyperSpeed
   charMs: number
   burst: number
+  keymap: string
+  untypeable: string
 }
 
 /** The setting an acknowledgement reports, or null for anything else (a request, a refusal). */
@@ -41,7 +46,23 @@ export function readTyperAck(m: unknown): TyperSetting | null {
     speed: r.speed as TyperSpeed,
     charMs: typeof r.char_ms === 'number' ? r.char_ms : 0,
     burst: typeof r.burst === 'number' ? r.burst : 0,
+    keymap: typeof r.keymap === 'string' ? r.keymap : '',
+    untypeable: typeof r.untypeable === 'string' ? r.untypeable : '',
   }
+}
+
+/**
+ * The status line for a `typer_note`: what a reply typed into the tablet lost, because the
+ * tablet's keyboard language has no key for it (xochitl's US table cannot type `[ ] { } ^ ` ~`).
+ * Null for anything else.
+ */
+export function typerNoteText(m: unknown): string | null {
+  if (!m || typeof m !== 'object') return null
+  const r = m as Record<string, unknown>
+  if (r.t !== 'typer_note' || typeof r.dropped !== 'string' || !r.dropped) return null
+  const shown = Array.from(new Set(Array.from(r.dropped))).join(' ')
+  const n = typeof r.count === 'number' ? r.count : Array.from(r.dropped).length
+  return `tablet could not type ${n} char${n === 1 ? '' : 's'}: ${shown}`
 }
 
 /** The request for a speed (the bridge resets the pause to that speed's own), or a query. */

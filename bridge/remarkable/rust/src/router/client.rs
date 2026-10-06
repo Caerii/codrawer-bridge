@@ -85,7 +85,7 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                     s.broadcast(&json_msg(&StrokeDelete { t: "stroke_delete", ids: &gone, ts: m.ts }), cid);
                 }
             }
-            "key" | "cursor" | "doc" | "dock_action" => sess.lock().unwrap().broadcast(&raw, cid),
+            "key" | "cursor" | "doc" | "dock_action" | "typer_note" => sess.lock().unwrap().broadcast(&raw, cid),
             "typer_config" => {
                 // The bridge's acknowledgement is its current speed: kept for joiners.
                 let mut s = sess.lock().unwrap();

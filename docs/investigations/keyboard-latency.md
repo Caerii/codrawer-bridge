@@ -112,12 +112,16 @@ through a stand-in router as a `term` reply and read back from the saved `.rm` w
 
 - Sent `\n--- careful ---\nThe quick brown fox … 0123456789.\nTHE QUICK BROWN FOX … DOG! @#$%^&*()-_=+[]{};:'",.<>/?|`~ end-careful\n`.
 - Arrived `-he quick brown fox … 0123456789.` / `THE QUICK BROWN FOX … DOG! @#$%&*()-_=+;:'",.<>/?| end-careful`.
-- ``^ [ ] { } ` ~`` never arrive: xochitl's text field produces nothing for those keys, even at
-  `careful`. The typer now leaves them out and logs them.
-- The leading `--- careful ---`, its Enter and the `T` after it were lost except one `-`. Two
-  explanations: (A) xochitl drops keys while it lays out the new paragraph after an Enter, or (B) a
-  leading `--` triggers an autoformat. Until a run separates them, every write that ends with Enter
-  is followed by at least `enter_ms` (150 ms).
+- ``^ [ ] { } ` ~`` never arrive. xochitl's US Type Folio table has no key for them, and five of
+  the PC keys are dead keys there (keyboard-and-text.md § 2.1). The typer now presses keys from
+  xochitl's own table for the tablet's keyboard language and never a dead key. It leaves out what
+  the table cannot type (or substitutes, `TYPE_SUBSTITUTE=1`) and reports it in a `typer_note`.
+- The leading `--- careful ---`, its Enter and the `T` after it were lost except one `-`. The
+  most likely cause is xochitl's guard against accidental typing: it ignores keys while the pen
+  is close or a touch is down (keyboard-and-text.md § 2.2). An autoformat on a leading `--` is
+  ruled out by the binary's rule, which needs a single `-` and a space. The typer now waits until
+  the pen is out of range and the screen untouched for 300 ms, presses End to re-enter text mode
+  after pen activity or a pause, and settles 150 ms after each Enter.
 - Everything else arrived complete and in order.
 
 **Calibration** (`scripts/dev/typerbench.py`, with the user's go-ahead and a scratch text box

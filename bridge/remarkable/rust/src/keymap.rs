@@ -186,6 +186,8 @@ pub fn char_to_key(c: char) -> Option<(u16, bool)> {
 
 /// The keystrokes that type `s` on a US layout: newline → Enter, tab → Tab, typographic dashes
 /// and quotes folded to ASCII, `…` → `...`, anything else the layout can't produce dropped.
+/// The typer no longer presses these: xochitl translates keys with its own tables, so
+/// [`crate::typer::keystrokes`] types from those. This stays as the US-PC reference.
 pub fn text_to_keystrokes(s: &str) -> Vec<(u16, bool)> {
     let mut out = Vec::with_capacity(s.len());
     for r in s.replace("\r\n", "\n").chars() {

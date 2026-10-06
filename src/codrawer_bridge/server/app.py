@@ -710,6 +710,10 @@ async def ws(session_id: str, ws: WebSocket):
                     session.typer_msg = raw
                 await broadcast_raw(session, raw, exclude=ws)
                 continue
+            if t == "typer_note":
+                # What a typed reply lost (characters the tablet's keyboard cannot type).
+                await broadcast_raw(session, raw, exclude=ws)
+                continue
 
             if t == "doc_update":
                 u = msg.get("u")

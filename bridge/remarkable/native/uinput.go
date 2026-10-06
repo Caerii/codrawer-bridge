@@ -103,18 +103,7 @@ func ioctlInt(fd uintptr, req uintptr, val int) error {
 	return nil
 }
 
-// TypeText types s, grouped into writes and paced as how says (typer.go, plan). Newlines
-// become Enter, tabs Tab; see keystrokes for what else is substituted or dropped.
-func (k *VirtualKeyboard) TypeText(s string, how typerSettings) error {
-	for _, b := range plan(s, how) {
-		if err := k.writeBurst(b); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeBurst writes one burst's events in a single write(), then pauses.
+// writeBurst writes one burst's events in a single write(), then pauses (typer.go plans them).
 func (k *VirtualKeyboard) writeBurst(b burst) error {
 	buf := make([]byte, 0, 24*len(b.events))
 	for _, e := range b.events {
@@ -139,9 +128,11 @@ func (k *VirtualKeyboard) Close() error {
 	return k.f.Close()
 }
 
-
-
 // ── text → keystrokes ───────────────────────────────────────────────────────
+//
+// The US-PC mapping below is no longer what the typer presses: xochitl translates keys with its
+// own tables, so typer.go types from those (typerKeystrokes). It stays as the US-PC reference
+// for keys_test.go.
 
 // keystroke is one key to press, with or without Shift.
 type keystroke struct {

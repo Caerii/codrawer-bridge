@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::devices::find_keyboard_device;
 use crate::input::*;
 use crate::keymap::{KeyTranslator, OutKey, VIRTUAL_KEYBOARD_NAME};
-use crate::typer::{plan, untypable, Burst, Settings};
+use crate::typer::{self, Burst};
 
 // ── ioctl encoding (Linux _IOC) ────────────────────────────────────────────
 
@@ -235,6 +235,7 @@ pub fn pen_reader_forever(
     // The machine never blocks, so this only fills if it is wedged; dropping is the lesser evil
     // there, and the SYN_DROPPED-style resync repairs the state.
     let emit = |ev: RawEvent| {
+        typer::gate().pen(ev.etype, ev.code, ev.value); // the typer waits while the pen is near
         let _ = ev_tx.try_send(ev);
     };
     loop {
@@ -473,18 +474,50 @@ impl VirtualKeyboard {
         Ok(())
     }
 
-    /// Types `s`, grouped and paced as `how` says so the UI keeps up ([`crate::typer`]).
-    pub fn type_text(&mut self, s: &str, how: &Settings) -> io::Result<()> {
-        for b in plan(s, how) {
-            self.write_burst(&b)?;
+}
+
+/// Where the typer stands between writes: when it last pressed a key, and the gate's activity
+/// count then, so it knows whether xochitl may have left text mode since ([`typer::prime`]).
+struct Pace {
+    last_key: Instant,
+    activity: u64,
+}
+
+impl Pace {
+    /// Waits until the pen and the hand are off the screen ([`typer::Gate`]), then re-enters text
+    /// mode with End if there was pen or touch activity, or a pause, since the last key.
+    fn ready(&mut self, kb: &mut VirtualKeyboard, debug: bool) -> io::Result<()> {
+        let gate = typer::gate();
+        let mut held = false;
+        loop {
+            let w = gate.wait();
+            if w.is_zero() {
+                break;
+            }
+            if !held && debug {
+                println!("[typer] holding: the pen or a hand is on the screen");
+            }
+            held = true;
+            sleep(w.min(Duration::from_millis(50)));
+        }
+        if gate.activity() != self.activity || self.last_key.elapsed() > Duration::from_millis(typer::PRIME_IDLE_MS as u64) {
+            kb.write_burst(&typer::prime())?;
         }
         Ok(())
     }
+
+    fn typed(&mut self) {
+        self.last_key = Instant::now();
+        self.activity = typer::gate().activity();
+    }
 }
 
-/// Owns the virtual keyboard and types whatever arrives on `rx`, paced as `settings` says when
-/// each reply starts (a `typer_config` takes effect from the next reply, [`crate::typer`]).
-pub fn typer_forever(rx: Receiver<String>, settings: Arc<Mutex<Settings>>, debug: bool) {
+/// Owns the virtual keyboard and types whatever arrives on `rx`, as `shared` says when each reply
+/// starts (a `typer_config` takes effect from the next reply). Before every write it waits for
+/// the gate and primes text mode when needed ([`crate::typer`], facts 2 and 3); characters the
+/// keyboard table cannot type are reported on `notes` as a `typer_note`.
+pub fn typer_forever(rx: Receiver<String>, shared: Arc<typer::Shared>, notes: mpsc::Sender<String>, debug: bool) {
+    let mut pace = Pace { last_key: Instant::now() - Duration::from_secs(60), activity: u64::MAX };
     loop {
         let mut kb = match VirtualKeyboard::open(VIRTUAL_KEYBOARD_NAME) {
             Ok(kb) => kb,
@@ -494,24 +527,70 @@ pub fn typer_forever(rx: Receiver<String>, settings: Arc<Mutex<Settings>>, debug
                 continue;
             }
         };
-        println!("[typer] virtual keyboard ready ({:?})", *settings.lock().unwrap());
-        loop {
+        println!("[typer] virtual keyboard ready ({:?}, keymap {})", shared.now(), shared.keymap.name);
+        'replies: loop {
             let Ok(s) = rx.recv() else { return }; // the bridge is gone
-            let now = *settings.lock().unwrap();
+            let now = shared.now();
             if debug {
                 println!("[typer] {s:?} ({now:?})");
             }
-            let skipped = untypable(&s);
-            if !skipped.is_empty() {
-                println!("[typer] skipped {skipped:?}: xochitl's text field drops them");
+            let (bursts, dropped) = typer::plan(&s, &now, &shared.keymap);
+            if !dropped.is_empty() {
+                println!("[typer] left out {dropped:?}: the {} keyboard cannot type them", shared.keymap.name);
+                let _ = notes.try_send(typer::note(&dropped, &shared.keymap));
             }
-            if let Err(e) = kb.type_text(&s, &now) {
-                println!("[typer] write failed ({e}); reopening");
-                break;
+            for b in &bursts {
+                if let Err(e) = pace.ready(&mut kb, debug).and_then(|_| kb.write_burst(b)) {
+                    println!("[typer] write failed ({e}); reopening");
+                    break 'replies;
+                }
+                pace.typed();
             }
         }
         drop(kb);
         sleep(Duration::from_secs(2));
+    }
+}
+
+/// Follows the touchscreen for the typer's gate ([`typer::Gate::touch`]): read-only, never
+/// grabbed, so xochitl sees every touch as before. `explicit` is a device path, "auto" (the
+/// first device whose name says touch, the Paper Pro's "Elan touch input") or "off".
+pub fn touch_gate_forever(explicit: &str) {
+    if explicit.eq_ignore_ascii_case("off") {
+        return;
+    }
+    loop {
+        let path = if explicit.is_empty() || explicit.eq_ignore_ascii_case("auto") {
+            crate::devices::list_proc_input_devices()
+                .into_iter()
+                .find(|d| !d.virtual_dev && d.name.to_ascii_lowercase().contains("touch"))
+                .and_then(|d| d.handlers.into_iter().find(|h| h.starts_with("event")))
+                .map(|h| format!("/dev/input/{h}"))
+        } else {
+            Some(explicit.to_string())
+        };
+        let Some(path) = path else {
+            println!("[typer] no touchscreen found; the typer waits for the pen only (retrying in 60s)");
+            sleep(Duration::from_secs(60));
+            continue;
+        };
+        match File::open(&path) {
+            Ok(mut f) => {
+                println!("[typer] following touches on {path}");
+                let mut buf = vec![0u8; 64 * EVENT_SIZE];
+                let mut parser = InputParser::new();
+                loop {
+                    match f.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => parser.feed(&buf[..n], |ev| typer::gate().touch(ev.etype, ev.code, ev.value)),
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+            }
+            Err(e) => println!("[typer] touchscreen {path} unavailable ({e})"),
+        }
+        sleep(Duration::from_secs(10));
     }
 }
 

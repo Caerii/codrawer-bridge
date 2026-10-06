@@ -123,6 +123,8 @@ function refreshTyper() {
     ;(b.querySelector('.note') as HTMLSpanElement).textContent = typer ? TYPER_SPEED_NOTES[speed] : 'no word from the tablet'
     b.title = typer?.speed === speed ? `${typer.charMs} ms after each write` : ''
   }
+  const label = menu.querySelector('#typerLabel') as HTMLElement
+  label.title = typer?.untypeable ? `The tablet's ${typer.keymap} keyboard cannot type ${typer.untypeable.split('').join(' ')}` : ''
 }
 
 /** The router told us the bridge's setting (its answer, or the router's replay of the latest). */

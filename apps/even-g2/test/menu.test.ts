@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { inviteUrl, isLoopback } from '../src/phone/invite'
 import { COLOR_NAMES, defaultColorFor, PARTICIPANT_COLORS } from '../src/phone/palette'
-import { readTyperAck, TYPER_SPEED_NOTES, TYPER_SPEEDS, typerRequest } from '../src/typer'
+import { readTyperAck, TYPER_SPEED_NOTES, TYPER_SPEEDS, typerNoteText, typerRequest } from '../src/typer'
 
 test('an invite carries the router and pairing code, and nothing else', () => {
   const url = inviteUrl('http://192.168.1.10:5188/?ws=ws://old&loupe=128x64&view=text#x', 'ws://192.168.1.20:8577/ws/session1', 'ABCD-EFGH')
@@ -38,7 +38,15 @@ test('a participant keeps the same default colour, from the palette', () => {
 })
 
 test('only the bridge acknowledgement sets the reply typing speed', () => {
-  assert.deepEqual(readTyperAck({ t: 'typer_config', speed: 'fast', char_ms: 12, burst: 10, enter_ms: 150, ok: true }), { speed: 'fast', charMs: 12, burst: 10 })
+  assert.deepEqual(readTyperAck({ t: 'typer_config', speed: 'fast', char_ms: 12, burst: 10, enter_ms: 150, keymap: 'UnitedStates', untypeable: '[]^`{}~', ok: true }), {
+    speed: 'fast',
+    charMs: 12,
+    burst: 10,
+    keymap: 'UnitedStates',
+    untypeable: '[]^`{}~',
+  })
+  assert.equal(typerNoteText({ t: 'typer_note', dropped: '[][]', count: 4, keymap: 'UnitedStates' }), 'tablet could not type 4 chars: [ ]')
+  assert.equal(typerNoteText({ t: 'typer_note', dropped: '' }), null)
   assert.equal(readTyperAck({ t: 'typer_config', speed: 'fast' }), null, 'a request is not the setting')
   assert.equal(readTyperAck({ t: 'typer_config', speed: 'careful', ok: false, error: 'x' }), null, 'nor a refusal')
   assert.equal(readTyperAck({ t: 'typer_config', speed: 'warp', ok: true }), null)
