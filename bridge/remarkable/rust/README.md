@@ -298,11 +298,21 @@ Tests: all fifteen Go router tests are ported to `tests/router.rs`, all ten `pen
   real directory, mtime resolution on the tablet's filesystem, and polling while xochitl writes
   are known only from the Go watcher's investigation (docs/investigations/xochitl-pen-data.md).
 
-- **Never run on the Paper Pro.** The aarch64 binary is built but has not been run on the tablet.
-  The following are untested on real hardware: the evdev reader, EVIOCGABS/EVIOCGRAB/EVIOCGKEY, the
-  SYN_DROPPED resync, the wake lock, suspend detection, the device probe, the keyboard reader and
-  uinput typing. The Go versions of the resync, wake lock and suspend check have not run on the
-  tablet either.
+- **Run on the Paper Pro only briefly.** Release 0a729cd ran it for about three minutes under
+  `engine-bench.sh` (2026-10-06, OS 3.29.0.149): it opened `/dev/input/event2`, served the router,
+  watched xochitl's page, created the virtual keyboard and relayed a synthetic stroke load to two
+  other clients without errors. Measured over 90 s idle, then 90 s of synthetic router load (`/proc`
+  and the battery gauge sampled every 2 s, screen and Wi-Fi on):
+
+  | engine | RSS idle / load | CPU idle / load (% of one core) | battery draw idle / load |
+  | --- | --- | --- | --- |
+  | Go | 15.2 / 15.9 MB | 8.5 / 19.7 % | 910 / 1375 mW |
+  | Rust | 1.9 / 2.4 MB | 3.0 / 12.2 % | 1313 / 1266 mW |
+
+  The battery column is dominated by the screen and Wi-Fi and is not ordered by engine, so it
+  shows no difference. No pen was drawn on, so pen input, the SYN_DROPPED resync, the wake lock,
+  suspend detection, keyboard input and uinput typing are still untested on real hardware. The Go
+  versions of the resync, wake lock and suspend check have not run on the tablet either.
 - **The second 2026-10-02 parity pass** (Go 4941e7a pairing code, 2adddd5 host info, d7e1f64
   virtual keyboards, f217c07 hover, afa0287 release) was checked only by `cargo test` on Windows,
   by `clippy --all-targets -D warnings` on the host, x86_64-musl and aarch64-musl targets, by the
