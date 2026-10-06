@@ -1,6 +1,8 @@
 # smart_remarkable: what it does, how, and what codrawer should take from it
 
 Status: investigation (2026-10-02). Read-only study of source; nothing was run on the tablet.
+Parts are stale (Caerii fork state, render-back plan, XOVI-buttons claim): see
+`smart-remarkable-integration.md` §0 (2026-10-06).
 Related: ADR 007 (surface composition), ADR 008 (universal page model),
 `xochitl-pen-data.md` (display buffer, `.rm` timing), `durable-install.md`.
 
