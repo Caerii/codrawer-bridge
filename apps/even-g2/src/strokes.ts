@@ -293,7 +293,7 @@ export class StrokeStore {
   points(id: string, pts: number[][], layerHint: Layer): Box | null {
     let s = this.strokes.get(id)
     if (!s) {
-      if (this.deleted.has(id)) return // deleted mid-stroke: its late points stay deleted
+      if (this.deleted.has(id)) return null // deleted mid-stroke: its late points stay deleted
       this.begin(id, layerHint)
       s = this.strokes.get(id)!
     }
