@@ -25,12 +25,10 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from openai import AsyncOpenAI
-
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.kuzu_driver import KuzuDriver
@@ -38,6 +36,7 @@ from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.nodes import EpisodeType
+from openai import AsyncOpenAI
 
 OLLAMA = "http://127.0.0.1:11434/v1"
 LLM = os.environ.get("CODRAWER_GRAPHITI_LLM", "qwen3:4b")
@@ -102,7 +101,7 @@ async def main(scratch: Path) -> None:
         try:
             res = await g.add_episode(
                 name=name, episode_body=body, source=EpisodeType.text,
-                source_description="codrawer synthetic event", reference_time=datetime.now(timezone.utc),
+                source_description="codrawer synthetic event", reference_time=datetime.now(UTC),
             )
             nodes = [n.name for n in res.nodes]
             edges = [e.fact for e in res.edges]
