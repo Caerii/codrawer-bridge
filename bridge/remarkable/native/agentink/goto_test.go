@@ -53,14 +53,14 @@ func TestGotoOpPagesAndFlash(t *testing.T) {
 
 func TestGotoOpRefusals(t *testing.T) {
 	for in, why := range map[string]string{
-		`{"t":"page","doc":"` + gDoc + `"}`:                          "not a goto",
-		`{"t":"goto","doc":"../../etc"}`:                             "doc must be a uuid",
-		`{"t":"goto","doc":"` + gDoc + `","page":"x"}`:                "page must be",
-		`{"t":"goto","doc":"` + gDoc + `","page":-1}`:                 "page must be",
-		`{"t":"goto","doc":"` + gDoc + `","page":1.5}`:                "page must be",
+		`{"t":"page","doc":"` + gDoc + `"}`:                            "not a goto",
+		`{"t":"goto","doc":"../../etc"}`:                               "doc must be a uuid",
+		`{"t":"goto","doc":"` + gDoc + `","page":"x"}`:                 "page must be",
+		`{"t":"goto","doc":"` + gDoc + `","page":-1}`:                  "page must be",
+		`{"t":"goto","doc":"` + gDoc + `","page":1.5}`:                 "page must be",
 		`{"t":"goto","doc":"` + gDoc + `","region":[0.3,0.1,0.2,0.4]}`: "region must be",
-		`{"t":"goto","doc":"` + gDoc + `","region":[0,0,1]}`:          "region must be",
-		`{"t":"goto","doc":"` + gDoc + `","region":[0,0,1,9]}`:        "off the page",
+		`{"t":"goto","doc":"` + gDoc + `","region":[0,0,1]}`:           "region must be",
+		`{"t":"goto","doc":"` + gDoc + `","region":[0,0,1,9]}`:         "off the page",
 	} {
 		line, got := GotoOp([]byte(in), "g")
 		if line != nil || !strings.Contains(got, why) {
