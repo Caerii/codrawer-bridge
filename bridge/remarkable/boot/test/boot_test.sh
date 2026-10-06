@@ -117,6 +117,7 @@ mkrel() { # mkrel <version> [bad|xovi]
     mkdir -p "$d/xovi"
     echo "xovi.so stand-in" > "$d/xovi/xovi.so"
     echo "codrawer-layer.so stand-in" > "$d/xovi/codrawer-layer.so"
+    echo "dock.qml stand-in" > "$d/xovi/dock.qml"
     printf '#!/bin/sh\necho "tmpfs /etc/systemd/system/xochitl.service.d tmpfs rw 0 0" >> /tmp/fproc/mounts\nsystemctl restart xochitl.service\n' > "$d/xovi/start"
     printf '#!/bin/sh\nsed -i "/xochitl.service.d/d" /tmp/fproc/mounts\nsystemctl restart xochitl.service\n' > "$d/xovi/stock"
   fi
@@ -309,6 +310,23 @@ sh $R/current/boot.sh xovi off > /dev/null
 sh $R/current/boot.sh xovi on > /dev/null
 [ ! -e $R/XOVI_DISABLED ] && xovi_running || { cat /tmp/xovi.log; fail "xovi on: kill switch gone, started"; }
 pass "boot.sh xovi off|on"
+
+# 18b. off never restarts a xochitl younger than SETTLE (the 2026-10-06 reboot); an older one goes
+pid=$(cat /tmp/x/pid)
+echo "1000.00 3000.00" > /tmp/fproc/uptime
+echo "$pid (xochitl) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 20 0 1 0 0 99500 1 2 3" > /tmp/fproc/$pid/stat # 5 s old
+starts=$(cat /tmp/x/starts)
+sh $R/current/boot.sh xovi off > /tmp/out 2>&1 && fail "off went ahead on a 5 s old xochitl"
+xovi_running && [ "$(cat /tmp/x/starts)" = "$starts" ] || fail "a young xochitl was restarted"
+grep -q 'waiting until it is 20s old' /tmp/out || { cat /tmp/out; fail "off says why it waits"; }
+echo "$pid (xochitl) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 20 0 1 0 0 90000 1 2 3" > /tmp/fproc/$pid/stat # 100 s old
+sh $R/current/boot.sh xovi off > /dev/null || fail "off on an old xochitl"
+! xovi_running || fail "off went to stock on an old xochitl"
+rm -f /tmp/fproc/uptime
+sh $R/current/boot.sh xovi on > /dev/null
+xovi_running || fail "on again"
+[ -f $X/exthome/codrawer-layer/dock.qml ] || fail "dock.qml installed into the extension's home"
+pass "xovi off waits for a settled xochitl"
 
 # 19. the release with the payload still verifies (MANIFEST covers xovi/)
 /work/tool verify $R/releases/vx /tmp/pub > /dev/null || fail "payload is covered by the signed manifest"

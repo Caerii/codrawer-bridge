@@ -34,6 +34,14 @@
 #   - An extension is mapped by xochitl, so a running .so must never be overwritten in place:
 #     files are installed by copy-then-rename, and only while XOVI is not running. A new
 #     extension in a release therefore takes effect at the next boot.
+#   - xochitl must not be stopped while it is still starting up. On 2026-10-06 a hand-run XOVI
+#     `start` stopped a stock xochitl 9 s after its start, mid-initialisation; it segfaulted while
+#     shutting down, OnFailure ran rm-emergency.sh, and the tablet rebooted
+#     (docs/investigations/native-multiplayer-layer.md, "Reboot incident"). So every restart this
+#     script causes waits until xochitl's main process is at least SETTLE s old: `boot` through
+#     `settled` (the same PID for SETTLE s), `off` through `wait_old`, which refuses after
+#     SETTLE_MAX. The one exception is the guard's own way back to stock after a failure, when
+#     xochitl is already in trouble. Never run XOVI's `start`/`stock` by hand; use `xovi off|on`.
 #   - Only the extension is shipped (qt-resource-rebuilder is not), so no per-OS hashtable is
 #     needed; the OS gate is xovi-compat.conf, separate from the bridge's compat.conf because
 #     injecting into xochitl is riskier than reading the pen.
@@ -68,6 +76,9 @@ PENDING=$STATE/xovi_pending
 STATUS=$STATE/xovi_status
 X=${CODRAWER_XOVI_HOME:-/home/root/xovi} # xovi's own directory (its scripts hard-code this path)
 PAYLOAD="xovi.so start stock codrawer-layer.so"
+# The extension's own files (its injected QML and which injections to make), when the release has
+# them; they go to the extension's home, exthome/codrawer-layer (main.cpp, "Injected UI").
+EXTRAS="dock.qml inject.conf"
 DROPIN=/etc/systemd/system/xochitl.service.d
 PROC=${CODRAWER_TEST_PROC:-/proc} # tests point this at a fake /proc
 # Guard timing, in seconds: the stability wait before starting, the watch after, the poll step,
@@ -127,10 +138,38 @@ install_payload() {
   put "$REL/xovi/xovi.so" "$X/xovi.so" &&
     put "$REL/xovi/start" "$X/start" &&
     put "$REL/xovi/stock" "$X/stock" &&
-    put "$REL/xovi/codrawer-layer.so" "$X/extensions.d/codrawer-layer.so"
+    put "$REL/xovi/codrawer-layer.so" "$X/extensions.d/codrawer-layer.so" || return 1
+  for f in $EXTRAS; do
+    [ -f "$REL/xovi/$f" ] || continue
+    put "$REL/xovi/$f" "$X/exthome/codrawer-layer/$f" || return 1
+  done
 }
 
 # ── the guard ────────────────────────────────────────────────────────────────────────────────
+
+# age <pid>: seconds since the process started (field 22 of /proc/<pid>/stat, in clock ticks of
+# 1/100 s on this kernel, against /proc/uptime); nothing when it cannot be read.
+age() {
+  st=$(cat "$PROC/$1/stat" 2> /dev/null) || return 0
+  up=$(cut -d' ' -f1 "$PROC/uptime" 2> /dev/null | cut -d. -f1)
+  # after "pid (comm) " the fields start at 3 (state), so starttime is the 20th
+  start=$(echo "${st##*) }" | awk '{print $20}')
+  [ -n "$up" ] && [ -n "$start" ] && echo $((up - start / 100))
+}
+
+# wait_old: wait until xochitl's main process is SETTLE s old (an unknown age counts as old);
+# fail after SETTLE_MAX s.
+wait_old() {
+  waited=0
+  while :; do
+    a=$(age "$(xochitl MainPID)")
+    [ -z "$a" ] || [ "$a" -ge $SETTLE ] && return 0
+    [ $waited -ge $SETTLE_MAX ] && return 1
+    [ $waited = 0 ] && log "xochitl started ${a}s ago; waiting until it is ${SETTLE}s old before restarting it"
+    sleep $STEP
+    waited=$((waited + STEP))
+  done
+}
 
 # settled: xochitl active with one main PID for SETTLE s; fails after SETTLE_MAX s without that.
 settled() {
@@ -245,7 +284,13 @@ off() {
   echo "off by the user ($(now))" > "$KILL"
   rm -f "$PENDING"
   systemctl stop codrawer-xovi.service 2> /dev/null || true
-  if running; then back_to_stock; fi
+  if running; then
+    if ! wait_old; then
+      say "disabled: off by the user, but xochitl kept restarting; left running until the next boot"
+      return 1
+    fi
+    back_to_stock
+  fi
   say "disabled: off by the user"
 }
 
