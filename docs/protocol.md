@@ -321,13 +321,18 @@ A client asks for a reading or a hint, or manages the learner's file:
 - `what`: `proof` (read the page now), `hint` (the next rung of the hint ladder for the current
   proof), `plan` (send the plan and learner summary again), `forget` (delete this learner's file
   on the desktop; the Primer answers with an empty learner), `coach_on` / `coach_off` (consent
-  to, and pause, the practice coach's watching: reading positions and the attempt log).
+  to, and pause, the practice coach's watching: reading positions and the attempt log), `grade`
+  (read the page and mark it up in red pen, below), `clear_marks` (take the last marks back),
+  `mock_start` (start a mock exam; optional `problems`, four lists of three bank ids, and `scale`,
+  a time compression for demos and tests only), `mock_problem` with `n` 1–3 (the problem she is
+  writing now), `mock_grade` (grade now instead of the next morning), `mock_stop`, `mock_status`.
 - `learner`: the learner's chosen name. Identity is per person, not per device, because a family
   shares one tablet and one Even account (ADR 010). Lowercase letters, digits, `-` and `_`, at
   most 32 characters; anything else is folded to that alphabet.
 
-A line typed on the tablet's keyboard that reads `/proof` or `/hint` is the same request (and
-`/coach` asks for the coach view); the Primer assembles lines from `key` messages itself.
+A line typed on the tablet's keyboard that reads `/proof`, `/hint` or `/grade` is the same
+request (`/coach` asks for the coach view; `/mock start`, `/mock grade` and `/p 1`…`/p 3` drive a
+mock exam); the Primer assembles lines from `key` messages itself.
 
 The Primer answers with one message per reading:
 
@@ -373,12 +378,32 @@ Fields:
   each with `why`), `weak` (weak concepts and recurring misconceptions, each with `why`),
   `attempts` (count), `last_reading` (the document she last had open), `nudge` (one short line
   after an attempt, or null).
+  `coach.potd` is the problem of the day (the same all day, with its statement).
+- `markup` (after `grade`): the teacher's marks, drawn as agent ink in the same moment. `layer` is
+  `codrawer: teacher`, `author` `primer:teacher`, `color` `#d03030`; each of `marks[]` has `id`,
+  `kind` (`caret`, `circle`, `underline`, `strike`, `question`, `check`, `comment`, `arrow`,
+  `score`, `summary`), `step`, `finding`, `short` (what is written on the page, at most about
+  eight words, a pointer and never the fix), `long` (the explanation for the phone), `latex` (the
+  step's), `bbox` (normalized) and `strokes` (the ids of its ink). Clients list the marks, explain
+  one when it is tapped, and hide or show them as one layer by author.
+- `mock` (while a mock exam exists): `id`, `status` (`running` | `awaiting_grading` | `graded` |
+  `abandoned`), `phase` (`session` | `break` | `before` | `done`), `session` and `of`, `until`
+  (Unix ms when the phase ends: clients count down themselves), `cursor` (the problem being
+  written), `problems` (the session's three, with statements: the text fallback when agent ink is
+  off), `grade_after` (Unix ms), `fresh_page` (the Primer waits for a fresh page to write the
+  problems), `glance` (the glasses' quiet line), and once graded `report` (`total` of `max` 120,
+  `estimate: true`, and per problem `session`, `n`, `title`, `score`, `band`, `rigor`,
+  `exposition`, `findings`).
 - `proof`, `findings`, `grade` and `move` are absent from an answer to `plan`, `forget` or the
-  coach dock entry.
+  coach dock entry, and from mock updates.
 
-The Primer never draws on the user's layer. When it writes on the page (a suggested problem, and
-later its replies: ADR 009, call and response), its ink is `stroke_*` on the `ai` layer with
-`author: "primer"`, like any agent ink (ADR 003).
+The Primer never draws on the user's layer. When it writes on the page (a suggested problem, a
+mock's problems, the teacher's marks, and later its replies: ADR 009, call and response), its ink
+is `stroke_*` on the `ai` layer like any agent ink (ADR 003), with an `author` (`primer:teacher`
+for marks) and, on `stroke_begin`, `ink_layer`: the named native layer a tablet with native agent
+ink should commit it to (`codrawer: teacher`), so the marks hide and undo as one layer there too.
+The strokes carry real point timestamps; they are sent at that pace and pause while the learner's
+pen is down.
 
 ### `dock_entries` and `dock_query` (agents → the tablet's dock)
 
@@ -391,15 +416,18 @@ until it is the extension's built-in list carries the same ids):
 {"t":"dock_entries","owner":"primer","entries":[
   {"id":"practice_coach","label":"Practice coach · watching","badge":"watching","hint":"What's next, weak spots, today's plan"},
   {"id":"ask_page","label":"Ask about this page","hint":"The Primer reads the proof on this page"},
-  {"id":"ask_selection","label":"Ask about selection","kind":"selection","hint":"The Primer reads the selected ink"}]}
+  {"id":"ask_selection","label":"Ask about selection","kind":"selection","hint":"The Primer reads the selected ink"},
+  {"id":"grade_page","label":"Grade this page","hint":"Teacher's marks in red, on their own layer"},
+  {"id":"grade_selection","label":"Grade selection","kind":"selection","hint":"Teacher's marks on the lassoed proof"}]}
 ```
 
 The desktop router sends the Primer's entries to every joining client when `CODRAWER_PRIMER=1`,
 and again in answer to `{"t":"dock_query"}`. While the practice coach is watching, its entry's
 label says so and `badge` is `"watching"` (ADR 010: the learner always sees that it is on). The
 Primer acts on `dock_action` `practice_coach` (the coach view, and the next problem written onto
-the page as agent ink), `ask_page` (a reading of the page) and `ask_selection` (a reading of the
-strokes inside the lasso's `bbox`). All routers relay the three messages as they are.
+the page as agent ink), `ask_page` (a reading of the page), `ask_selection` (a reading of the
+strokes inside the lasso's `bbox`), `grade_page` and `grade_selection` (the same, marked up in red
+pen). All routers relay the three messages as they are.
 
 ## Compatibility notes
 
