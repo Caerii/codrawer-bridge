@@ -17,6 +17,12 @@ package main
 //     `{"op":"text_insert","id":"tN","text":…}`, inserted the way an input method commits text,
 //     which the uinput keyboard cannot match (it drops the first characters after an Enter and
 //     has no ^ [ ] { } \ ` ~). An `err tN …` answer sends that text to the uinput typer instead.
+//   - bridge → extension: `status <text>`, the line the dock shows under "codrawer status"
+//     (engine, agent ink on or off), sent on connect and whenever it changes.
+//
+// The dock's "Agent ink on/off" (`dock_action` id `agent_ink`) toggles native agent ink at run
+// time. The choice is kept in agentInkStateFile, which then overrides NATIVE_AGENT_INK at the
+// next start, so the user's last word wins over bridge.env.
 //
 // NATIVE_AGENT_INK is off by default (ADR 003: agent ink on the user's own notebook is the
 // user's choice). The connection itself is made whenever INK_SOCKET is not "off", so the dock
@@ -30,6 +36,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +48,9 @@ import (
 // inkLink is what the rest of the bridge sees of the connection: whether text insertion is on
 // offer, and a way to ask for it. A nil *inkLink offers nothing.
 type inkLink struct {
-	textOK   atomic.Bool // the connected extension said text_insert
+	agentOn  atomic.Bool   // forward ai strokes now (NATIVE_AGENT_INK, then the dock's toggle)
+	statusC  chan struct{} // nudges the writer to send the status line again
+	textOK   atomic.Bool   // the connected extension said text_insert
 	textC    chan string
 	fallback atomic.Value // func(string): the uinput typer, for refused inserts
 	pending  sync.Map     // id → text, until the extension answers
@@ -74,6 +83,48 @@ func (l *inkLink) fallBack(text string) {
 	}
 }
 
+// agentInkStateFile keeps the dock's choice across restarts ("1" or "0"); a var for tests.
+var agentInkStateFile = "/home/root/codrawer/state/native_agent_ink"
+
+// engineName is the status line's engine word.
+const engineName = "go"
+
+// statusLine is what the dock shows for "codrawer status".
+func (l *inkLink) statusLine() []byte {
+	on := "off"
+	if l.agentOn.Load() {
+		on = "on"
+	}
+	return []byte(fmt.Sprintf("status codrawer %s bridge: connected, agent ink %s", engineName, on))
+}
+
+// toggleAgentInk flips native agent ink, keeps the choice, and asks for a new status line.
+func (l *inkLink) toggleAgentInk() bool {
+	on := !l.agentOn.Load()
+	l.agentOn.Store(on)
+	v := "0"
+	if on {
+		v = "1"
+	}
+	if err := os.WriteFile(agentInkStateFile, []byte(v+"\n"), 0o644); err != nil {
+		fmt.Printf("[ink] could not keep the agent ink choice: %v\n", err)
+	}
+	select {
+	case l.statusC <- struct{}{}:
+	default:
+	}
+	return on
+}
+
+// initialAgentInk: the dock's last choice if one was kept, else NATIVE_AGENT_INK.
+func initialAgentInk(env bool) bool {
+	b, err := os.ReadFile(agentInkStateFile)
+	if err != nil {
+		return env
+	}
+	return strings.TrimSpace(string(b)) == "1"
+}
+
 // textOp is the socket line for one insert (encoding/json: the text may hold anything).
 func textOp(id, text string) []byte {
 	b, _ := json.Marshal(struct {
@@ -92,24 +143,22 @@ func startAgentInk(cfg BridgeConfig, pages *pageFeed) (func([]byte), <-chan []by
 	if path == "" || strings.EqualFold(path, "off") {
 		return nil, nil, nil
 	}
-	link := &inkLink{textC: make(chan string, 256)}
+	link := &inkLink{textC: make(chan string, 256), statusC: make(chan struct{}, 1)}
+	link.agentOn.Store(initialAgentInk(cfg.NativeAgentInk))
 	actions := make(chan []byte, 64)
-	var msgs chan []byte
-	var hook func([]byte)
-	if cfg.NativeAgentInk {
-		msgs = make(chan []byte, 1024)
-		hook = func(b []byte) {
-			// Only stroke messages on any layer can matter; the forwarder checks the layer.
-			if !bytes.Contains(b, []byte(`"stroke_`)) {
-				return
-			}
-			select {
-			case msgs <- b:
-			default: // the socket is far behind; agent ink is dropped rather than block the reader
-			}
+	msgs := make(chan []byte, 1024)
+	hook := func(b []byte) {
+		// Only stroke messages can matter, and only while agent ink is on; the forwarder checks
+		// the layer.
+		if !link.agentOn.Load() || !bytes.Contains(b, []byte(`"stroke_`)) {
+			return
+		}
+		select {
+		case msgs <- b:
+		default: // the socket is far behind; agent ink is dropped rather than block the reader
 		}
 	}
-	fmt.Printf("[ink] socket %s, native agent ink %v\n", path, cfg.NativeAgentInk)
+	fmt.Printf("[ink] socket %s, native agent ink %v\n", path, link.agentOn.Load())
 	go agentInkForever(path, msgs, actions, link, &pageCache{feed: pages}, cfg.Debug)
 	return hook, actions, link
 }
@@ -170,10 +219,25 @@ func agentInkForever(path string, msgs <-chan []byte, actions chan<- []byte, lin
 
 // serveInk forwards finished ai strokes until the connection fails or the reader ends.
 func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Forwarder, page func() agentink.Page, done <-chan struct{}) {
+	write := func(b []byte) bool {
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		if _, err := conn.Write(append(b, '\n')); err != nil {
+			fmt.Printf("[ink] write: %v\n", err)
+			return false
+		}
+		return true
+	}
+	if !write(link.statusLine()) {
+		return
+	}
 	for {
 		select {
 		case <-done:
 			return
+		case <-link.statusC:
+			if !write(link.statusLine()) {
+				return
+			}
 		case text := <-link.textC:
 			id := fmt.Sprintf("t%d", link.seq.Add(1))
 			link.pending.Store(id, text)
@@ -182,7 +246,10 @@ func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Fo
 				fmt.Printf("[ink] write: %v\n", err)
 				return // the pending text is typed after the reader ends
 			}
-		case m := <-msgs: // nil channel (agent ink off): never ready
+		case m := <-msgs:
+			if !link.agentOn.Load() {
+				continue // switched off while it waited
+			}
 			line, why := fwd.Handle(m, page())
 			if why != "" {
 				fmt.Printf("[ink] not sent: %s\n", why)
@@ -227,6 +294,9 @@ func readInkReplies(conn net.Conn, actions chan<- []byte, link *inkLink, page fu
 				continue
 			}
 			fmt.Printf("[ink] action %s\n", out)
+			if bytes.Contains(line, []byte(`"id":"agent_ink"`)) {
+				fmt.Printf("[ink] native agent ink now %v (dock)\n", link.toggleAgentInk())
+			}
 			select {
 			case actions <- out:
 			default:

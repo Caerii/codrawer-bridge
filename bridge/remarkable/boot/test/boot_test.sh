@@ -27,7 +27,7 @@ xochitl_restart() {
   echo $pid > /tmp/x/pid
   mkdir -p /tmp/fproc/$pid
   if grep -q ' /etc/systemd/system/xochitl.service.d ' /tmp/fproc/mounts 2>/dev/null; then
-    echo "7f00 r-xp /home/root/xovi/xovi.so" > /tmp/fproc/$pid/maps
+    printf '7f00 r-xp /home/root/xovi/xovi.so\n7f10 r-xp /home/root/xovi/extensions.d/codrawer-layer.so\n' > /tmp/fproc/$pid/maps
   else
     echo "7f00 r-xp /usr/lib/libc.so.6" > /tmp/fproc/$pid/maps
   fi
@@ -327,6 +327,24 @@ sh $R/current/boot.sh xovi on > /dev/null
 xovi_running || fail "on again"
 [ -f $X/exthome/codrawer-layer/dock.qml ] || fail "dock.qml installed into the extension's home"
 pass "xovi off waits for a settled xochitl"
+
+# 18c. a QML error from an injection in xochitl's journal turns injections off, not XOVI
+cat > /usr/local/bin/journalctl <<'EOJ'
+#!/bin/sh
+echo "file:///home/root/xovi/exthome/codrawer-layer/dock.qml:42: TypeError: Cannot read property 'width' of null"
+EOJ
+chmod +x /usr/local/bin/journalctl
+sh $R/current/boot.sh xovi off > /dev/null
+sh $R/current/boot.sh xovi on > /dev/null
+xovi_running || fail "XOVI still runs after a QML error"
+grep -q 'dock.qml:42' $R/XOVI_NO_INJECT || fail "XOVI_NO_INJECT written with the error"
+sh $R/current/boot.sh doctor | grep -q '^xovi=running, injections off' || { sh $R/current/boot.sh doctor; fail "doctor: injections off"; }
+rm /usr/local/bin/journalctl
+sh $R/current/boot.sh xovi off > /dev/null
+sh $R/current/boot.sh xovi on > /dev/null
+[ ! -e $R/XOVI_NO_INJECT ] || fail "xovi on clears XOVI_NO_INJECT"
+sh $R/current/boot.sh doctor | grep -q '^xovi=running$' || { sh $R/current/boot.sh doctor; fail "doctor: running, extension mapped"; }
+pass "QML errors turn injections off; the extension is checked in the maps"
 
 # 19. the release with the payload still verifies (MANIFEST covers xovi/)
 /work/tool verify $R/releases/vx /tmp/pub > /dev/null || fail "payload is covered by the signed manifest"

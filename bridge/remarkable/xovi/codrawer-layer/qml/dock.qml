@@ -6,8 +6,11 @@
 // listens to `action(id)` and `opened()`. Selecting an entry emits `action(id)`; the extension
 // sends it to the bridge as a `dock_action`, except `status`, which it answers here.
 //
-// Sizes are in xochitl's scene pixels (the Paper Pro's 1620 x 2160 portrait screen). The button
-// takes the toolbar's width when the toolbar is a column, so it lines up with the buttons above.
+// Sizes are in xochitl's scene pixels (the Paper Pro's 1620 x 2160 portrait screen). On 3.29 the
+// toolbar is a GridLayout ("toolbarLayout") of 112 x 112 ToolLoaders (redo is
+// "editingToolLoader_redoButton"); inject.conf stacks the dock right after redo, so the layout
+// gives it the next cell. `anchorItem` (set by the extension: the item it was stacked after)
+// carries the toolbar's own state: when the toolbar collapses and hides redo, the dock hides too.
 import QtQuick
 import QtQuick.Controls
 
@@ -16,11 +19,15 @@ Item {
     property var entries: []
     property string status: ""
     property string page: ""
+    property var anchorItem: null
     signal action(string id)
     signal opened()
 
-    width: parent ? Math.max(parent.width, 80) : 96
-    height: width
+    implicitWidth: anchorItem ? anchorItem.width : 112
+    implicitHeight: anchorItem ? anchorItem.height : 112
+    width: implicitWidth
+    height: implicitHeight
+    visible: anchorItem ? anchorItem.visible : true
 
     Rectangle {
         id: face

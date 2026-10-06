@@ -1885,6 +1885,50 @@ QString textInsert(const QString &text) {
     return QStringLiteral("ok text_insert %1 via=insert").arg(text.size());
 }
 
+// Route A (docs/investigations/keyboard-and-text.md §1.2-1.3): the page's own text API.
+// When the visible page's root text document is focused (the user has a text cursor on the
+// page: `textDocumentId` set), the text goes in through `SceneController.replaceText(QString)`
+// at that cursor, one call per line with `replaceText("\n")` between, inside
+// begin/endInputMethodTransaction so that a reply is meant to be one undo step. It does not
+// pass xochitl's QML key gate and has no keymap, so every character arrives. Like the layer
+// slots, the effect may land a moment later, so the reply waits (20 ms polls, up to 1.5 s) for
+// `rootDocumentLength` to grow by the text's length and reports what it saw: `ok … via=replace
+// len a->b` when it matches, `ok … via=replace unverified …` when it does not (never retried:
+// the text may be in). No root document, or none focused: nothing is created; route B decides.
+bool textInsertRouteA(const QString &text, std::function<void(const QString &)> reply) {
+    ToolFollow &tf = toolFollow();
+    if (!tf.view || !tf.view->isVisible()) return false;
+    QPointer<QObject> c = tf.view->property("controller").value<QObject *>();
+    if (!c || c->metaObject()->indexOfMethod("replaceText(QString)") < 0) return false;
+    const QVariant docId = c->property("textDocumentId");
+    if (!docId.isValid() || docId.isNull() || docId.toString().isEmpty() || docId.toString() == QLatin1String("0:0")) return false;
+    const QString page = tf.view->property("pageId").toString();
+    const int len0 = c->property("rootDocumentLength").toInt();
+    const int cur0 = c->property("textCursorIndex").toInt();
+    const bool txn = c->metaObject()->indexOfMethod("beginInputMethodTransaction()") >= 0 &&
+                     c->metaObject()->indexOfMethod("endInputMethodTransaction()") >= 0;
+    if (txn) invoke(c, "beginInputMethodTransaction", {});
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i) {
+        if (i > 0) invoke(c, "replaceText", {QStringLiteral("\n")});
+        if (!lines[i].isEmpty()) invoke(c, "replaceText", {lines[i]});
+    }
+    if (txn) invoke(c, "endInputMethodTransaction", {});
+    const int want = len0 + int(text.size());
+    waitFor([c, want] { return !c || c->property("rootDocumentLength").toInt() >= want; }, 1500,
+            [c, len0, cur0, want, text, page, txn, reply](bool) {
+                const int len1 = c ? c->property("rootDocumentLength").toInt() : -1;
+                const int cur1 = c ? c->property("textCursorIndex").toInt() : -1;
+                const bool ok = len1 == want;
+                logLine(QStringLiteral("text: replaceText %1 chars on page %2, txn=%3: length %4 -> %5 (want %6), cursor %7 -> %8%9")
+                            .arg(text.size()).arg(page).arg(txn).arg(len0).arg(len1).arg(want).arg(cur0).arg(cur1)
+                            .arg(ok ? QString() : QStringLiteral(" UNVERIFIED")));
+                reply(QStringLiteral("ok text_insert %1 via=replace%2 len %3->%4")
+                          .arg(text.size()).arg(ok ? QString() : QStringLiteral(" unverified")).arg(len0).arg(len1));
+            });
+    return true;
+}
+
 QString textRead() {
     QString why;
     QQuickItem *it = focusedTextItem(why);
@@ -1896,8 +1940,15 @@ QString textRead() {
     o.insert(QStringLiteral("cursor"), q.value(Qt::ImCursorPosition).toInt());
     o.insert(QStringLiteral("selection"), q.value(Qt::ImCurrentSelection).toString());
     if (it->metaObject()->indexOfProperty("text") >= 0) o.insert(QStringLiteral("text"), it->property("text").toString());
+    if (QObject *c = toolFollow().view ? toolFollow().view->property("controller").value<QObject *>() : nullptr) {
+        o.insert(QStringLiteral("root_length"), c->property("rootDocumentLength").toInt());
+        o.insert(QStringLiteral("root_cursor"), c->property("textCursorIndex").toInt());
+        o.insert(QStringLiteral("root_document"), c->property("textDocumentId").toString());
+    }
     return QStringLiteral("text ") + QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
+
+void setBridgeStatus(const QString &s);  // section "Injected UI"
 
 // One connected client. The fd is closed when the last reference goes (the reader and any
 // commit still holding a reply callback), so a late reply never reaches a reused fd.
@@ -1955,6 +2006,10 @@ void serveInk(const std::shared_ptr<InkClient> &cl) {
             const QByteArray line = buf.left(nl).trimmed();
             buf.remove(0, nl + 1);
             if (line.isEmpty()) continue;
+            if (line.startsWith("status ")) {
+                setBridgeStatus(QString::fromUtf8(line.mid(7)).left(200));
+                continue;
+            }
             if (line.contains("\"op\"")) {
                 // text_insert / text_read (section "Text into the focused text box")
                 const QJsonObject o = QJsonDocument::fromJson(line).object();
@@ -1969,10 +2024,18 @@ void serveInk(const std::shared_ptr<InkClient> &cl) {
                     continue;
                 }
                 QMetaObject::invokeMethod(QCoreApplication::instance(), [cl, op, tid, text] {
-                    const QString r = op == QLatin1String("text_insert") ? textInsert(text) : textRead();
-                    if (r.startsWith(QLatin1String("err "))) logLine(QStringLiteral("text: refused %1: %2").arg(op, r.mid(4)));
-                    const int sp = r.indexOf(QLatin1Char(' '));
-                    cl->reply(r.left(sp) + QLatin1Char(' ') + tid + r.mid(sp));
+                    auto send = [cl, op, tid](const QString &r) {
+                        if (r.startsWith(QLatin1String("err "))) logLine(QStringLiteral("text: refused %1: %2").arg(op, r.mid(4)));
+                        const int sp = r.indexOf(QLatin1Char(' '));
+                        cl->reply(r.left(sp) + QLatin1Char(' ') + tid + r.mid(sp));
+                    };
+                    if (op == QLatin1String("text_read")) {
+                        send(textRead());
+                    } else if (userTouching()) {
+                        send(QStringLiteral("err pen or finger on the page"));  // the write-back guard
+                    } else if (!textInsertRouteA(text, send)) {
+                        send(textInsert(text));  // route B: the focused item, as an input method
+                    }
                 }, Qt::QueuedConnection);
                 continue;
             }
@@ -2039,6 +2102,8 @@ void inkServer() {
 // has saved it.
 
 struct Selection {
+    bool containsStroke = false, containsImage = false;  // the controller's own, read 300 ms after
+    QRectF viewRect;  // `rect` through the tile manager's sceneToViewTransform
     QString page;
     int arg = -1;  // areaSelected's int (logged: which it is, layer or mode, is not yet known)
     QRectF rect;  // as signalled (scene coordinates expected; `xform` and the log tell)
@@ -2055,6 +2120,48 @@ struct SelectionFollow {
 SelectionFollow &selectionFollow() {
     static SelectionFollow sf;
     return sf;
+}
+
+void createSelectionInjections();  // section "Injected UI"
+void cmdTree(const QStringList &w);
+
+// readSelection: the lasso as the controller and the view describe it (guibor's map:
+// selectionContainsStroke/Image, the page rect, the selection handler's geometry). Read-only;
+// the first time in a run it also logs the selection menu's item tree, for placing a button.
+void readSelection(QObject *c) {
+    Selection &s = selectionFollow().last;
+    s.count = c->property("selectionItemCount").toInt();
+    s.containsStroke = c->property("selectionContainsStroke").toBool();
+    s.containsImage = c->property("selectionContainsImage").toBool();
+    ToolFollow &tf = toolFollow();
+    QString pageRect = QStringLiteral("none");
+    if (tf.view) {
+        for (QQuickItem *v = tf.view; v; v = v->parentItem()) {
+            if (v->metaObject()->indexOfProperty("pageBorderRect") >= 0) {
+                pageRect = show(v->property("pageBorderRect")) + QStringLiteral(" on ") + QString::fromLatin1(v->metaObject()->className());
+                break;
+            }
+        }
+        if (pageRect == QLatin1String("none")) {
+            for (QQuickItem *it : allItems()) {
+                if (it->metaObject()->indexOfProperty("pageBorderRect") >= 0 && it->isVisible()) {
+                    pageRect = show(it->property("pageBorderRect")) + QStringLiteral(" on ") + QString::fromLatin1(it->metaObject()->className());
+                    break;
+                }
+            }
+        }
+        QObject *tiles = tf.view->property("tileManager").value<QObject *>();
+        const QVariant tv = tiles ? tiles->property("sceneToViewTransform") : QVariant();
+        if (tv.metaType().id() == QMetaType::QTransform) s.viewRect = tv.value<QTransform>().mapRect(s.rect);
+    }
+    logLine(QStringLiteral("selection: items=%1 stroke=%2 image=%3 rect %4 -> view %5; pageBorderRect %6")
+                .arg(s.count).arg(s.containsStroke).arg(s.containsImage).arg(show(s.rect), show(s.viewRect), pageRect));
+    static bool treeLogged = false;
+    if (!treeLogged) {
+        treeLogged = true;
+        cmdTree({QStringLiteral("tree"), QStringLiteral("match=class:SelectionContextualMenu"), QStringLiteral("depth=3")});
+        cmdTree({QStringLiteral("tree"), QStringLiteral("match=class:SelectionHandler"), QStringLiteral("depth=1")});
+    }
 }
 
 void selectionTick() {
@@ -2075,6 +2182,14 @@ void selectionTick() {
         s.last.atMs = nowMs();
         logLine(QStringLiteral("selection: areaSelected(%1, %2) items=%3 page=%4")
                     .arg(s.last.arg).arg(show(s.last.rect)).arg(s.last.count).arg(s.last.page));
+        // The selection settles in the scene's own job: read it a moment later, and then try the
+        // injections that wait for a selection menu (when=selection).
+        QPointer<QObject> pc(c);
+        QTimer::singleShot(300, QCoreApplication::instance(), [pc] {
+            if (pc) readSelection(pc);
+            createSelectionInjections();
+        });
+        QTimer::singleShot(900, QCoreApplication::instance(), [] { createSelectionInjections(); });
     });
     sf.relay->on(c, Relay::signalNamed(c, "selectionCleared"), [](void **) {
         logLine(QStringLiteral("selection: cleared"));
@@ -2136,6 +2251,8 @@ constexpr const char *kInjectConf = "/home/root/xovi/exthome/codrawer-layer/inje
 struct Injection {
     QString name, match, qml;
     bool after = false;
+    bool onSelection = false;  // when=selection: made right after a lasso, not by the 2 s tick
+    bool inert = false;  // inert=1: taps are logged, never sent (a new button's first rollout)
     QPointer<QQuickItem> item;
     Relay *relay = nullptr;
     int failures = 0;
@@ -2187,8 +2304,36 @@ QVariantList dockEntries() {
             e("ask_page", "Ask about this page"), e("ask_selection", "Ask about selection")};
 }
 
+// The bridge's own status line (`status <text>` on the socket: engine, agent ink on/off), kept
+// while the bridge is connected.
+std::mutex &bridgeStatusMutex() {
+    static std::mutex m;
+    return m;
+}
+QString &bridgeStatus() {
+    static QString s;
+    return s;
+}
+
+void refreshInjected(struct Injection &in);
+
+// From the socket's thread: keep the line, and show it on the next refresh (GUI thread).
+void setBridgeStatus(const QString &line) {
+    {
+        std::lock_guard<std::mutex> lock(bridgeStatusMutex());
+        bridgeStatus() = line;
+    }
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+        for (Injection &in : injections()) refreshInjected(in);
+    }, Qt::QueuedConnection);
+}
+
 QString localStatus() {
     QString s;
+    {
+        std::lock_guard<std::mutex> lock(bridgeStatusMutex());
+        s = bridgeStatus();
+    }
     QFile f(QString::fromLatin1(kStatusFile));  // the bridge's own line, when it writes one
     struct stat st;
     if (stat(kStatusFile, &st) == 0 && time(nullptr) - st.st_mtime < 30 && f.open(QIODevice::ReadOnly)) {
@@ -2199,7 +2344,8 @@ QString localStatus() {
         std::lock_guard<std::mutex> lock(inkClientMutex());
         bridge = !currentInkClient().expired();
     }
-    if (s.isEmpty()) s = bridge ? QStringLiteral("bridge connected") : QStringLiteral("bridge not connected");
+    if (!bridge) s = QStringLiteral("bridge not connected");
+    else if (s.isEmpty()) s = QStringLiteral("bridge connected");
     return s;
 }
 
@@ -2224,6 +2370,10 @@ void dockAction(const QString &source, const QString &id) {
         if (s.page == page && s.atMs > 0) {
             o.insert(QStringLiteral("bbox"), QJsonArray{s.rect.left(), s.rect.top(), s.rect.right(), s.rect.bottom()});
             o.insert(QStringLiteral("items"), s.count);
+            o.insert(QStringLiteral("contains_stroke"), s.containsStroke);
+            o.insert(QStringLiteral("contains_image"), s.containsImage);
+            if (!s.viewRect.isNull())
+                o.insert(QStringLiteral("view_bbox"), QJsonArray{s.viewRect.left(), s.viewRect.top(), s.viewRect.right(), s.viewRect.bottom()});
             o.insert(QStringLiteral("selected_ms_ago"), double(nowMs() - s.atMs));
         }
     }
@@ -2277,15 +2427,22 @@ bool createInjection(Injection &in) {
     }
     item->setParentItem(parent);
     item->setParent(parent);  // owned by xochitl's item: destroyed with it
+    // the item ours stands next to, for the QML to follow its visibility and size
+    if (item->metaObject()->indexOfProperty("anchorItem") >= 0) item->setProperty("anchorItem", QVariant::fromValue<QObject *>(hit));
     comp.completeCreate();
     if (in.after && up) item->stackAfter(hit);
     in.item = item;
     delete in.relay;
     in.relay = new Relay;
     const QString name = in.name;
-    in.relay->on(item, Relay::signalNamed(item, "action"), [name](void **a) {
+    const bool inert = in.inert;
+    in.relay->on(item, Relay::signalNamed(item, "action"), [name, inert](void **a) {
         // QML `signal action(string id)`: the argument arrives as a QString.
         const QString id = *static_cast<QString *>(a[1]);
+        if (inert) {
+            logLine(QStringLiteral("action: %1 tapped %2 (inert: logged only)").arg(name, id));
+            return;
+        }
         QMetaObject::invokeMethod(QCoreApplication::instance(), [name, id] { dockAction(name, id); }, Qt::QueuedConnection);
     });
     in.relay->on(item, Relay::signalNamed(item, "opened"), [name](void **) {
@@ -2307,6 +2464,8 @@ void cmdInject(const QStringList &w) {
     in.match = arg(w, "parent");
     in.qml = arg(w, "qml");
     in.after = arg(w, "after") == QLatin1String("1");
+    in.onSelection = arg(w, "when") == QLatin1String("selection");
+    in.inert = arg(w, "inert") == QLatin1String("1");
     if (in.name.isEmpty() || in.match.isEmpty() || in.qml.isEmpty()) {
         logLine(QStringLiteral("inject: needs name= parent= qml="));
         return;
@@ -2338,9 +2497,31 @@ void cmdUninject(const QStringList &w) {
 
 // The tick's part: re-read inject.conf when it changes, re-create lost items (backing off:
 // 2 s, then 10 s after three failures, then 60 s after ten), refresh entries when dock.json changes.
+// createSelectionInjections: the when=selection injections, tried right after a lasso (the
+// selection menu exists only then). Quiet when nothing matches: the menu may not be up yet.
+void createSelectionInjections() {
+    for (Injection &in : injections()) {
+        if (!in.onSelection || in.item) continue;
+        QString spec = in.match;
+        if (spec.endsWith(QLatin1Char('^'))) spec.chop(1);
+        if (matchItems(spec).isEmpty()) continue;
+        createInjection(in);
+    }
+}
+
+// The injection kill switch: the boot guard writes it when xochitl's journal shows errors from
+// our QML (xovi.sh); the extension then makes no injection at all, while ink and text go on.
+constexpr const char *kNoInject = "/home/root/codrawer/XOVI_NO_INJECT";
+
 void injectTick() {
     static qint64 confMtime = -1, dockMtime = -1;
+    static bool noInjectLogged = false;
     struct stat st;
+    if (stat(kNoInject, &st) == 0) {
+        if (!noInjectLogged) logLine(QStringLiteral("inject: %1 present; no injections").arg(QString::fromLatin1(kNoInject)));
+        noInjectLogged = true;
+        return;
+    }
     const qint64 cm = stat(kInjectConf, &st) == 0 ? qint64(st.st_mtime) : 0;
     if (cm != confMtime) {
         confMtime = cm;
@@ -2356,7 +2537,7 @@ void injectTick() {
     }
     const qint64 now = nowMs();
     for (Injection &in : injections()) {
-        if (in.item || now < in.nextTry) continue;
+        if (in.item || in.onSelection || now < in.nextTry) continue;
         if (createInjection(in)) {
             in.failures = 0;
         } else {
@@ -2368,6 +2549,38 @@ void injectTick() {
     if (dm != dockMtime) {
         dockMtime = dm;
         for (Injection &in : injections()) refreshInjected(in);
+    }
+}
+
+// textprobe page=<uuid>: read-only. The text API's state on the page (the types and values of
+// textDocumentId, rootDocumentLength, textCursorIndex, hasRootDocument, textParagraphStyle) and
+// the signatures of the controller's text and image members (replaceText, pasteText,
+// cycleParagraphStyle, setTextStyle, begin/endInputMethodTransaction, insertImage*), so that
+// route A and a later image_insert rest on this build's real signatures.
+void cmdTextProbe(const QStringList &w) {
+    OpenPage p;
+    if (!findOpenPage(arg(w, "page"), p)) return;
+    QObject *c = p.controller;
+    for (const char *prop : {"textDocumentId", "rootDocumentLength", "textCursorIndex", "hasRootDocument",
+                             "textParagraphStyle", "textStyles", "hasTextSelection", "textModeEnabled"}) {
+        if (c->metaObject()->indexOfProperty(prop) < 0) {
+            logLine(QStringLiteral("textprobe: %1 <none>").arg(QString::fromLatin1(prop)));
+            continue;
+        }
+        const QVariant v = c->property(prop);
+        logLine(QStringLiteral("textprobe: %1 type=%2 value=%3 null=%4")
+                    .arg(QString::fromLatin1(prop), QString::fromLatin1(v.metaType().name()), show(v)).arg(v.isNull()));
+    }
+    const QMetaObject *mo = c->metaObject();
+    for (int i = 0; i < mo->methodCount(); ++i) {
+        const QByteArray sig = mo->method(i).methodSignature();
+        for (const char *k : {"replaceText", "pasteText", "ParagraphStyle", "TextStyle", "InputMethodTransaction",
+                              "insertImage", "RootDocument", "setCursorIndex", "moveCursor"}) {
+            if (sig.contains(k)) {
+                logLine(QStringLiteral("textprobe: method #%1 %2 %3").arg(i).arg(QString::fromLatin1(mo->method(i).typeName()), QString::fromLatin1(sig)));
+                break;
+            }
+        }
     }
 }
 
@@ -2466,6 +2679,7 @@ void runCommand(const QString &text) {
         else if (c == QLatin1String("save")) cmdSave(w);
         else if (c == QLatin1String("dumpscene")) cmdDumpScene(w);
         else if (c == QLatin1String("tree")) cmdTree(w);
+        else if (c == QLatin1String("textprobe")) cmdTextProbe(w);
         else if (c == QLatin1String("xform")) cmdXform(w);
         else if (c == QLatin1String("inject")) cmdInject(w);
         else if (c == QLatin1String("uninject")) cmdUninject(w);

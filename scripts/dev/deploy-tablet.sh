@@ -69,7 +69,8 @@ else
   cp "$XOVI_DIR/xovi.so" "$XOVI_DIR/start" "$XOVI_DIR/stock" "$STAGE/xovi/"
   cp "$ROOT/bridge/remarkable/xovi/codrawer-layer/out/codrawer-layer.so" "$STAGE/xovi/"
   # the extension's own files: the injected dock and which injections to make (xovi.sh EXTRAS)
-  cp "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/dock.qml" "$ROOT/bridge/remarkable/xovi/codrawer-layer/inject.conf" "$STAGE/xovi/"
+  cp "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/dock.qml" "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/selection-ask.qml" \
+    "$ROOT/bridge/remarkable/xovi/codrawer-layer/inject.conf" "$STAGE/xovi/"
   echo "[deploy] XOVI payload: codrawer-layer.so $(sha256sum "$STAGE/xovi/codrawer-layer.so" | cut -c1-12)…"
 fi
 if [ ! -f "$KEYDIR/release.key" ]; then
