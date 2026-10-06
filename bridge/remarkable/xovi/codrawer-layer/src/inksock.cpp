@@ -3,6 +3,7 @@
 
 #include "ink.h"
 #include "ink_protocol.h"
+#include "live.h"
 #include "log.h"
 #include "navigate.h"
 #include "paths.h"
@@ -209,6 +210,11 @@ void handleTextOp(const std::shared_ptr<SocketClient> &cl, const QByteArray &lin
         handleGotoOp(cl, o, tid);
         return;
     }
+    if (op == QLatin1String("live") || op == QLatin1String("live_end") || op == QLatin1String("overlay")) {
+        // the live overlay (live.h): no reply, a stream of these may come per stroke
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [o] { liveOp(o); }, Qt::QueuedConnection);
+        return;
+    }
     const QString text = o.value(QStringLiteral("text")).toString();
     if ((op != QLatin1String("text_insert") && op != QLatin1String("text_read")) ||
         (op == QLatin1String("text_insert") && (text.isEmpty() || text.size() > kMaxTextInsert))) {
@@ -266,6 +272,7 @@ void serveInk(const std::shared_ptr<SocketClient> &cl) {
             job.done = [cl, id](const QString &r) {
                 const int sp = r.indexOf(QLatin1Char(' '));
                 cl->reply(sp < 0 ? r + QLatin1Char(' ') + id : r.left(sp) + QLatin1Char(' ') + id + r.mid(sp));
+                liveCommitted(id);  // the overlay's live copy of this stroke can go (live.h)
             };
             QMetaObject::invokeMethod(QCoreApplication::instance(), [job]() mutable { enqueueInk(std::move(job)); },
                                       Qt::QueuedConnection);

@@ -43,6 +43,11 @@ std::function<void()> &userGestureHook() {
     return h;
 }
 
+std::vector<std::function<void(bool)>> &penListeners() {
+    static std::vector<std::function<void(bool)>> l;
+    return l;
+}
+
 // Line::Tool values (the `Line` gadget's enum on this build, logged by `dump`) as protocol words.
 const char *toolWord(int tool) {
     switch (tool) {
@@ -108,8 +113,12 @@ void followPen(QObject *pen, QQuickItem *view) {
         if (userGestureHook()) userGestureHook()();
         toolFollow().penDown = true;
         toolFollow().penDownSince = nowMs();
+        for (auto &l : penListeners()) l(true);
     });
-    tf.relay->on(pen, Relay::signalNamed(pen, "gestureEnded"), [](void **) { toolFollow().penDown = false; });
+    tf.relay->on(pen, Relay::signalNamed(pen, "gestureEnded"), [](void **) {
+        toolFollow().penDown = false;
+        for (auto &l : penListeners()) l(false);
+    });
     tf.relay->on(pen, Relay::signalNamed(pen, "destroyed"), [](void **) {
         QMetaObject::invokeMethod(QCoreApplication::instance(), [] { forgetPen("destroyed"); toolChanged(); }, Qt::QueuedConnection);
     });
@@ -140,6 +149,8 @@ void toolTick() {
 void addTickHook(std::function<void()> fn) { tickHooks().push_back(std::move(fn)); }
 
 void setUserGestureHook(std::function<void()> fn) { userGestureHook() = std::move(fn); }
+
+void addPenListener(std::function<void(bool)> fn) { penListeners().push_back(std::move(fn)); }
 
 void startToolFollow() {
     auto *t = new QTimer(QCoreApplication::instance());

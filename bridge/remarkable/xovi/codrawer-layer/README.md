@@ -31,24 +31,25 @@ on, the data flow, the threading). Read them in this order:
 
 | # | module | lines | what it is |
 | --- | --- | --- | --- |
-| 1 | `src/entry.cpp` | 102 | `_xovi_construct`, the extension's thread, and the wiring of the modules (hooks) |
+| 1 | `src/entry.cpp` | 109 | `_xovi_construct`, the extension's thread, and the wiring of the modules (hooks) |
 | 2 | `src/log.{h,cpp}`, `src/paths.h` | 146 | one stamped log line per fact; every file and socket path |
 | 3 | `src/qtmeta.{h,cpp}` | 303 | meta-calls by name (`invoke`), signals into functions (`Relay`), `waitFor` |
 | 4 | `src/scene.{h,cpp}` | 347 | the item tree, the visible page (`findOpenPage`), layers, selectors, `tree` |
 | 5 | `src/line_layout.h` *(pure)*, `src/line.{h,cpp}` | 323 | xochitl's `Line` bytes; building one from our points, reading one back |
 | 6 | `src/ink.{h,cpp}` | 370 | the commit chain: our layer, `addDrawingLine`, the user's layer back; the queue |
-| 7 | `src/toolfollow.{h,cpp}` | 258 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
+| 7 | `src/toolfollow.{h,cpp}` | 273 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
 | 8 | `src/text.{h,cpp}` | 204 | text into the focused text box (route A `replaceText`, route B input method) |
-| 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 514 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, goto, status, actions |
+| 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 521 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, goto, status, actions |
 | 10 | `src/selection.{h,cpp}` | 171 | the last lasso selection (`areaSelected`) |
 | 11 | `src/goto_req.h` *(pure)*, `src/navigate.{h,cpp}` | 491 | "take me there": open a document by id, turn to a page, flash a region; folders; offers |
-| 12 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 438 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
-| 13 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
-| 14 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 140 | `grab`: the display buffer copied out of xochitl's memory |
-| 15 | `src/autoinput.{h,cpp}` | 258 | synthesized taps and swipes behind the deny list; navigation; text |
-| 16 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
-| 17 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 242 | the command file `/tmp/codrawer-layer/cmd` |
-| 18 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
+| 12 | `src/live.{h,cpp}`, `qml/live.qml` | 234 + 555 | agent ink drawn as it streams in (Pen region), removed at commit; the "thinking" animation |
+| 13 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 439 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
+| 14 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
+| 15 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 140 | `grab`: the display buffer copied out of xochitl's memory |
+| 16 | `src/autoinput.{h,cpp}` | 258 | synthesized taps and swipes behind the deny list; navigation; text |
+| 17 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
+| 18 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 242 | the command file `/tmp/codrawer-layer/cmd` |
+| 19 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
 
 What each module uses (besides `log`, `paths` and `qtmeta`, which nearly all use); the graph has
 no cycle:
@@ -62,7 +63,8 @@ toolfollow <- scene
 text       <- toolfollow
 ink        <- line, scene, toolfollow, ink_protocol
 navigate   <- scene, toolfollow, goto_req
-inksock    <- ink, text, navigate, ink_protocol
+live       <- toolfollow
+inksock    <- ink, text, navigate, live, ink_protocol
 selection  <- scene, toolfollow
 autostate  <- scene, toolfollow
 inject     <- inksock, selection, autostate, navigate, inject_conf
@@ -176,7 +178,16 @@ object per line:
   for the user's own tap elsewhere) navigates; anything else is an offer, "Go to …?", first in the
   dock with a dot on its button, carried out only when the user taps it. Answer: `ok <id> goto …`,
   `ok <id> goto_offer` or `err <id> <why>`.
-- **Actions** (extension → bridge): `{"t":"dock_action",…}` from the dock and the selection.
+- **Live ink and thinking** (`src/live.h`, `qml/live.qml`): `{"op":"live","id","page","argb",
+  "width","pts":[[x,y,p,t],…]}` (an ai stroke's new points as they stream in),
+  `{"op":"live_end","id","committed"}`, `{"op":"overlay","id","kind":"thinking"|"clear","state",
+  "bbox","style"}` (from the router's `agent_status`). The overlay plays strokes at the speed they
+  were written in an e-paper Pen region, removes each once its native line is committed, and
+  plays a small "thinking" animation (styles `pen`, `drop`, `glyph`) that hands off into the
+  answer's first stroke. Never saved; paused while the pen is down. No replies.
+- **Actions** (extension → bridge): `{"t":"dock_action",…}` from the dock and the selection
+  menu's Ask (`qml/selection-ask.qml`: after the menu's delete button, shown when the selection
+  holds strokes; it sends what the dock's "Ask about selection" sends, with source `selection`).
 
 ## The dock (`qml/dock.qml`)
 

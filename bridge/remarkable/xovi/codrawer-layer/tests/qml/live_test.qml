@@ -1,0 +1,126 @@
+// Host test of qml/live.qml (run by qmltest.sh, offscreen): for each thinking style, a short
+// scene (thinking beside a selection, then an answer stroke streamed in with timestamps, the
+// hand-off, the stroke's end and removal), checking the overlay's behaviour, and, with
+// `--capture=<dir>` among the arguments, saving each frame as <dir>/<style>-NNN.png for a preview
+// (qmltest.sh --preview turns them into GIFs). Prints `live_test: PASS (<native|fallback>)` or
+// `live_test: FAIL …`.
+import QtQuick
+
+Item {
+    id: top
+    width: 1620
+    height: 2160
+
+    property var failures: []
+    function check(ok, what) { if (!ok) failures.push(what); }
+
+    property string captureDir: {
+        const args = Qt.application.arguments;
+        for (let i = 0; i < args.length; ++i) if (args[i].indexOf("--capture=") === 0) return args[i].substring(10);
+        return "";
+    }
+
+    property var notes: []
+    property var styles: ["pen", "drop", "glyph"]
+    property int styleIndex: 0
+    property int tick: 0
+    property var live: null
+    property var answer: []
+    property int framesAtPause: -1
+
+    function find(item, name) {
+        if (item.objectName === name) return item;
+        for (let i = 0; i < item.children.length; ++i) {
+            const f = find(item.children[i], name);
+            if (f) return f;
+        }
+        return null;
+    }
+
+    // An answer's first stroke: a looping cursive "e" then a tail, 40 points, 25 ms apart.
+    function answerStroke(x, y, t0) {
+        const pts = [];
+        for (let i = 0; i < 40; ++i) {
+            const th = i / 39 * 2.6 * Math.PI;
+            pts.push([x + i * 2.2 + 14 * Math.cos(th + Math.PI), y - 12 * Math.sin(th), 0.6, t0 + i * 25]);
+        }
+        return pts;
+    }
+
+    Component {
+        id: liveComponent
+        Loader { anchors.fill: parent; source: Qt.resolvedUrl("../../qml/live.qml") }
+    }
+    property var loader: null
+
+    function startStyle() {
+        if (loader) loader.destroy();
+        loader = liveComponent.createObject(stage);
+        live = loader.item;
+        if (!live) return;
+        live.note.connect(function(t) { top.notes.push(t); });
+        tick = 0;
+        // the selection: a 200 x 160 box at (500, 600) view px
+        live.thinkStart(500, 600, 200, 160, styles[styleIndex]);
+    }
+
+    Item { id: stage; anchors.fill: parent }
+
+    Component.onCompleted: startStyle()
+
+    Timer {
+        interval: 100
+        repeat: true
+        running: true
+        onTriggered: {
+            const style = top.styles[top.styleIndex];
+            const L = top.live;
+            if (!L) { top.check(false, "live.qml did not load"); return top.finish(); }
+            top.tick += 1;
+            const t = top.tick;
+            if (t === 20) {
+                top.check(L.think !== null && L.think.frames > 10, style + ": thinking draws frames");
+                top.check(L.think && L.think.rect && (L.think.rect.x1 - L.think.rect.x0) < 200, style + ": thinking stays small");
+                top.framesAtPause = L.think ? L.think.frames : -1;
+                L.paused = true;
+            }
+            if (t === 23) {
+                top.check(L.think && L.think.frames === top.framesAtPause, style + ": nothing moves while paused");
+                L.paused = false;
+            }
+            if (t === 30) {
+                L.thinkClear(560, 880);  // the agent says "writing" there; the first stroke follows
+                top.answer = top.answerStroke(560, 900, Date.now());
+                L.liveAdd("a1", top.answer.slice(0, 15), 4, "#1f6fe0");
+                top.check(L.think && L.think.handoff !== null, style + ": the first live stroke starts the hand-off");
+            }
+            if (t === 32) L.liveAdd("a1", top.answer.slice(15, 40), 4, "#1f6fe0");
+            if (t === 33) L.liveEnd("a1");
+            if (t === 52) {
+                top.check(L.think === null, style + ": thinking ended after the hand-off");
+                const s = L.strokes["a1"];
+                top.check(s && s.idx === s.pts.length - 1, style + ": the stroke played to its end");
+                L.liveRemove("a1");
+                top.check(L.strokes["a1"] === undefined, style + ": removed after the commit");
+            }
+            if (top.captureDir !== "" && t <= 55) {
+                const canvas = top.find(L, "codrawer-live-canvas");
+                const path = top.captureDir + "/" + style + "-" + ("00" + t).slice(-3) + ".png";
+                canvas.grabToImage(function(r) { r.saveToFile(path); });
+            }
+            if (t === 58) {
+                top.styleIndex += 1;
+                if (top.styleIndex >= top.styles.length) return top.finish();
+                top.startStyle();
+            }
+        }
+    }
+
+    function finish() {
+        const mode = live && live.penRegion ? "native" : "fallback";
+        check(notes.some(function(n) { return n.indexOf("hand-off") >= 0; }), "notes report the hand-off");
+        if (failures.length) console.log("live_test: FAIL " + mode + ": " + failures.join("; "));
+        else console.log("live_test: PASS (" + mode + ") notes: " + notes.length);
+        Qt.quit();
+    }
+}

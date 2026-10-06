@@ -98,7 +98,7 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 		}
 		s.mu.Unlock()
 	case "key", "cursor", "doc", "typer_note",
-		"primer", "primer_request", "dock_action", "dock_entries", "dock_query", "goto", // as sent (ADR 010; goto: protocol.md)
+		"primer", "primer_request", "dock_action", "dock_entries", "dock_query", "goto", "agent_status", // as sent (ADR 010; protocol.md)
 		"mark_seen", "mark_ask", "mark_define", "mark_invoke", "mark_feedback", "mark_query", "marks": // personal marks (protocol.md)
 		s.mu.Lock()
 		s.broadcastLocked(raw, c)
