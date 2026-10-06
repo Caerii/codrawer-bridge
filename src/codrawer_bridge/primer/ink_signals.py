@@ -107,6 +107,7 @@ class InkLog:
         self.pen_down: set[str] = set()
         self.ink_version = 0  # bumps on every change to user ink
         self._page_ids: set[str] = set()  # strokes that came from the latest `page` snapshot
+        self.page_key = ""  # "<doc>/<page>" of the page on screen, from `page` messages
 
     def observe(self, msg: dict, arrival_ms: float | None = None) -> bool:
         t = msg.get("t")
@@ -169,8 +170,13 @@ class InkLog:
             self.ink_version += 1
             return True
         if t == "page":
-            # The tablet's saved page replaces earlier snapshot strokes; live strokes stay.
+            # The tablet's saved page replaces earlier snapshot strokes; live strokes stay, unless
+            # this is a different page or document: then the view starts over, as clients do.
             # Ids are kept as the page gives them, so clients can highlight the same strokes.
+            key = f"{msg.get('doc', '')}/{msg.get('page', '')}"
+            if self.page_key and key != self.page_key:
+                self.strokes.clear()
+            self.page_key = key
             for sid in self._page_ids:
                 self.strokes.pop(sid, None)
             self._page_ids = set()

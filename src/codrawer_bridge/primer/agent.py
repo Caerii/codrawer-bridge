@@ -31,15 +31,18 @@ the file. The coach logs only with consent (coach.py).
 
 from __future__ import annotations
 
+# ruff: noqa: E501  (the learner-facing messages read better unwrapped)
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import assess, check, coach, latex, policy
+from . import mock as mockmod
 from .ink_signals import InkLog, InkStroke, LineSignals, LullDetector, line_features, segment_lines
 from .learner import Learner, LearnerStore, safe_name
-from .practice import BANK, plan
+from .practice import BANK, plan, problem_of_the_day
 from .proofdoc import ProofDoc
 from .recognize import OfflineRecognizer, RecognitionError, make_recognizer
 
@@ -86,6 +89,13 @@ class PrimerAgent:
         self._line = ""  # keyboard line being typed (for /proof, /hint)
         self._seq = 0
         self._busy = asyncio.Lock()
+        # Mock-exam mode (mock.py): the learner's running or ungraded mock, resumed from its file.
+        self.mocks = mockmod.MockStore(self.store.dir)
+        self.mock: mockmod.Mock | None = None
+        self._mock_phase: tuple | None = None
+        self._mock_saved = 0.0
+        self.ink_enabled = os.environ.get("CODRAWER_PRIMER_INK", "") in ("1", "true", "yes", "on")
+        self._load_mock()
 
     # ── Input ────────────────────────────────────────────────────────────────────────────────
 
@@ -98,6 +108,8 @@ class PrimerAgent:
         elif t == "stroke_end":
             self.lull.stroke_end(now)
         self.log.observe(msg, now)
+        if self.mock is not None and self.mock.status == "running":
+            await self._mock_observe(msg, now)
         if t == "page":
             lr = self.store.load(self.learner_name)
             if coach.note_reading(lr, msg, now):
@@ -124,6 +136,12 @@ class PrimerAgent:
                 await self.read("hint")
             elif line == "/coach":
                 await self.send_plan(include_coach=True)
+            elif line == "/mock start":
+                await self.mock_start()
+            elif line == "/mock grade":
+                await self.mock_grade()
+            elif line in ("/p 1", "/p 2", "/p 3"):
+                await self.mock_cursor(int(line[-1]))
 
     async def _on_request(self, msg: dict) -> None:
         if isinstance(msg.get("learner"), str) and msg["learner"].strip():
@@ -135,6 +153,18 @@ class PrimerAgent:
             await self.send_plan(include_coach=True)
         elif what == "forget":
             self.store.delete(self.learner_name)
+            await self.send_plan(include_coach=False)
+        elif what == "mock_start":
+            await self.mock_start(
+                problems=msg.get("problems"), scale=float(msg.get("scale") or 1.0)
+            )
+        elif what == "mock_problem" and isinstance(msg.get("n"), int):
+            await self.mock_cursor(int(msg["n"]))
+        elif what == "mock_grade":
+            await self.mock_grade()
+        elif what == "mock_stop":
+            await self.mock_stop()
+        elif what == "mock_status":
             await self.send_plan(include_coach=False)
         elif what in ("coach_on", "coach_off"):
             lr = self.store.load(self.learner_name)
@@ -158,9 +188,16 @@ class PrimerAgent:
         if name != self.learner_name:
             self.learner_name = name
             self.hints = policy.HintState()
+            self._load_mock()
 
     async def tick(self) -> None:
-        """Call every second or so: starts an ``auto`` reading at a lull after new ink."""
+        """
+        Call every second or so: advances a mock exam's clock (mock.py), and starts an ``auto``
+        reading at a lull after new ink (never during a mock).
+        """
+        if self.mock is not None and self.mock.status in ("running", "awaiting_grading"):
+            await self._mock_tick()
+            return
         if not self.auto or self._busy.locked():
             return
         now = self.clock()
@@ -203,6 +240,19 @@ class PrimerAgent:
 
     async def read(self, request: str = "proof", selection: dict | None = None) -> dict | None:
         """One reading (module docstring); returns the message sent, or None for silence."""
+        if self.mock is not None and self.mock.status == "running":
+            # A mock is an exam: no readings or hints until it is graded (mock.py).
+            if request == "auto":
+                return None
+            lr = self.store.load(self.learner_name)
+            note = policy.Move(
+                "notice",
+                "A mock exam is running: the Primer reads nothing until it grades the write-ups tomorrow morning.",
+                "Mock running: graded tomorrow",
+            )
+            out = self._message(None, note, lr, self.clock())
+            await self.send(out)
+            return out
         async with self._busy:
             now = self.clock()
             lr = self.store.load(self.learner_name)
@@ -210,7 +260,7 @@ class PrimerAgent:
             if request == "hint" and self.last_doc is not None:
                 doc = self.last_doc
             else:
-                doc = await self._recognize(log)
+                doc = await self._recognize(log, page=self.log if selection else None)
                 self._read_version = self.log.ink_version
                 lines = segment_lines(log.ink())
                 sig = {s.line: s for s in line_features(log, lines)}
@@ -264,12 +314,14 @@ class PrimerAgent:
             await self.send(out)
             return out
 
-    async def _recognize(self, log: InkLog) -> ProofDoc:
-        problem = None
+    async def _recognize(
+        self, log: InkLog, problem: str | None = None, page: InkLog | None = None
+    ) -> ProofDoc:
+        """Read ``log``; ``problem`` is the statement when the problem is known (sent to a live model)."""
         try:
             if isinstance(self.recognizer, OfflineRecognizer):
                 return self.recognizer.recognize(log)
-            return await asyncio.to_thread(self.recognizer.recognize, log, problem)
+            return await asyncio.to_thread(self.recognizer.recognize, log, problem, page)
         except RecognitionError as e:
             doc = ProofDoc(title="", goal="", technique="", steps=[], source=f"live:error:{e}")
             return doc
@@ -415,8 +467,15 @@ class PrimerAgent:
         p["queue"] = coach.suggest(lr, now, n=4)
         msg["plan"] = p
         msg["coach"] = {**coach.coach_view(lr, now), "nudge": nudge}
+        potd = problem_of_the_day(lr, self._today(now), now)
+        if potd is not None:
+            p = BANK.get(potd.problem)
+            msg["coach"]["potd"] = {**potd.to_dict(), "statement": p.statement if p else ""}
         if sketch:
             msg["coach"]["sketched"] = True
+        if self.mock is not None and self.mock.status != "abandoned":
+            msg["mock"] = mockmod.timer_block(self.mock, now)
+            msg["mock"]["glance"] = mockmod.glance(self.mock, now)
         return msg
 
     async def send_plan(self, include_coach: bool = True, sketch: bool = False) -> dict:
@@ -425,9 +484,10 @@ class PrimerAgent:
         lr = self.store.load(self.learner_name)
         ink = None
         if sketch:
-            nxt = coach.suggest(lr, now, n=1)
-            p = BANK.get(nxt[0]["id"]) if nxt else None
-            ink = coach.problem_ink(p) if p else None
+            # The dock's "Practice coach": the problem of the day, written onto the page.
+            potd = problem_of_the_day(lr, self._today(now), now)
+            p = BANK.get(potd.problem) if potd else None
+            ink = await asyncio.to_thread(coach.problem_ink, p) if p and self.ink_enabled else None
             if ink:
                 for m in ink:
                     await self.send(m)
@@ -436,3 +496,241 @@ class PrimerAgent:
             out.pop("coach", None)
         await self.send(out)
         return out
+
+    # ── Mock-exam mode (mock.py) ─────────────────────────────────────────────────────────────
+
+    def _load_mock(self) -> None:
+        m = self.mocks.latest(self.learner_name)
+        self.mock = (
+            m if m is not None and m.status in ("running", "awaiting_grading", "graded") else None
+        )
+        self._mock_phase = None
+
+    def _save_mock(self) -> None:
+        if self.mock is not None:
+            self.mocks.save(self.mock)
+            self._mock_saved = self.clock()
+
+    async def mock_start(self, problems: list | None = None, scale: float = 1.0) -> dict:
+        """Start a mock now: four timed sessions; problems drawn from her model unless given."""
+        now = self.clock()
+        lr = self.store.load(self.learner_name)
+        if (
+            isinstance(problems, list)
+            and len(problems) == 4
+            and all(isinstance(s, list) and len(s) == 3 for s in problems)
+        ):
+            chosen = [[str(p) for p in s] for s in problems]
+        else:
+            chosen = None
+        self.mock = mockmod.new_mock(lr, now, chosen, scale=max(0.0001, min(1.0, scale)))
+        self.mock.page = self.log.page_key
+        self.mock.page_has_ink = bool(self.log.ink())
+        self._mock_phase = None
+        self.hints = policy.HintState()
+        self._save_mock()
+        return await self._mock_tick(force=True) or {}
+
+    async def mock_cursor(self, n: int) -> None:
+        if self.mock is not None and self.mock.status == "running" and 1 <= n <= 3:
+            self.mock.cursor = n
+            self._save_mock()
+            await self.send(
+                self._message(None, None, self.store.load(self.learner_name), self.clock())
+            )
+
+    async def mock_stop(self) -> None:
+        if self.mock is not None and self.mock.status == "running":
+            self.mock.status = "abandoned"
+            self._save_mock()
+            out = self._message(
+                None,
+                policy.Move("notice", "Mock stopped. Nothing was graded.", "Mock stopped"),
+                self.store.load(self.learner_name),
+                self.clock(),
+            )
+            self.mock = None
+            await self.send(out)
+
+    async def _mock_observe(self, msg: dict, now: float) -> None:
+        """During a running mock: follow the page on screen, and collect finished strokes."""
+        m = self.mock
+        assert m is not None
+        t = msg.get("t")
+        if t == "page":
+            key = self.log.page_key
+            if key != m.page:
+                m.page = key
+                m.page_has_ink = bool(self.log.ink())
+                if m.waiting_for_fresh_page and not m.page_has_ink:
+                    m.waiting_for_fresh_page = False
+                    s = m.current(now)
+                    if s is not None:
+                        await self._place(s, now)
+            else:
+                m.page_has_ink = bool(self.log.ink())
+        elif t == "clear":
+            m.page_has_ink = False
+        elif t == "stroke_end":
+            st = self.log.strokes.get(str(msg.get("id")))
+            if st is not None and st.layer != "ai" and not st.is_eraser and st.pts:
+                m.page_has_ink = True
+                m.record_stroke(
+                    {"id": st.id, "brush": st.brush, "pts": [p[:4] for p in st.pts]}, now
+                )
+
+    async def _place(self, s: mockmod.Session, now: float) -> None:
+        """A session's problems onto the page: agent ink when enabled (one per block), always text."""
+        s.placed = True
+        if self.ink_enabled:
+            y = 0.06
+            for pid in s.problems:
+                p = BANK.get(pid)
+                ink = await asyncio.to_thread(coach.problem_ink, p, 0.08, y) if p else None
+                for msg in ink or []:
+                    await self.send(msg)
+                y += 0.11
+        self._save_mock()
+
+    async def _mock_tick(self, force: bool = False) -> dict | None:
+        """Advance the mock's clock: place problems, collect write-ups, grade in the morning."""
+        m = self.mock
+        if m is None:
+            return None
+        now = self.clock()
+        out = None
+        if m.status == "running":
+            ph, n, _ = m.phase(now)
+            for s in m.sessions:  # sessions whose time is up are frozen
+                if now >= s.ends_ms and not s.collected:
+                    s.collected = True
+            if ph == "session" and not m.sessions[n - 1].placed:
+                s = m.sessions[n - 1]
+                m.cursor = 1
+                if m.page_has_ink:
+                    m.waiting_for_fresh_page = True  # placed when she turns to a fresh page
+                    s.placed = True  # announced as text now; the ink follows the page turn
+                else:
+                    await self._place(s, now)
+            if ph == "done":
+                m.status = "awaiting_grading"
+                end = m.sessions[-1].ends_ms
+                m.grade_after_ms = end if m.scale < 1 else mockmod.next_morning(end)
+            key = (m.status, ph, n)
+            if force or key != self._mock_phase:
+                self._mock_phase = key
+                self._save_mock()
+                out = self._message(None, None, self.store.load(self.learner_name), now)
+                await self.send(out)
+            elif now - self._mock_saved > 30_000:
+                self._save_mock()
+        if m.status == "awaiting_grading" and now >= m.grade_after_ms:
+            out = await self.mock_grade()
+        return out
+
+    async def mock_grade(self) -> dict | None:
+        """Grade every write-up of the mock (module docstring of mock.py) and send the report."""
+        m = self.mock
+        if m is None or m.status not in ("running", "awaiting_grading"):
+            return None
+        async with self._busy:
+            now = self.clock()
+            lr = self.store.load(self.learner_name)
+            results = []
+            for s in m.sessions:
+                for i, pid in enumerate(s.problems, start=1):
+                    p = BANK.get(pid)
+                    w = s.writeups.get(pid)
+                    entry = {
+                        "session": s.n,
+                        "n": i,
+                        "problem": pid,
+                        "title": p.title if p else pid,
+                        "estimate": True,
+                    }
+                    if w is None or not w.strokes:
+                        entry.update(
+                            score=0,
+                            band="none",
+                            rigor="No write-up was collected.",
+                            exposition="",
+                            findings=[],
+                            mode="none",
+                        )
+                        results.append(entry)
+                        continue
+                    log = InkLog()
+                    for st in mockmod.writeup_strokes(w):
+                        log.strokes[st.id] = st
+                    doc = await self._recognize(log, p.statement if p else None)
+                    doc.problem = pid
+                    live = doc.source.startswith("live:") and not doc.source.startswith(
+                        "live:error"
+                    )
+                    if doc.steps:
+                        self.last_signals = {}
+                        assess.assess(doc, use_model_findings=live)
+                        doc.check = await asyncio.to_thread(
+                            check.run, doc.formal, "model" if live else "fixture"
+                        )
+                        self._update_learner(lr, doc, now)
+                        lr.solved[pid] = max(
+                            doc.grade.score if doc.grade else 0, lr.solved.get(pid, 0)
+                        )
+                        if pid not in lr.seen:
+                            lr.seen.append(pid)
+                        minutes = (
+                            ((w.last_ms or 0) - (w.first_ms or 0)) / 60_000 / max(m.scale, 1e-6)
+                        )
+                        coach.log_attempt(lr, doc, now_ms=now, minutes=minutes, hints=0)
+                    from .concepts import MISCONCEPTIONS
+
+                    g = doc.grade
+                    entry.update(
+                        score=g.score if g else 0,
+                        band=g.band if g else "none",
+                        rigor=g.rigor
+                        if g
+                        else (
+                            "Not readable offline: no model key, and this ink is not a fixture."
+                            if not live
+                            else "The write-up could not be read."
+                        ),
+                        exposition=g.exposition if g else "",
+                        findings=sorted(
+                            {
+                                MISCONCEPTIONS[f.id].label
+                                for f in doc.findings
+                                if f.id in MISCONCEPTIONS
+                            }
+                        ),
+                        check=doc.check.status if doc.check else "not_checked",
+                        mode="live" if live else "offline",
+                        steps=len(doc.steps),
+                    )
+                    results.append(entry)
+            total = sum(int(r["score"]) for r in results)
+            from .learner import SessionRecord
+
+            lr.sessions.append(
+                SessionRecord(
+                    ts=now,
+                    kind="mock",
+                    problems=[r["problem"] for r in results],
+                    minutes=4 * 90,
+                    scores=[int(r["score"]) for r in results],
+                )
+            )
+            self.store.save(lr)
+            m.report = {
+                "total": total,
+                "max": 12 * 10,
+                "estimate": True,
+                "graded_ms": now,
+                "problems": results,
+            }
+            m.status = "graded"
+            self._save_mock()
+            out = self._message(None, None, lr, now)
+            await self.send(out)
+            return out

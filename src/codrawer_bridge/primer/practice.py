@@ -764,3 +764,14 @@ def plan(learner: Learner, today: str, exam: str = EXAM_DATE) -> dict:
         "format": "4 sessions × 90 min × 3 problems",
         "weeks": weeks,
     }
+
+
+def problem_of_the_day(learner: Learner, date_iso: str, now_ms: float) -> Pick | None:
+    """
+    One problem for the day between mocks: drawn from the top of her queue (choose_queue), the
+    same all day (the date picks the slot), a new one tomorrow.
+    """
+    picks = choose_queue(learner, now_ms, n=3)
+    if not picks:
+        return None
+    return picks[int(date_iso.replace("-", "")) % len(picks)]
