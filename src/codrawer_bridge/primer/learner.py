@@ -74,6 +74,8 @@ from pathlib import Path
 from typing import Any
 
 from .concepts import CONCEPTS, MISCONCEPTIONS
+from .fsrs import Item
+from .metacog import SELF_REPORT_WEIGHT, Correction, Goals, Judgment
 
 SCHEMA_VERSION = 1
 DAY_MS = 86_400_000
@@ -236,6 +238,8 @@ class Attempt:
     technique: str = ""
     reading: dict[str, Any] | None = None
     note: str = ""
+    #: A small PNG of her ink for this attempt (report thumbnails), when activity review is on.
+    thumb: str = ""
 
 
 @dataclass
@@ -272,6 +276,17 @@ class Learner:
     #: The coach watches only with consent, and only while ``watching`` is on (ADR 010).
     consent: bool = False
     watching: bool = False
+    #: Per-feature consent (metacog.FEATURES), each off until she turns it on.
+    features: dict[str, bool] = field(default_factory=dict)
+    #: FSRS items: techniques, lemmas, her mistakes, problems to re-attempt (fsrs.py).
+    items: list[Item] = field(default_factory=list)
+    #: Confidence before a check, and the outcome after (metacog.calibration).
+    judgments: list[Judgment] = field(default_factory=list)
+    goals: Goals = field(default_factory=Goals)
+    #: Her corrections of what the model believes ("that's wrong"), kept as evidence.
+    corrections: list[Correction] = field(default_factory=list)
+    #: Her verdicts on blind-spot insights (reflect.py): id → "confirmed" | "dismissed".
+    insight_verdicts: dict[str, str] = field(default_factory=dict)
     turn: int = 0
     exam_date: str = "2026-12-05"
     schema: int = SCHEMA_VERSION
@@ -357,15 +372,116 @@ class Learner:
     # ── Queries ──────────────────────────────────────────────────────────────────────────────
 
     def due(self, now_ms: float) -> list[str]:
-        """Concepts due for review now (module docstring), most faded first."""
+        """
+        Concepts due for review now, most faded first. A concept with FSRS items (fsrs.py) is due
+        when one of its items is (FSRS supersedes the half-life estimate there); others use the
+        half-life model (module docstring).
+        """
+        from .fsrs import due as fsrs_due
+
         out = []
+        with_items = {c for it in self.items for c in it.concepts}
+        mastery = {c: self.mastery(c) for c in with_items}
+        for it in fsrs_due(self.items, now_ms, mastery):
+            r = it.r(now_ms)
+            for c in it.concepts:
+                out.append((r if r is not None else 0.0, c))
         for cid, st in self.concepts.items():
+            if cid in with_items:
+                continue
             r = st.recall(now_ms)
             if r is None:
                 continue
             if r < 0.5 or (0.3 <= st.p <= 0.8 and r < 0.7):
                 out.append((r, cid))
-        return [cid for _, cid in sorted(out)]
+        seen: set[str] = set()
+        return [cid for _, cid in sorted(out) if not (cid in seen or seen.add(cid))]
+
+    # ── Item memory, calibration, consent, corrections ───────────────────────────────────────
+
+    def feature_on(self, name: str) -> bool:
+        """Whether she turned on this kind of watching (metacog.FEATURES)."""
+        return bool(self.features.get(name))
+
+    def ensure_item(
+        self, item_id: str, kind: str, prompt: str, concepts: list[str], source: str, now_ms: float
+    ) -> Item:
+        """The FSRS item with this id, created (unreviewed, so due once) if new."""
+        for it in self.items:
+            if it.id == item_id:
+                return it
+        it = Item(
+            id=item_id,
+            kind=kind,
+            prompt=prompt,
+            concepts=list(concepts),
+            source=source,
+            created_ms=now_ms,
+        )
+        self.items.append(it)
+        return it
+
+    def review_item(
+        self, item_id: str, grade: int, now_ms: float, source: str = "self"
+    ) -> Item | None:
+        """
+        Rate a review of an item (1 Again … 4 Easy): FSRS reschedules it, and the rating is a
+        half-weight BKT observation of its concepts (fsrs.py, "How it meets mastery").
+        """
+        it = next((x for x in self.items if x.id == item_id), None)
+        if it is None:
+            return None
+        it.review(grade, now_ms, source=source)
+        credit = {1: 0.0, 2: 0.5, 3: 1.0, 4: 1.0}[it.log[-1].grade]
+        for c in it.concepts:
+            self.observe(c, credit, now_ms=now_ms, weight=0.5, kind="review")
+        return it
+
+    def judge(
+        self, confidence: float, now_ms: float, technique: str = "", problem: str | None = None
+    ) -> Judgment:
+        """Record how sure she is before a check (0..1); :meth:`settle` adds the outcome."""
+        j = Judgment(
+            ts=now_ms,
+            confidence=min(1.0, max(0.0, confidence)),
+            technique=technique,
+            problem=problem,
+        )
+        self.judgments.append(j)
+        self.judgments = self.judgments[-500:]
+        return j
+
+    def settle(self, score: int, technique: str, problem: str | None) -> Judgment | None:
+        """Attach a grade (score/10) to her latest unsettled judgment, if any."""
+        j = next((x for x in reversed(self.judgments) if x.outcome is None), None)
+        if j is not None:
+            j.outcome = max(0.0, min(1.0, score / 10))
+            j.technique = j.technique or technique
+            j.problem = j.problem or problem
+        return j
+
+    def self_report(self, target: str, claim: str, now_ms: float, note: str = "") -> Correction:
+        """
+        "That's wrong": her correction, kept, and for a mastery claim also a BKT observation at
+        :data:`metacog.SELF_REPORT_WEIGHT` (her word counts, without overruling her proofs).
+        """
+        c = Correction(ts=now_ms, target=target, claim=claim, note=note[:300])
+        self.corrections.append(c)
+        if target.startswith("mastery:"):
+            cid = target.split(":", 1)[1]
+            if cid in CONCEPTS:
+                self.observe(
+                    cid,
+                    1.0 if claim == "known" else 0.0,
+                    now_ms=now_ms,
+                    weight=SELF_REPORT_WEIGHT,
+                    kind="self_report",
+                )
+        elif target.startswith("insight:"):
+            self.insight_verdicts[target.split(":", 1)[1]] = (
+                "dismissed" if claim == "wrong" else "confirmed"
+            )
+        return c
 
     def frontier(self, threshold: float = 0.7) -> list[str]:
         """Concepts not yet mastered whose prerequisites all are: where stretch problems live."""
@@ -451,6 +567,12 @@ class Learner:
         lr.reading = [ReadingEvent(**e) for e in d.get("reading") or []]
         lr.consent = bool(d.get("consent", False))
         lr.watching = bool(d.get("watching", False))
+        lr.features = {str(k): bool(v) for k, v in (d.get("features") or {}).items()}
+        lr.items = [Item.from_dict(x) for x in d.get("items") or []]
+        lr.judgments = [Judgment(**x) for x in d.get("judgments") or []]
+        lr.goals = Goals.from_dict(d.get("goals"))
+        lr.corrections = [Correction(**x) for x in d.get("corrections") or []]
+        lr.insight_verdicts = dict(d.get("insight_verdicts") or {})
         lr.turn = int(d.get("turn") or 0)
         lr.exam_date = str(d.get("exam_date") or "2026-12-05")
         return lr

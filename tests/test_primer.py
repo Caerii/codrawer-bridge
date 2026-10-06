@@ -889,3 +889,171 @@ def test_grading_from_the_agent_draws_marks_that_can_be_taken_back(tmp_path):
     assert sent[-1]["t"] == "stroke_delete" and sorted(sent[-1]["ids"]) == sorted(ids)
     tap = next(m for m in marks if m["kind"] == "circle")
     assert tap["long"] and tap["latex"], "the phone gets the long explanation and the step's LaTeX"
+
+
+# =============================================================================================
+# Item memory (FSRS), metacognition, goals, the reflective layer, the report
+# =============================================================================================
+
+
+def test_fsrs_follows_its_formulas():
+    from codrawer_bridge.primer import fsrs
+
+    assert fsrs.retrievability(10, 10) == pytest.approx(0.9)
+    assert fsrs.interval_days(10, 0.9) == pytest.approx(10)
+    it = fsrs.Item(id="t", kind="technique", prompt="?")
+    it.review(fsrs.GOOD, 0)
+    assert it.s == pytest.approx(fsrs.W[2]) and it.d == pytest.approx(fsrs.W[4])
+    assert it.due_ms == pytest.approx(it.s * fsrs.DAY_MS)
+    s1 = it.s
+    it.review(fsrs.GOOD, it.due_ms)  # on time: R = 0.9
+    assert it.s > s1 * 2, "a successful review on time multiplies stability"
+    s2 = it.s
+    it.review(fsrs.AGAIN, it.due_ms + 30 * fsrs.DAY_MS)
+    assert it.s < s2 and it.lapses == 1
+    d = fsrs.next_difficulty(5.0, fsrs.AGAIN)
+    assert d > 5.0 and fsrs.next_difficulty(5.0, fsrs.EASY) < 5.0
+    assert (
+        fsrs.grade_from_step("error") == fsrs.AGAIN
+        and fsrs.grade_from_step("ok", hesitation=0.1, minutes=5) == fsrs.EASY
+    )
+
+
+def test_items_link_to_mastery_and_are_gated_by_it():
+    lr = Learner(name="t", created_ms=NOW)
+    it = lr.ensure_item(
+        "technique:pigeonhole", "technique", "When pigeonhole?", ["pigeonhole"], "", NOW
+    )
+    assert lr.ensure_item("technique:pigeonhole", "technique", "x", [], "", NOW) is it
+    from codrawer_bridge.primer import fsrs
+
+    assert fsrs.due(lr.items, NOW, {"pigeonhole": 0.1}) == [], (
+        "not yet learned: teach, don't test recall"
+    )
+    assert fsrs.due(lr.items, NOW, {"pigeonhole": 0.5}) == [it]
+    before = lr.mastery("pigeonhole")
+    lr.review_item("technique:pigeonhole", fsrs.GOOD, NOW)
+    assert lr.mastery("pigeonhole") > before and lr.evidence[-1].kind == "review"
+    assert "pigeonhole" not in lr.due(NOW + 1000) and "pigeonhole" in lr.due(NOW + 30 * DAY_MS)
+
+
+def test_calibration_curve_brier_and_flags():
+    from codrawer_bridge.primer.metacog import calibration, calibration_nudge
+
+    lr = Learner(name="t", created_ms=NOW)
+    for conf, score in ((0.9, 2), (0.85, 1), (0.95, 2), (0.3, 10)):
+        lr.judge(conf, NOW)
+        lr.settle(score, "induction" if conf > 0.5 else "parity", None)
+    cal = calibration(lr.judgments)
+    assert cal["n"] == 4 and cal["brier"] > 0.4 and cal["gap"] > 0
+    assert cal["flags"] == [
+        {"technique": "induction", "gap": pytest.approx(0.733, abs=0.01), "n": 3, "kind": "over"}
+    ]
+    assert "more sure" in calibration_nudge(cal, {"induction": "Mathematical induction"})
+
+
+def test_goals_are_hers_and_corrections_count_as_evidence():
+    lr = Learner(name="t", created_ms=NOW)
+    changed = lr.goals.apply(
+        {"target": "40/120", "weekly_hours": 200, "nudging": "loud", "secret": 1}, NOW
+    )
+    assert changed == {"target": "40/120", "weekly_hours": 80.0} and lr.goals.agreed_ms == NOW
+    assert not lr.goals.revisit_due(NOW + DAY_MS) and lr.goals.revisit_due(NOW + 8 * DAY_MS)
+    lr.goals.apply({"topics": ["combinatorics"]}, NOW, by="primer")
+    assert lr.goals.history[-1].by == "primer" and lr.goals.agreed_ms == NOW
+    before = lr.mastery("induction")
+    lr.self_report("mastery:induction", "known", NOW)
+    after = lr.mastery("induction")
+    assert before < after < 0.9, "her word counts without overruling her proofs"
+    lr.self_report("insight:time_sink", "wrong", NOW)
+    assert lr.insight_verdicts["time_sink"] == "dismissed"
+    back = Learner.from_dict(lr.to_dict())
+    assert back.goals.target == "40/120" and back.corrections[0].target == "mastery:induction"
+
+
+def test_agent_records_confidence_and_builds_items(tmp_path):
+    sent: list[dict] = []
+
+    async def send(m: dict) -> None:
+        sent.append(m)
+
+    store = LearnerStore(tmp_path)
+    agent = PrimerAgent(send, learner="x", mode="offline", store=store)
+
+    async def go():
+        await agent.handle(
+            {
+                "t": "primer_request",
+                "what": "features",
+                "features": {"reviews": True, "activity_review": True},
+            }
+        )
+        for m in load_recording(FIXTURES / "odd_sum.jsonl"):
+            await agent.handle(m)
+        await agent.handle({"t": "primer_request", "what": "proof", "confidence": 0.9})
+
+    asyncio.run(go())
+    lr = store.load("x")
+    assert lr.judgments[-1].confidence == 0.9 and lr.judgments[-1].outcome == pytest.approx(1.0)
+    ids = {it.id for it in lr.items}
+    assert {"technique:induction", "problem:odd_sum_squares"} <= ids
+    meta = [m for m in sent if m.get("t") == "primer"][-1]["metacog"]
+    assert meta["features"]["reviews"]["on"] and meta["review"] is not None and "insights" in meta
+
+
+def test_reflective_layer_and_report_from_fixture_history(tmp_path):
+    from codrawer_bridge.primer import latex, reflect, report
+
+    store = LearnerStore(tmp_path)
+    clock = {"now": NOW}
+
+    async def nothing(m: dict) -> None:
+        return None
+
+    agent = PrimerAgent(
+        nothing,
+        learner="r",
+        mode="offline",
+        store=store,
+        clock=lambda: clock["now"],
+        renderer=markup.Renderer(),
+        markup_speed=0,
+    )
+
+    async def go():
+        lr = store.load("r")
+        lr.consent = lr.watching = True
+        lr.features.update(attempt_log=True, reading_position=True, activity_review=True)
+        store.save(lr)
+        for day, name, conf in (
+            (0, "sqrt2_flawed", 0.9),
+            (1, "odd_sum", 0.5),
+            (2, "sqrt2_flawed", 0.95),
+            (3, "sqrt2_correct", 0.8),
+        ):
+            clock["now"] = NOW + day * DAY_MS
+            agent.log = InkLog()
+            await agent.handle({"t": "page", "doc": "nb", "page": f"p{day}", "strokes": []})
+            for m in load_recording(FIXTURES / f"{name}.jsonl"):
+                await agent.handle(m)
+            await agent.handle({"t": "primer_request", "what": "proof", "confidence": conf})
+
+    asyncio.run(go())
+    lr = store.load("r")
+    review = reflect.activity_review(lr, clock["now"])
+    assert len(review["problems"]) >= 3 and review["approach"]
+    assert any(w["id"] == "sqrt2_no_lowest_terms" and w["evidence"] for w in review["weaknesses"])
+    ev = review["weaknesses"][0]["evidence"][0]
+    assert ev["replay"]["page"] and ev["thumb"], (
+        "evidence links to a replayable page and a thumbnail"
+    )
+    insights = reflect.blind_spots(lr, clock["now"])
+    assert all(0 < i.confidence <= 0.9 and i.suggestion for i in insights)
+    tex, files = report.build_tex(lr, clock["now"])
+    assert latex.syntax_problems(tex) == [] and all(ord(c) < 128 for c in tex)
+    assert "Your reflection" in tex
+    if latex.tex_engine() is None:
+        pytest.skip("no TeX engine: report checked as LaTeX only")
+    pdf, log = report.build_pdf(lr, clock["now"], root=tmp_path)
+    assert pdf is not None and pdf.read_bytes()[:4] == b"%PDF", log
+    assert report.portfolio("r", tmp_path)[-1]["file"] == pdf.name

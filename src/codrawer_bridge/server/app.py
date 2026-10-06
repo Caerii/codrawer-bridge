@@ -69,6 +69,23 @@ app.add_middleware(
 def healthz():
     return {"ok": True}
 
+
+@app.get("/primer/reports/{learner}/{name}")
+def primer_report(learner: str, name: str):
+    """A learner's progress report from her portfolio (primer/report.py): PDFs only, by exact name."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from codrawer_bridge.primer.learner import safe_name, state_dir
+
+    bad_name = not name.endswith(".pdf") or any(c in name for c in ("/", "\\", "..", ":"))
+    if not primer_link.enabled() or safe_name(learner) != learner or bad_name:
+        raise HTTPException(status_code=404)
+    path = state_dir() / "primer" / "reports" / learner / name
+    if not path.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="application/pdf")
+
 @app.get("/viewer/{session_id}", response_class=HTMLResponse)
 def viewer(session_id: str):
     return HTMLResponse(render_viewer_html(session_id))

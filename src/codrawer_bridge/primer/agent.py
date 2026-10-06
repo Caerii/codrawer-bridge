@@ -38,7 +38,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import assess, check, coach, latex, policy
+from . import assess, check, coach, latex, metacog, policy, reflect
 from . import markup as markupmod
 from . import mock as mockmod
 from .ink_signals import InkLog, InkStroke, LineSignals, LullDetector, line_features, segment_lines
@@ -147,6 +147,10 @@ class PrimerAgent:
                 await self.read("proof")
             elif line == "/hint":
                 await self.read("hint")
+            elif line.startswith("/sure ") and line[6:].strip().rstrip("%").isdigit():
+                self._judge(int(line[6:].strip().rstrip("%")) / 100)
+            elif line == "/review":
+                await self.send_plan(include_coach=True, review=True)
             elif line == "/grade":
                 await self.read("proof", markup=True)
             elif line == "/coach":
@@ -163,6 +167,8 @@ class PrimerAgent:
             self.set_learner(msg["learner"])
         what = msg.get("what")
         if what in ("proof", "hint"):
+            if what == "proof" and isinstance(msg.get("confidence"), (int, float)):
+                self._judge(float(msg["confidence"]))
             await self.read(str(what))
         elif what == "plan":
             await self.send_plan(include_coach=True)
@@ -189,13 +195,31 @@ class PrimerAgent:
             lr = self.store.load(self.learner_name)
             lr.consent = lr.consent or what == "coach_on"
             lr.watching = what == "coach_on"
+            for f in ("reading_position", "attempt_log"):
+                lr.features[f] = what == "coach_on"
             self.store.save(lr)
             await self.send_plan(include_coach=True)
+        elif what in (
+            "features",
+            "goals_set",
+            "dispute",
+            "insight",
+            "review_answer",
+            "self_explanation",
+        ):
+            self._metacog_request(str(what), msg)
+            await self.send_plan(include_coach=True)
+        elif what == "report":
+            await self.send_report()
+        elif what in ("goals", "review", "reflect"):
+            await self.send_plan(include_coach=True, review=what == "review")
 
     async def _on_dock(self, msg: dict) -> None:
         """The tablet dock's entries (docs/protocol.md ``dock_action``; ids as the extension's)."""
         aid = msg.get("id")
-        if aid == "grade_page":
+        if aid == "my_progress":
+            await self.send_report()
+        elif aid == "grade_page":
             await self.read("proof", markup=True)
         elif aid == "grade_selection":
             await self.read("proof", selection=msg, markup=True)
@@ -305,6 +329,7 @@ class PrimerAgent:
                     self.hints = policy.HintState()
                 self.last_doc = doc
                 self._update_learner(lr, doc, now)
+                self._after_reading(lr, doc, now)
             lull_state = self.lull.state(self.log, now)
             move = policy.choose_move(
                 doc,
@@ -330,8 +355,16 @@ class PrimerAgent:
                 attempt = coach.log_attempt(
                     lr, doc, now_ms=now, minutes=minutes, hints=self.hints.level, reading=reading
                 )
+                if attempt is not None and lr.feature_on("activity_review"):
+                    attempt.thumb = self._thumbnail(log, now)
                 if move.kind == "debrief" and doc.technique:
                     self._notebook(lr, doc, now)
+                    move.text += (
+                        " "
+                        + metacog.SELF_EXPLANATION_PROMPTS[
+                            lr.turn % len(metacog.SELF_EXPLANATION_PROMPTS)
+                        ]
+                    )
             elif request == "hint" and lr.attempts:
                 lr.attempts[-1].hints = max(lr.attempts[-1].hints, self.hints.level)
             self.store.save(lr)
@@ -504,12 +537,15 @@ class PrimerAgent:
             msg["coach"]["potd"] = {**potd.to_dict(), "statement": p.statement if p else ""}
         if sketch:
             msg["coach"]["sketched"] = True
+        msg["metacog"] = self._metacog_block(lr, now)
         if self.mock is not None and self.mock.status != "abandoned":
             msg["mock"] = mockmod.timer_block(self.mock, now)
             msg["mock"]["glance"] = mockmod.glance(self.mock, now)
         return msg
 
-    async def send_plan(self, include_coach: bool = True, sketch: bool = False) -> dict:
+    async def send_plan(
+        self, include_coach: bool = True, sketch: bool = False, review: bool = False
+    ) -> dict:
         """Answer ``plan``/``forget``/``coach`` requests: learner, plan, coach view (no proof)."""
         now = self.clock()
         lr = self.store.load(self.learner_name)
@@ -521,6 +557,14 @@ class PrimerAgent:
             ink = await asyncio.to_thread(coach.problem_ink, p) if p and self.ink_enabled else None
             if ink:
                 for m in ink:
+                    await self.send(m)
+        if review:
+            # The next due review, in the medium: written onto the page when agent ink is on.
+            item = self._next_review(lr, now)
+            if item is not None and self.ink_enabled:
+                p = BANK.get(item.source) if item.kind == "problem" else None
+                prompt_ink = await asyncio.to_thread(coach.problem_ink, p) if p else None
+                for m in prompt_ink or []:
                     await self.send(m)
         out = self._message(None, None, lr, now, sketch=ink)
         if not include_coach:
@@ -818,3 +862,196 @@ class PrimerAgent:
         """Wait for running performances (tests and the CLI)."""
         while self._performances:
             await asyncio.gather(*list(self._performances))
+
+    # ── Metacognition, item memory, goals, consent (metacog.py, fsrs.py) ─────────────────────
+
+    def _judge(self, confidence: float) -> None:
+        lr = self.store.load(self.learner_name)
+        lr.judge(confidence, self.clock())
+        self.store.save(lr)
+
+    def _after_reading(self, lr: Learner, doc: ProofDoc, now: float) -> None:
+        """Calibration and item memory after a graded reading (metacog.py, fsrs.py)."""
+        from . import fsrs
+        from .concepts import MISCONCEPTIONS
+
+        if doc.grade is not None and doc.steps:
+            lr.settle(doc.grade.score, doc.technique, doc.problem)
+        seen = {f.id for f in doc.findings}
+        exercised = {c for st in doc.steps for c in st.concepts}
+        # her own mistakes become items: seen again is a lapse, a clean proof on them a success
+        for mid in seen:
+            if mid in MISCONCEPTIONS:
+                e = MISCONCEPTIONS[mid]
+                it = lr.ensure_item(
+                    f"mistake:{mid}",
+                    "mistake",
+                    f"Your error journal: {e.label}. Where would it bite in a proof?",
+                    list(e.concepts),
+                    mid,
+                    now,
+                )
+                if it.reps:
+                    it.review(fsrs.AGAIN, now, source="reading")
+        for it in lr.items:
+            if (
+                it.kind == "mistake"
+                and it.source not in seen
+                and it.reps
+                and exercised & set(it.concepts)
+                and (it.last_ms or 0) < now
+            ):
+                it.review(fsrs.GOOD, now, source="reading")
+        # a problem not yet solved is an item to re-attempt; a re-attempt is its review
+        if doc.problem and doc.grade is not None:
+            p = BANK.get(doc.problem)
+            it = lr.ensure_item(
+                f"problem:{doc.problem}",
+                "problem",
+                f"Re-attempt: {p.title if p else doc.problem}",
+                list(p.concepts) if p else [doc.technique],
+                doc.problem,
+                now,
+            )
+            score = doc.grade.score
+            it.review(
+                fsrs.EASY
+                if score >= 10 and not self.hints.level
+                else fsrs.GOOD
+                if score >= 8
+                else fsrs.HARD
+                if score >= 1
+                else fsrs.AGAIN,
+                now,
+                source="reading",
+            )
+        # a complete proof's technique becomes a "when to use it" item
+        if doc.grade is not None and doc.grade.score >= 10 and doc.technique:
+            from .concepts import CONCEPTS
+
+            label = CONCEPTS[doc.technique].label if doc.technique in CONCEPTS else doc.technique
+            lr.ensure_item(
+                f"technique:{doc.technique}",
+                "technique",
+                f"When would you reach for {label.lower()}? Give a sign in a problem statement.",
+                [doc.technique],
+                doc.problem or "",
+                now,
+            )
+
+    def _next_review(self, lr: Learner, now: float):
+        from . import fsrs
+
+        due = (
+            fsrs.due(lr.items, now, {c: lr.mastery(c) for it in lr.items for c in it.concepts})
+            if lr.feature_on("reviews")
+            else []
+        )
+        return due[0] if due else None
+
+    def _metacog_request(self, what: str, msg: dict) -> None:
+        now = self.clock()
+        lr = self.store.load(self.learner_name)
+        if what == "features" and isinstance(msg.get("features"), dict):
+            for k, v in msg["features"].items():
+                if k in metacog.FEATURES:
+                    lr.features[k] = bool(v)
+            lr.consent = lr.consent or any(lr.features.values())
+            lr.watching = bool(
+                lr.features.get("attempt_log") or lr.features.get("reading_position")
+            )
+        elif what == "goals_set" and isinstance(msg.get("goals"), dict):
+            lr.goals.apply(msg["goals"], now, by="learner", note=str(msg.get("note") or ""))
+        elif what == "dispute" and isinstance(msg.get("target"), str):
+            lr.self_report(
+                msg["target"], str(msg.get("claim") or "wrong"), now, str(msg.get("note") or "")
+            )
+        elif what == "insight" and isinstance(msg.get("id"), str):
+            lr.self_report(
+                f"insight:{msg['id']}",
+                "wrong" if msg.get("verdict") == "dismissed" else "right",
+                now,
+                str(msg.get("note") or ""),
+            )
+        elif (
+            what == "review_answer"
+            and isinstance(msg.get("id"), str)
+            and isinstance(msg.get("grade"), int)
+        ):
+            lr.review_item(msg["id"], int(msg["grade"]), now, source="self")
+        elif what == "self_explanation" and isinstance(msg.get("text"), str) and lr.notebook:
+            lr.notebook[-1].why = msg["text"][:500]
+        self.store.save(lr)
+
+    def _metacog_block(self, lr: Learner, now: float) -> dict[str, Any]:
+        """The ``metacog`` block: calibration, goals, consent, reviews due, insights (protocol.md)."""
+        from .concepts import CONCEPTS
+
+        cal = metacog.calibration(lr.judgments)
+        item = self._next_review(lr, now)
+        labels = {k: v.label for k, v in CONCEPTS.items()}
+        block: dict[str, Any] = {
+            "calibration": cal,
+            "calibration_nudge": metacog.calibration_nudge(cal, labels),
+            "goals": lr.goals.to_dict(),
+            "goals_revisit": lr.goals.revisit_due(now),
+            "features": {
+                k: {"on": lr.feature_on(k), "label": v} for k, v in metacog.FEATURES.items()
+            },
+            "review": {"id": item.id, "kind": item.kind, "prompt": item.prompt, "r": item.r(now)}
+            if item is not None
+            else None,
+            "items": len(lr.items),
+        }
+        if lr.feature_on("activity_review"):
+            block["insights"] = [
+                i.to_dict()
+                for i in reflect.blind_spots(lr, now)
+                if lr.insight_verdicts.get(i.id) != "dismissed"
+            ][:5]
+        return block
+
+    def _thumbnail(self, log: InkLog, now: float) -> str:
+        """Her ink as a small PNG under the state dir, for the report's evidence (reflect.py)."""
+        from .recognize import render_for_recognition
+
+        ink = log.ink()
+        if not ink:
+            return ""
+        folder = self.store.dir.parent / "thumbs" / self.learner_name
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{int(now)}.png"
+        path.write_bytes(render_for_recognition(ink, [], max_side=480))
+        return str(path)
+
+    async def send_report(self) -> dict | None:
+        """
+        Typeset her progress report into her portfolio (report.py) and announce it: a ``report``
+        block with the file name and the desktop router's URL for it. Only with activity review on.
+        """
+        from . import report
+
+        now = self.clock()
+        lr = self.store.load(self.learner_name)
+        if not lr.feature_on("activity_review"):
+            note = policy.Move(
+                "notice",
+                "Progress reports come from the activity review, which is off. Turn it on in the Learner tab if you'd like one.",
+                "Activity review is off",
+            )
+            out = self._message(None, note, lr, now)
+            await self.send(out)
+            return out
+        pdf, log = await asyncio.to_thread(report.build_pdf, lr, now, self.store.dir.parent.parent)
+        out = self._message(None, None, lr, now)
+        out["report"] = (
+            {
+                "file": pdf.name,
+                "url": f"/primer/reports/{lr.name}/{pdf.name}",
+                "portfolio": report.portfolio(lr.name, self.store.dir.parent.parent),
+            }
+            if pdf
+            else {"error": log[:300]}
+        )
+        await self.send(out)
+        return out

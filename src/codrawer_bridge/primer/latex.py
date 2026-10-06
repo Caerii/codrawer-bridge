@@ -58,6 +58,43 @@ _UNICODE = {
     "’": "'",
     "“": "``",
     "”": "''",
+    "₀": r"$_0$",
+    "₁": r"$_1$",
+    "₂": r"$_2$",
+    "₃": r"$_3$",
+    "ₖ": r"$_k$",
+    "ₙ": r"$_n$",
+    "ᵢ": r"$_i$",
+    "ⱼ": r"$_j$",
+    "⁰": r"$^0$",
+    "¹": r"$^1$",
+    "⁴": r"$^4$",
+    "ⁿ": r"$^n$",
+    "ᵏ": r"$^k$",
+    "⋯": r"$\cdots$",
+    "∞": r"$\infty$",
+    "π": r"$\pi$",
+    "ω": r"$\omega$",
+    "φ": r"$\varphi$",
+    "θ": r"$\theta$",
+    "λ": r"$\lambda$",
+    "σ": r"$\sigma$",
+    "ε": r"$\varepsilon$",
+    "δ": r"$\delta$",
+    "ℂ": r"$\mathbb{C}$",
+    "≈": r"$\approx$",
+    "∑": r"$\sum$",
+    "∏": r"$\prod$",
+    "∫": r"$\int$",
+    "⌊": r"$\lfloor$",
+    "⌋": r"$\rfloor$",
+    "±": r"$\pm$",
+    "∘": r"$\circ$",
+    "⊂": r"$\subset$",
+    "∪": r"$\cup$",
+    "∩": r"$\cap$",
+    "∅": r"$\emptyset$",
+    "↦": r"$\mapsto$",
     "∀": r"$\forall$",
     "∃": r"$\exists$",
     "¬": r"$\neg$",
@@ -168,14 +205,21 @@ def tex_engine() -> str | None:
     return None
 
 
-def compile_tex(tex: str, timeout_s: int = 180) -> tuple[bytes | None, str]:
-    """Compile ``tex``; returns ``(pdf, log tail)``, ``pdf`` None on failure or with no engine."""
+def compile_tex(
+    tex: str, timeout_s: int = 180, files: dict[str, bytes] | None = None
+) -> tuple[bytes | None, str]:
+    """
+    Compile ``tex``; returns ``(pdf, log tail)``, ``pdf`` None on failure or with no engine.
+    ``files`` (name → bytes) are written beside it first: images the document includes.
+    """
     engine = tex_engine()
     if engine is None:
         return None, "no TeX engine installed (pdflatex, tectonic or xelatex); KaTeX rendering only"
     with tempfile.TemporaryDirectory(prefix="primer-tex-") as d:
         src = Path(d) / "proof.tex"
         src.write_text(tex, encoding="utf-8")
+        for name, data in (files or {}).items():
+            (Path(d) / Path(name).name).write_bytes(data)
         cmd = (
             [engine, "proof.tex"]
             if engine == "tectonic"

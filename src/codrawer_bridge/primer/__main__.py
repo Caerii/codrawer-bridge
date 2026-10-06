@@ -232,6 +232,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(primer_eval.report(scores))
         return 0 if all(s.passed for s in scores) else 1
+    if argv and argv[0] == "report":
+        from . import report
+
+        p = argparse.ArgumentParser(prog="primer report")
+        p.add_argument("--learner", default="learner")
+        p.add_argument("--state", default=None)
+        a = p.parse_args(argv[1:])
+        store = _store(a)
+        lr = store.load(a.learner)
+        pdf, log = report.build_pdf(lr, time.time() * 1000, root=Path(a.state) if a.state else None)
+        print(f"wrote {pdf}" if pdf else f"no PDF: {log}")
+        return 0 if pdf else 1
     if argv and argv[0] == "learner":
         p = argparse.ArgumentParser(prog="primer learner")
         p.add_argument("name")
