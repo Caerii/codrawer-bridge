@@ -4,6 +4,20 @@ import { StrokeStore } from '../src/strokes'
 
 const pt = (x: number, y: number) => [x, y, 0.5, 0]
 
+test("live points keep when they were drawn: the sender's t, else the arrival time", () => {
+  const s = new StrokeStore()
+  const before = Date.now()
+  s.begin('u_1', 'user', 'pen', 1730000000000)
+  s.points('u_1', [[0.1, 0.1, 0.5, 1730000000130], [0.2, 0.2, 0.5], [0.3, 0.3, 0.5, 0]], 'user')
+  const st = s.all()[0]
+  assert.equal(st.times?.[0], 1730000000130)
+  assert.ok(st.times![1] >= before && st.times![2] >= before) // no t, or not a Unix ms: arrival
+  assert.equal(st.times!.length, st.pts.length)
+  assert.ok(st.startedAt! >= before)
+  s.begin('u_1', 'user') // replayed: restarts its times too
+  assert.deepEqual(s.all()[0].times, [])
+})
+
 test('a replayed stroke restarts in place instead of duplicating', () => {
   const s = new StrokeStore()
   s.begin('u_1', 'user')

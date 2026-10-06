@@ -110,7 +110,8 @@ export function drawCanvas() {
   }
   if (canvasCtx.canvas.width !== IMG_W) surface('preview', IMG_W, IMG_H)
   const marked = HAS_LOUPE && LOUPE_CAM && view.mode === 'full'
-  rasterize(canvasCtx, store, marked ? { ...view, marker: loupeCam.rect() } : view)
+  const plain = { ...view, fitZoom: 1 } // the ring zooms the fit view only in the wide layout
+  rasterize(canvasCtx, store, marked ? { ...plain, marker: loupeCam.rect() } : plain)
 }
 
 /** Rasterize the loupe surface now. */

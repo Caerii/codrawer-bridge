@@ -79,5 +79,5 @@ export function onGlassesEvent(event: EvenHubEvent) {
     hud.typingAt = performance.now()
     dirty.text = true
   } else applyAction(action)
-  console.log('[codrawer] input', action, '→', view.mode, view.highlight, view.window.toFixed(2))
+  console.log('[codrawer] input', action, '→', view.mode, view.highlight, view.window.toFixed(2), `fit×${(view.fitZoom ?? 1).toFixed(2)}`, glasses.wideFit ? 'wide' : '')
 }

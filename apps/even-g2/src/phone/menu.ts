@@ -8,6 +8,11 @@
  *                           draws it on the current theme
  *   Copy invite link        this page joined to the same session (phone/invite.ts)
  *   Tablet address…         change the router this page connects to (phone/notices.ts)
+ *   Export timelapse…       the page redrawn stroke by stroke into a 10/20/40 s video, after an
+ *                           inline row of options (phone/timelapse.ts)
+ *   Record session          keep every message to and from the router; a red dot in the toolbar
+ *                           while on (phone/recorder.ts)
+ *   Export recording        what was recorded, as JSONL the replay tools play into any router
  *   Glasses diagnostics     the Glasses panel (also the toolbar's glasses button)
  *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
  *   Dark theme              paper or dark (also the toolbar's moon/sun button)
@@ -28,7 +33,10 @@ import { myColor, setMyColor } from './draw'
 import { inviteUrl, isLoopback } from './invite'
 import { askRouterAddress } from './notices'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
+import { exportRecording, refreshRecorder, setupRecorder, toggleRecording } from './recorder'
 import { stage } from './screen'
+import { shareOrDownload, stampedName } from './share'
+import { refreshTimelapse, timelapseAction, timelapseEscape, timelapseMenuClosed } from './timelapse'
 import { diagnosticsShown, toggleDiagnostics, toggleTheme } from './toolbar'
 
 const button = document.getElementById('menuBtn') as HTMLButtonElement
@@ -52,11 +60,15 @@ function open() {
   focusables()[0]?.focus()
 }
 
-/** Close the menu (and any confirm in it); `refocus` hands focus back to the menu button. */
+/**
+ * Close the menu (and any confirm or options row in it; a timelapse being recorded carries on and
+ * shows its progress when the menu opens again); `refocus` hands focus back to the menu button.
+ */
 function close(refocus = false) {
   if (!isOpen()) return
   menu.hidden = true
   confirmNew.hidden = true
+  timelapseMenuClosed()
   button.setAttribute('aria-expanded', 'false')
   if (refocus) button.focus()
 }
@@ -77,6 +89,8 @@ function refresh() {
   inviteItem.setAttribute('aria-disabled', String(invite === null))
   inviteItem.title = !link.address ? 'No tablet address yet' : invite === null ? 'Only from a page served over http(s), not the installed app' : isLoopback(link.address) ? 'The router is on localhost: the link works on this computer only' : invite
   item('address').title = link.address || 'Not set'
+  refreshTimelapse()
+  refreshRecorder()
 }
 
 // ── The actions ───────────────────────────────────────────────────────────────────────────────
@@ -100,26 +114,9 @@ async function downloadPng() {
     console.warn('[codrawer] page PNG: the browser could not encode it')
     return
   }
-  const name = `codrawer-page-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`
-  const file = new File([blob], name, { type: 'image/png' })
-  const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean }
-  if (matchMedia('(pointer: coarse)').matches && nav.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: 'codrawer page' })
-      return
-    } catch (e) {
-      if ((e as DOMException).name === 'AbortError') return // the user closed the share sheet
-    }
-  }
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  document.body.append(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-  console.log('[codrawer] page PNG', name, blob.size, 'bytes')
+  const name = stampedName('codrawer-page', 'png')
+  const how = await shareOrDownload(blob, name, 'codrawer page')
+  console.log('[codrawer] page PNG', name, blob.size, 'bytes,', how)
 }
 
 /** Copy text to the clipboard: the async API where allowed, else the old selection copy. */
@@ -170,11 +167,16 @@ export function setupMenu() {
     }
     swatches.append(s)
   }
+  setupRecorder()
 
   button.onclick = () => (isOpen() ? close(true) : open())
   menu.addEventListener('click', (e) => {
-    const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act
-    if (act === 'new') askNewDrawing()
+    const target = e.target as HTMLElement
+    const act = target.closest<HTMLElement>('[data-act]')?.dataset.act
+    if (act?.startsWith('tl') || target.closest('#tlBox')) timelapseAction(act ?? '', target)
+    else if (act === 'rec') toggleRecording()
+    else if (act === 'rec-export') void exportRecording()
+    else if (act === 'new') askNewDrawing()
     else if (act === 'new-yes') newDrawing()
     else if (act === 'new-no') {
       confirmNew.hidden = true
@@ -204,7 +206,7 @@ export function setupMenu() {
       if (!confirmNew.hidden) {
         confirmNew.hidden = true
         item('new').focus()
-      } else close(true)
+      } else if (!timelapseEscape()) close(true)
     } else if (e.key === 'ArrowDown') items[(i + 1) % items.length]?.focus()
     else if (e.key === 'ArrowUp') items[(i - 1 + items.length) % items.length]?.focus()
     else if (e.key === 'Home') items[0]?.focus()
