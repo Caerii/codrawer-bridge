@@ -3,6 +3,9 @@
  *
  *   New drawing…            clears the page for everyone (the glasses menu's "New drawing": a
  *                           local clear plus `clear` to the session), after an inline confirm
+ *   Undo my last stroke     takes back the newest stroke drawn here, for everyone (`stroke_delete`)
+ *   Clear my strokes        takes back every stroke drawn here; both count only strokes drawn
+ *                           on this connection, the ones the router lets us delete (phone/draw.ts)
  *   My colour               the colour of the strokes this device draws from now on (remembered)
  *   Download page as PNG    the whole page at its own resolution (1620 px wide), as the phone
  *                           draws it on the current theme
@@ -18,9 +21,9 @@
  *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
  *   Dark theme              paper or dark (also the toolbar's moon/sun button)
  *
- * Not here yet: "Undo my last stroke" and "Clear my strokes". Removing a stroke for everyone needs
- * a message the routers relay and drop from their page replay (a `stroke_delete`); without it the
- * stroke would vanish here only and come back on the next reconnect, which would be a lie.
+ * Undo and Clear rest on `stroke_delete`, which the routers relay and drop from their page replay,
+ * so a stroke taken back stays gone for late joiners and after a reconnect. With nothing of ours
+ * on the page they show disabled, with the reason as their tooltip.
  *
  * It behaves like a menu on every input: it opens under its button, focus moves into it, the
  * arrow keys (and Home/End) move between items, Escape or a tap anywhere outside closes it and
@@ -30,7 +33,7 @@
 import { applyAction } from '../actions'
 import { link } from '../link'
 import { glasses } from '../state'
-import { myColor, setMyColor } from './draw'
+import { clearMyStrokes, myColor, myStrokes, setMyColor, undoMyLastStroke } from './draw'
 import { inviteUrl, isLoopback } from './invite'
 import { askRouterAddress } from './notices'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
@@ -90,6 +93,13 @@ function refresh() {
   inviteItem.setAttribute('aria-disabled', String(invite === null))
   inviteItem.title = !link.address ? 'No tablet address yet' : invite === null ? 'Only from a page served over http(s), not the installed app' : isLoopback(link.address) ? 'The router is on localhost: the link works on this computer only' : invite
   item('address').title = link.address || 'Not set'
+  const n = myStrokes().length
+  const none = 'Nothing drawn here since connecting (turn on the pen button to draw)'
+  for (const act of ['undo', 'clear-mine']) {
+    item(act).setAttribute('aria-disabled', String(n === 0))
+    item(act).title = n === 0 ? none : ''
+  }
+  ;(item('clear-mine').querySelector('.note') as HTMLSpanElement).textContent = n ? String(n) : ''
   refreshTimelapse()
   refreshRecorder()
 }
@@ -177,7 +187,12 @@ export function setupMenu() {
     if (act?.startsWith('tl') || target.closest('#tlBox')) timelapseAction(act ?? '', target)
     else if (act === 'rec') toggleRecording()
     else if (act === 'rec-export') void exportRecording()
-    else if (act === 'new') askNewDrawing()
+    else if (act === 'undo') {
+      undoMyLastStroke()
+      refresh() // stays open: undo again, or see that nothing is left
+    } else if (act === 'clear-mine') {
+      if (clearMyStrokes()) close(true)
+    } else if (act === 'new') askNewDrawing()
     else if (act === 'new-yes') newDrawing()
     else if (act === 'new-no') {
       confirmNew.hidden = true

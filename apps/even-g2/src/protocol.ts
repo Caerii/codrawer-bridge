@@ -47,6 +47,8 @@ export interface Inbound {
   /** pts: [x, y, pressure, t] each. */
   stroke_pts: { id: string; pts?: number[][] }
   stroke_end: { id: string; ts?: unknown }
+  /** Strokes taken back by whoever began them (or, for the `ai` layer, by anyone). */
+  stroke_delete: { ids?: unknown }
   ai_stroke_begin: { id: string; brush?: string }
   ai_stroke_pts: { id: string; pts?: number[][] }
   ai_stroke_end: { id: string }

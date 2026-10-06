@@ -326,7 +326,8 @@ export class Stage {
       ctx.shadowColor = 'rgba(0,0,0,0.75)'
       ctx.shadowBlur = Math.max(2, base * 6)
     } else {
-      ctx.strokeStyle = ctx.fillStyle = s.layer === 'peer' && s.color ? s.color : s.layer === 'ai' ? t.ai : t.ink
+      // a participant's or an agent's own colour when it names one; else the theme's
+      ctx.strokeStyle = ctx.fillStyle = s.layer !== 'user' && s.color ? s.color : s.layer === 'ai' ? t.ai : t.ink
     }
     const pts = s.pts
     // the eraser sweeps its radius on each side of its path (page px, like `base`)

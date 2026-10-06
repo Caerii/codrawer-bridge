@@ -114,9 +114,14 @@ outside closes it and does nothing else):
 - **Diagnostics** (off by default: the Glasses panel here and the metrics line on the glasses) and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
-Follow-up, not done: *Undo my last stroke* and *Clear my strokes*. Removing a stroke for everyone
-needs a message the routers relay and drop from their page replay (e.g. `stroke_delete {"id"}`);
-done locally only, the stroke would come back on the next reconnect.
+- **Undo my last stroke** and **Clear my strokes** take back strokes drawn on this phone, for
+  everyone, with `stroke_delete` (docs/protocol.md): the routers relay it and drop the strokes
+  from their page replay, so they stay gone for late joiners. Only strokes drawn since this
+  connection's `hello` count (the routers' owner is the connection); with none, both items show
+  disabled with the reason as their tooltip. *Clear my strokes* shows how many there are.
+
+Incoming `stroke_delete` removes the strokes from the glasses and the phone stage alike, whoever
+sent it (an agent replacing an animation frame, another participant's undo).
 
 ## Input
 
