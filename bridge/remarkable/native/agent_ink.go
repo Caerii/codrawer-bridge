@@ -21,6 +21,10 @@ package main
 //     `{"t":"goto",…}` becomes `{"op":"goto","id":"gN",…}`: it navigates when the user's own tap
 //     produced it (`origin:"user"`), and is otherwise shown as an offer in the dock. It is relayed
 //     whether or not agent ink is on.
+//   - bridge → extension: live agent ink (agentink/live.go). While an ai stroke streams in, its
+//     new points go as `{"op":"live",…}` lines for the extension's overlay; at its end the commit
+//     line is followed by `{"op":"live_end",…}`. The router's `agent_status` becomes
+//     `{"op":"overlay",…}` (the "thinking" animation), also with agent ink off.
 //   - bridge → extension: `status <text>`, the line the dock shows under "codrawer status"
 //     (engine, agent ink on or off), sent on connect and whenever it changes.
 //
@@ -59,7 +63,7 @@ type inkLink struct {
 	fallback atomic.Value // func(string): the uinput typer, for refused inserts
 	pending  sync.Map     // id → text, until the extension answers
 	seq      atomic.Int64
-	gotoC    chan []byte // router `goto` messages, checked by agentink.GotoOp in the writer
+	gotoC    chan []byte // router `goto` and `agent_status` messages, checked in the writer
 }
 
 // insertText queues s for the focused text box; false when the extension cannot take it now.
@@ -153,9 +157,9 @@ func startAgentInk(cfg BridgeConfig, pages *pageFeed) (func([]byte), <-chan []by
 	actions := make(chan []byte, 64)
 	msgs := make(chan []byte, 1024)
 	hook := func(b []byte) {
-		if bytes.Contains(b, []byte(`"goto"`)) && !bytes.Contains(b, []byte(`"stroke_`)) {
+		if (bytes.Contains(b, []byte(`"goto"`)) || bytes.Contains(b, []byte(`"agent_status"`))) && !bytes.Contains(b, []byte(`"stroke_`)) {
 			select {
-			case link.gotoC <- b: // navigation works with agent ink off
+			case link.gotoC <- b: // navigation and the thinking overlay work with agent ink off
 			default:
 			}
 			return
@@ -251,6 +255,15 @@ func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Fo
 				return
 			}
 		case raw := <-link.gotoC:
+			if bytes.Contains(raw, []byte(`"agent_status"`)) {
+				line, why := agentink.Overlay(raw)
+				if line == nil {
+					fmt.Printf("[ink] agent_status refused: %s\n", why)
+				} else if !write(line) {
+					return
+				}
+				continue
+			}
 			line, why := agentink.GotoOp(raw, fmt.Sprintf("g%d", link.seq.Add(1)))
 			if line == nil {
 				if why != "not a goto" {
@@ -274,17 +287,14 @@ func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Fo
 			if !link.agentOn.Load() {
 				continue // switched off while it waited
 			}
-			line, why := fwd.Handle(m, page())
+			lines, why := fwd.HandleAll(m, page()) // live points, then commit + live_end
 			if why != "" {
 				fmt.Printf("[ink] not sent: %s\n", why)
 			}
-			if line == nil {
-				continue
-			}
-			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			if _, err := conn.Write(append(line, '\n')); err != nil {
-				fmt.Printf("[ink] write: %v\n", err)
-				return
+			for _, line := range lines {
+				if !write(line) {
+					return
+				}
 			}
 		}
 	}

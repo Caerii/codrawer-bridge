@@ -34,17 +34,21 @@ int main(int argc, char **argv) {
     CHECK(!parseSpec(cmdline::words("inject name=x qml=/a.qml")).complete());
     CHECK(!parseSpec(cmdline::words("inject name= parent=a:b qml=/a.qml")).complete());
 
-    // the file shipped in the release parses to its one dock line
+    // the file shipped in the release: the dock, and Ask in the selection menu
     if (argc > 1) {
         std::ifstream f(argv[1]);
         std::stringstream ss;
         ss << f.rdbuf();
         const auto shipped = requestLines(ss.str());
-        CHECK(shipped.size() == 1);
-        if (!shipped.empty()) {
+        CHECK(shipped.size() == 2);
+        if (shipped.size() == 2) {
             const Spec d = parseSpec(cmdline::words(shipped[0]));
-            CHECK(d.complete() && d.name == "dock" && d.after);
+            CHECK(d.complete() && d.name == "dock" && d.after && !d.onSelection);
             CHECK(d.qml == "/home/root/xovi/exthome/codrawer-layer/dock.qml");
+            const Spec s = parseSpec(cmdline::words(shipped[1]));
+            CHECK(s.complete() && s.name == "selection" && s.after && s.onSelection && !s.inert);
+            CHECK(s.match == "prop:iconSource=qrc:/ark/icons/trashcan^");
+            CHECK(s.qml == "/home/root/xovi/exthome/codrawer-layer/selection-ask.qml");
         }
     }
     return finish("inject_conf");

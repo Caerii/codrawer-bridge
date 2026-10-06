@@ -282,12 +282,16 @@ failed, `ok` says which; clear the overlay); `bbox` `[x0, y0, x1, y1]` in xochit
 with x centred, like `dock_action`'s (normalize with `x = (x_rm + w/2)/w`, `y = y_rm/h`).
 `thinking` may be followed directly by `done` (no answer, or text only).
 
-Relay (not built yet): the routers relay `agent_status` to every other client like `dock_action`
-(the Go and Rust routers drop unknown types today, so their relay lists need it), and the tablet
-bridge forwards it to the extension's ink socket as `{"op":"overlay","kind":"thinking",
-"state":<state>,"bbox":<bbox>,"id":<id>}`, the extension clearing the overlay on `done`. Until
-then agentd's fallback is a static "…" in agent ink at the reserved spot (`--thinking dots`);
-with the overlay in place, `--thinking overlay` drops the dots.
+Relay: the Go, Rust and Python routers relay `agent_status` to every other client like
+`dock_action`, and the tablet bridge (agentink/live.go, agent_ink.rs) forwards it to the
+extension's ink socket as `{"op":"overlay","id","kind":"thinking"|"clear","state","bbox",
+"style"}` (`writing` and `done` clear; `writing` keeps the answer block's bbox). The extension
+(codrawer-layer `src/live.h`, `qml/live.qml`) plays a small animation at the top left of the
+reserved spot (`style`: `pen`, the default, a nib doodling with a comet trail; `drop`; `glyph`)
+and, when the answer's first stroke streams in (the bridge also sends ai strokes live, point by
+point, while they are written), hands it off into that stroke; never saved. agentd's fallback is a
+static "…" in agent ink at the reserved spot (`--thinking dots`); with the overlay live,
+`--thinking overlay` drops the dots.
 
 ### Personal marks: `mark_seen`, `mark_ask`, `mark_define`, `mark_invoke`, `mark_feedback`, `mark_query`, `marks`
 

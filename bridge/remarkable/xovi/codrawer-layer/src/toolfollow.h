@@ -71,6 +71,10 @@ void addTickHook(std::function<void()> fn);
 // handler, before the write-back guard is set.
 void setUserGestureHook(std::function<void()> fn);
 
+// Adds `fn`, called on the GUI thread with true at every `gestureStarted` and false at every
+// `gestureEnded` of the followed pen handler (live.h pauses its overlay).
+void addPenListener(std::function<void(bool down)> fn);
+
 // The DocumentView whose pen handler is followed, or null. It may be hidden; callers check
 // `isVisible()` (as every caller does).
 QQuickItem *followedView();

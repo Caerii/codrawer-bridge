@@ -97,6 +97,7 @@ void refreshInjected(Injection &in) {
     in.item->setProperty("status", localStatus());
     in.item->setProperty("page", visiblePageId());
     if (in.item->metaObject()->indexOfProperty("badge") >= 0) in.item->setProperty("badge", !offerLabel().isEmpty());
+    if (in.item->metaObject()->indexOfProperty("hasStrokes") >= 0) in.item->setProperty("hasStrokes", lastSelection().containsStroke);
 }
 
 // ---------------------------------------------------------------------------------------------

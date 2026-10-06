@@ -21,6 +21,7 @@
 //   ink_protocol, inksock  the bridge's socket: agent ink, text, status, actions
 //   selection, inject      the lasso follower; QML injected into xochitl (the dock), its actions
 //   goto_req, navigate     "take me there": open a document by id, a page, flash a region; offers
+//   live (qml/live.qml)    agent ink drawn as it streams in; the "thinking" animation
 //   auto_rules, autostate, autoinput, grab, automation   UI automation and its guardrails
 //   cmdline, commands, probes, watch                     the command file and the probes
 //
@@ -35,6 +36,7 @@
 //   automation's clients change → the injected UI refreshes ("automation active")
 //   selection settled           → the selection-menu injections are tried
 //   a goto offer comes or goes  → the injected UI refreshes (the dock's offer entry and badge)
+//   the pen touches or leaves   → the live overlay pauses or resumes (live.h)
 //
 // # Threading
 //
@@ -51,6 +53,7 @@
 #include "commands.h"
 #include "inject.h"
 #include "inksock.h"
+#include "live.h"
 #include "log.h"
 #include "navigate.h"
 #include "paths.h"
@@ -70,8 +73,12 @@ void wireHooks() {
     setUserGestureHook([] { pauseAutomationForUser(); });
     setBridgeStatusHook([] { refreshAllInjections(); });
     setAutoClientsChangedHook([] { refreshAllInjections(); });
-    setSelectionSettledHook([] { createSelectionInjections(); });
+    setSelectionSettledHook([] {
+        createSelectionInjections();
+        refreshAllInjections();  // the selection menu's Ask shows only for strokes
+    });
     setOfferHook([] { refreshAllInjections(); });
+    addPenListener([](bool down) { livePen(down); });
 }
 
 void worker() {

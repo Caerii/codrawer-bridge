@@ -220,6 +220,46 @@ impl Forwarder {
         (None, None)
     }
 
+    /// Follows one router message like [`Forwarder::handle`] and returns every socket line it
+    /// causes: a `live` line for new points of an open ai stroke, and at its end the commit line
+    /// (if any) followed by `live_end` (Go: `HandleAll`; agentink/live.go explains the lines).
+    pub fn handle_all(&mut self, raw: &str, page: &Page, now: Instant) -> (Vec<String>, Option<String>) {
+        #[derive(Deserialize)]
+        struct Head {
+            #[serde(default)]
+            t: String,
+            #[serde(default)]
+            id: String,
+        }
+        let Ok(h) = serde_json::from_str::<Head>(raw) else {
+            return (vec![], None);
+        };
+        if h.id.is_empty() {
+            return (vec![], None);
+        }
+        let before = self.open.get(&h.id).map(|s| s.pts.len());
+        let (line, why) = self.handle(raw, page, now);
+        let mut lines = vec![];
+        match h.t.as_str() {
+            "stroke_pts" => {
+                if let (Some(before), Some(s)) = (before, self.open.get(&h.id)) {
+                    if !s.too_many && !page.page.is_empty() && s.pts.len() > before {
+                        if let Some(l) = live_line(&h.id, page, s, &s.pts[before..]) {
+                            lines.push(l);
+                        }
+                    }
+                }
+            }
+            "stroke_end" if before.is_some() => {
+                let committed = line.is_some();
+                lines.extend(line);
+                lines.push(live_end(&h.id, committed));
+            }
+            _ => {}
+        }
+        (lines, why)
+    }
+
     /// Spends one token of the rate cap.
     fn take(&mut self, now: Instant) -> bool {
         match self.refill {
@@ -236,6 +276,112 @@ impl Forwarder {
         self.tokens -= 1.0;
         true
     }
+}
+
+// ── live ink and the thinking overlay (Go: agentink/live.go) ───────────────────────────────
+
+/// New points of an open stroke as a `live` line; `None` when one is off the page.
+fn live_line(id: &str, page: &Page, s: &Open, pts: &[Vec<f64>]) -> Option<String> {
+    let ls = convert(&s.brush, &s.color, s.size, pts, page).ok()?;
+    let mut b = String::with_capacity(96 + pts.len() * 32);
+    b.push_str(r#"{"op":"live","id":"#);
+    push_string(&mut b, id);
+    b.push_str(r#","page":"#);
+    push_string(&mut b, &page.page);
+    b.push_str(r#","argb":"#);
+    push_string(&mut b, &ls.argb);
+    b.push_str(r#","width":"#);
+    b.push_str(&num(2.0 * ls.thickness));
+    b.push_str(r#","pts":["#);
+    for (i, p) in ls.pts.iter().enumerate() {
+        if i > 0 {
+            b.push(',');
+        }
+        let t = match pts[i].get(3) {
+            Some(&t) if t > 0.0 => t,
+            _ => 0.0,
+        };
+        b.push('[');
+        b.push_str(&num(p[0]));
+        b.push(',');
+        b.push_str(&num(p[1]));
+        b.push(',');
+        b.push_str(&num(p[2]));
+        b.push(',');
+        b.push_str(&num(t));
+        b.push(']');
+    }
+    b.push_str("]}");
+    Some(b)
+}
+
+/// The line that ends a live stroke.
+pub fn live_end(id: &str, committed: bool) -> String {
+    let mut b = String::from(r#"{"op":"live_end","id":"#);
+    push_string(&mut b, id);
+    b.push_str(if committed { r#","committed":true}"# } else { r#","committed":false}"# });
+    b
+}
+
+/// A router `agent_status` as the overlay line (Go: `Overlay`), or why not.
+pub fn overlay(raw: &str) -> Result<String, String> {
+    let m: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw).map_err(|_| "not an agent_status".to_string())?;
+    if m.get("t").and_then(|v| v.as_str()) != Some("agent_status") {
+        return Err("not an agent_status".into());
+    }
+    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() || id.len() > 64 {
+        return Err("id must be 1..64 bytes".into());
+    }
+    let state = m.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = match state {
+        "thinking" => "thinking",
+        "writing" | "done" => "clear",
+        _ => return Err("state must be thinking, writing or done".into()),
+    };
+    let mut b = String::from(r#"{"op":"overlay","id":"#);
+    push_string(&mut b, id);
+    b.push_str(r#","kind":"#);
+    push_string(&mut b, kind);
+    b.push_str(r#","state":"#);
+    push_string(&mut b, state);
+    // bbox: required for thinking; for writing it is the answer block (the nib's hand-over)
+    let bbox = m.get("bbox").filter(|v| !v.is_null());
+    if bbox.is_some() || kind == "thinking" {
+        let r: Vec<f64> = bbox
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+            .unwrap_or_default();
+        if r.len() != 4 || !(r[0] <= r[2] && r[1] <= r[3]) {
+            return Err("bbox must be [x0,y0,x1,y1]".into());
+        }
+        for (i, v) in r.iter().enumerate() {
+            let hi = if i % 2 == 1 { 40000.0 } else { 2000.0 };
+            if !(-2000.0..=hi).contains(v) {
+                return Err("bbox is off the page".into());
+            }
+        }
+        b.push_str(r#","bbox":["#);
+        for (i, v) in r.iter().enumerate() {
+            if i > 0 {
+                b.push(',');
+            }
+            b.push_str(&num(round(*v, 100.0)));
+        }
+        b.push(']');
+    }
+    if kind == "thinking" {
+        let style = match m.get("style").and_then(|v| v.as_str()) {
+            Some("drop") => "drop",
+            Some("glyph") => "glyph",
+            _ => "pen",
+        };
+        b.push_str(r#","style":"#);
+        push_string(&mut b, style);
+    }
+    b.push('}');
+    Ok(b)
 }
 
 /// Maps one stroke to page units; refuses points off the page by more than half a page.
@@ -692,8 +838,9 @@ pub fn start(
         // only stroke messages, and only while agent ink is on; the forwarder checks the layer
         if l.agent_on() && data.contains("\"stroke_") {
             let _ = msg_tx.try_send(data.to_string()); // far behind: dropped, never blocks the reader
-        } else if data.contains("\"goto\"") {
-            let _ = goto_tx.try_send(data.to_string()); // navigation works with agent ink off
+        } else if data.contains("\"goto\"") || data.contains("\"agent_status\"") {
+            // navigation and the thinking overlay work with agent ink off
+            let _ = goto_tx.try_send(data.to_string());
         }
     }));
     println!("[ink] socket {path}, native agent ink {on}");
@@ -812,6 +959,13 @@ async fn forever(
                 },
                 _ = status.recv() => Some(status_line("rust", link.agent_on())),
                 g = gotos.recv() => match g {
+                    Some(raw) if raw.contains("\"agent_status\"") => match overlay(&raw) {
+                        Ok(line) => Some(line),
+                        Err(why) => {
+                            println!("[ink] agent_status refused: {why}");
+                            None
+                        }
+                    },
                     Some(raw) => {
                         seq += 1;
                         match goto_op(&raw, &format!("g{seq}"), consent_allows) {
@@ -841,11 +995,12 @@ async fn forever(
                 m = msgs.recv(), if msgs_open => match m {
                     Some(_) if !link.agent_on() => None, // switched off while it waited
                     Some(m) => {
-                        let (line, why) = fwd.handle(&m, &current_page(&pages), Instant::now());
+                        // live points, then commit + live_end: one write, one line each
+                        let (lines, why) = fwd.handle_all(&m, &current_page(&pages), Instant::now());
                         if let Some(why) = why {
                             println!("[ink] not sent: {why}");
                         }
-                        line
+                        if lines.is_empty() { None } else { Some(lines.join("\n")) }
                     }
                     None => {
                         msgs_open = false;
@@ -1172,6 +1327,103 @@ mod tests {
         let long = "é".repeat(130);
         let l = goto_op(&format!("{{\"t\":\"goto\",\"doc\":\"{G_DOC}\",\"reason\":\"  a\\u0007\\\"b{long}\"}}"), "g", consent_allows).unwrap();
         assert!(l.ends_with(&format!("\"reason\":\"a\\\"b{}\"}}", "é".repeat(117))), "{l}");
+    }
+
+    fn all(f: &mut Forwarder, p: &Page, msgs: &[&str]) -> Vec<String> {
+        msgs.iter().flat_map(|m| f.handle_all(m, p, Instant::now()).0).collect()
+    }
+
+    /// Go: `TestLiveLinesFollowTheStroke`, the same bytes.
+    #[test]
+    fn live_lines_follow_the_stroke() {
+        let got = all(
+            &mut Forwarder::default(),
+            &page(),
+            &[
+                r##"{"t":"stroke_begin","id":"a1","layer":"ai","brush":"pen","color":"#d03030"}"##,
+                r#"{"t":"stroke_pts","id":"a1","pts":[[0.5,0.25,0.5,1730000000000],[0.75,0.5]]}"#,
+                r#"{"t":"stroke_pts","id":"a1","pts":[[0.5,0.5,0.7,1730000000040]]}"#,
+                r#"{"t":"stroke_end","id":"a1"}"#,
+            ],
+        );
+        assert_eq!(
+            got,
+            vec![
+                r#"{"op":"live","id":"a1","page":"ae4d6014-80e8-41c8-bb8a-e4686393a249","argb":"ffd03030","width":4,"pts":[[0,540,0.5,1730000000000],[405,1080,0.6,0]]}"#,
+                r#"{"op":"live","id":"a1","page":"ae4d6014-80e8-41c8-bb8a-e4686393a249","argb":"ffd03030","width":4,"pts":[[0,1080,0.7,1730000000040]]}"#,
+                r#"{"id":"a1","page":"ae4d6014-80e8-41c8-bb8a-e4686393a249","layer":"agent","strokes":[{"tool":"ballpoint","argb":"ffd03030","thickness":2,"pts":[[0,540,0.5,4],[405,1080,0.6,4],[0,1080,0.7,4]]}]}"#,
+                r#"{"op":"live_end","id":"a1","committed":true}"#,
+            ]
+        );
+    }
+
+    /// Go: `TestLiveOnlyForAiAndAKnownPage`.
+    #[test]
+    fn live_only_for_ai_and_a_known_page() {
+        let user = all(
+            &mut Forwarder::default(),
+            &page(),
+            &[
+                r#"{"t":"stroke_begin","id":"u","layer":"user"}"#,
+                r#"{"t":"stroke_pts","id":"u","pts":[[0.5,0.5]]}"#,
+                r#"{"t":"stroke_end","id":"u"}"#,
+            ],
+        );
+        assert!(user.is_empty(), "{user:?}");
+        let no_page = all(
+            &mut Forwarder::default(),
+            &Page::default(),
+            &[
+                r#"{"t":"stroke_begin","id":"a","layer":"ai"}"#,
+                r#"{"t":"stroke_pts","id":"a","pts":[[0.5,0.5]]}"#,
+                r#"{"t":"stroke_end","id":"a"}"#,
+            ],
+        );
+        assert_eq!(no_page, vec![r#"{"op":"live_end","id":"a","committed":false}"#.to_string()]);
+        let mut capped = Forwarder { max_points: 2, ..Forwarder::default() };
+        let over = all(
+            &mut capped,
+            &page(),
+            &[
+                r#"{"t":"stroke_begin","id":"b","layer":"ai"}"#,
+                r#"{"t":"stroke_pts","id":"b","pts":[[0.1,0.1],[0.2,0.2],[0.3,0.3]]}"#,
+                r#"{"t":"stroke_end","id":"b"}"#,
+            ],
+        );
+        assert!(over.len() == 1 && over[0].contains(r#""committed":false"#), "{over:?}");
+    }
+
+    /// Go: `TestOverlayFromAgentStatus`.
+    #[test]
+    fn overlay_from_agent_status() {
+        assert_eq!(
+            overlay(r#"{"t":"agent_status","state":"thinking","id":"q1","bbox":[-480.81,2982.8,-270.9,3314.7]}"#).unwrap(),
+            r#"{"op":"overlay","id":"q1","kind":"thinking","state":"thinking","bbox":[-480.81,2982.8,-270.9,3314.7],"style":"pen"}"#
+        );
+        assert!(overlay(r#"{"t":"agent_status","state":"thinking","id":"q1","bbox":[0,0,10,10],"style":"glyph"}"#)
+            .unwrap()
+            .contains(r#""style":"glyph""#));
+        for s in ["writing", "done"] {
+            assert_eq!(
+                overlay(&format!(r#"{{"t":"agent_status","state":"{s}","id":"q1"}}"#)).unwrap(),
+                format!(r#"{{"op":"overlay","id":"q1","kind":"clear","state":"{s}"}}"#)
+            );
+        }
+        assert_eq!(
+            overlay(r#"{"t":"agent_status","state":"writing","id":"q1","agent":"agentd","bbox":[-400,3000,200,3200.004],"ts":1}"#).unwrap(),
+            r#"{"op":"overlay","id":"q1","kind":"clear","state":"writing","bbox":[-400,3000,200,3200]}"#
+        );
+        for (input, why) in [
+            (r#"{"t":"dock_action","id":"x"}"#, "not an agent_status"),
+            (r#"{"t":"agent_status","state":"thinking","id":""}"#, "id must be"),
+            (r#"{"t":"agent_status","state":"sleeping","id":"q"}"#, "state must be"),
+            (r#"{"t":"agent_status","state":"thinking","id":"q","bbox":[1,2,3]}"#, "bbox must be"),
+            (r#"{"t":"agent_status","state":"thinking","id":"q","bbox":[0,0,1,90000]}"#, "off the page"),
+            (r#"{"t":"agent_status","state":"thinking","id":"q","bbox":[10,0,1,1]}"#, "bbox must be"),
+        ] {
+            let got = overlay(input).unwrap_err();
+            assert!(got.contains(why), "{input}: {got}");
+        }
     }
 
     #[test]
