@@ -21,7 +21,8 @@ These are in progress or landing (October 2026):
   sessions of three problems).
 - **Handwriting personas** (`packages/hand`): agent ink written by a biomechanical hand.
 - **Portable sessions** over Tailscale (the tablet is on the tailnet; ADR 009).
-- **Research:** LaTeX on the tablet, keyboard and text design, smart_remarkable integration.
+- **Research:** LaTeX on the tablet, keyboard and text design, smart_remarkable integration,
+  codrawer-animate (a Flipnote-style animation studio: `docs/investigations/codrawer-animate.md`).
 
 ## Next: the top three
 

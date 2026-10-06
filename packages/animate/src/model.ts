@@ -62,13 +62,16 @@ export type LoopMode = 'once' | 'loop' | 'pingpong'
 export interface Anim {
   id: string
   title: string
-  /** ticks per second; Flipnote's speeds were 0.5, 1, 2, 4, 6, 8, 12, 20, 24 and 30 */
+  /** ticks per second, (0, 60] */
   fps: number
   loop: LoopMode
   frames: Frame[]
 }
 
-/** The speeds offered in the UI, ticks per second (Flipnote's ladder). */
+/**
+ * The speeds offered in the UI, ticks per second: Flipnote Studio's eight (0.5, 1, 2, 4, 6, 12,
+ * 20, 30) plus 8 and 24, the animator's "on twos" and film rates.
+ */
 export const SPEEDS = [0.5, 1, 2, 4, 6, 8, 12, 20, 24, 30] as const
 
 export const DEFAULT_FPS = 8
