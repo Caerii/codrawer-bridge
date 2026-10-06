@@ -48,7 +48,7 @@ export interface InbetweenOptions {
   mode?: 'rigid' | 'linear'
 }
 
-const DEFAULT_MAX_COST = 0.18
+const DEFAULT_MAX_COST = 0.3
 /** points per stroke when comparing strokes */
 const MATCH_N = 24
 

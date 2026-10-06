@@ -143,7 +143,8 @@ export function bounce(box: [number, number, number, number], o: BounceOptions):
       const sy = 1 + k
       const sx = 1 / sy
       const bottom = o.ground - Math.max(0, h)
-      return compose(translate(dx, bottom - y1), scaleAbout(sx, sy, cx, cy))
+      // stretched about its centre, then placed so its (stretched) bottom is at `bottom`
+      return compose(translate(dx, bottom - (cy + sy * (y1 - cy))), scaleAbout(sx, sy, cx, cy))
     }
     return translate(dx, o.ground - y1)
   }
