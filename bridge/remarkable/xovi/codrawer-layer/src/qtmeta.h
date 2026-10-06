@@ -56,6 +56,11 @@ bool hasProps(const QObject *o, std::initializer_list<const char *> names);
 // overloads with the right arity, the last declared whose parameters all convert is called
 // (sceneToView(QPointF) vs (QRectF)). The return value, if any, goes to `ret`. False, and a log
 // line, if no overload fits. At most 10 arguments.
+//
+// Functions declared in QML JavaScript without type annotations appear in the meta-object with
+// QVariant parameters and a QVariant return (`openPage(QVariant,QVariant)`, `onOpened(QVariant)`).
+// For those the QVariant itself is passed and returned, unconverted: a QVariantMap argument
+// arrives in JavaScript as an object.
 bool invoke(QObject *o, const char *name, QVariantList args, QVariant *ret = nullptr);
 
 // The first of `names` that `o` has as a valid readable property, as a JSON value: bool as
