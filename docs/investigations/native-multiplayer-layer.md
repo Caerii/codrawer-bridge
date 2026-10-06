@@ -357,3 +357,52 @@ Next (when the tablet is awake; hold a wake lock **and** keep the screen awake):
 Open question: the wake lock alone did not keep the tablet on Wi-Fi. xochitl's own idle suspend
 probably ignores `/sys/power/wake_lock`. Check `systemd-inhibit --list` or the xochitl sleep
 setting next time.
+
+## Probe 1: results (2026-10-06) — GO
+
+Run on the device (3.29.0.149 / Codex 6.0.105, XOVI v0.3.3 at boot), on a fresh page of the
+notebook "Test" (page `ae4d6014-…`), with the notebook backed up first (scp, not committed).
+
+1. **The layout table was half wrong, and the run-time check caught it.** The first `stroke`
+   refused before touching the scene: the gadget's `tool` read 9 before and after we wrote 17 at
+   +4. The default constructor's 9 at +0 is the **tool**, and +4 is the **colour** (Black = 0 by
+   default; ArgbCode = 9 makes +8 the colour). The point list at +16 read back exactly (120
+   points), and the bounding rect is computed from the points. Corrected in `main.cpp`; `linetest`
+   then read back `tool 9 -> 17, pointCount 120, boundingRect (-564,281 428x98)`.
+2. **Layer slots act asynchronously.** `addLayer()` returned with `layerCount` unchanged; the new
+   layer appeared (and was selected) moments later, after the scene's own job ran. The first
+   attempt therefore stopped without drawing but left an empty "Layer 2" selected, on which the
+   user then wrote. The commit is now a chain of short GUI-thread steps that each wait (20 ms
+   timer, never blocking) for the controller to report the previous effect: add, name (read back
+   through `layerName(int)`, since `layerStates` does not read from C++), select, draw, wait for
+   `itemsBoundingRect` to change, select the user's layer again by name.
+3. **It renders, saves and undoes.** Log:
+   `ink: addDrawingLine x1 on layer 2 … ink: ok 1 (1 stroke(s), layer "codrawer: test", 314 ms)`,
+   the user's layer restored. A read-only framebuffer grab showed the wave on the page at once.
+   xochitl saved the `.rm` 5 s later; `-page-dump` showed the user's 56 calligraphy strokes on
+   their layer, unchanged, and **one fineliner stroke `#d03030ff` with 120 points on a new layer**.
+   The user tapped undo once: the wave disappeared and their writing stayed.
+4. **Placement: `addDrawingLine` takes the pen's frame, not page coordinates.** The wave given at
+   x −560…−140, y 285…375 was saved at x +12…+432, y −12…+78: shifted by the view's pan (the
+   user's page was scrolled). xochitl maps a pen stroke through the view transform when it
+   commits it, so ink meant for page coordinates is first mapped with the tile manager's own
+   `sceneToViewTransform` (`main.cpp`, "Placement"). Not yet verified on the device.
+
+Verdict: **GO for route 2**, no function called by address, no hook. Integration (agent ink
+socket, bridge forwarding with `NATIVE_AGENT_INK`, page snapshots labelling the agent layer `ai`)
+is built; see ADR 009.
+
+## Reboot incident (2026-10-06)
+
+While loading a new extension build by hand (`boot.sh xovi off`, copy the `.so`, run XOVI's
+`start`), the second xochitl restart came 9 s after the first. Stock xochitl, still loading its
+library, segfaulted while shutting down (`status=11/SEGV`); `OnFailure` ran `rm-emergency.sh`,
+which rebooted the tablet. The new extension never ran. No notebook was damaged (the probe page's
+`.rm` had been saved 4 min earlier; backups existed).
+
+**Rule: never restart xochitl within 20 s of its last start, and never run XOVI's `start` or
+`stock` by hand; use `boot.sh xovi off|on`.** `xovi.sh` now enforces it: `boot` waits for the
+same main PID for 20 s (as before), and `off` waits until xochitl's main process is 20 s old
+(`/proc/<pid>/stat` start time against `/proc/uptime`), refusing after 300 s. New extension
+builds reach the tablet in a signed release (`deploy-tablet.sh`) and load with one guarded
+`boot.sh xovi on`.

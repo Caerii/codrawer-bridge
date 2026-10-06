@@ -19,7 +19,12 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
 - `layer="peer"`: another participant's ink (a phone, a browser), with its `color` and `author`.
 - `layer="ai"`: AI ghost ink (server→clients). **AI never overwrites user ink**. On the Go and
   Rust routers, which carry no `ai_stroke_*`, an agent joins as a client and draws with
-  `stroke_*` on `layer:"ai"` (optionally with its own `color` and `author`).
+  `stroke_*` on `layer:"ai"` (optionally with its own `color`, `size` and `author`). With
+  `NATIVE_AGENT_INK=1` on the tablet, the bridge also commits each finished ai stroke as real
+  xochitl ink on the open page, on a layer named `codrawer: agent` (ADR 009; the codrawer-layer
+  XOVI extension): it saves into the notebook and the user can undo it. The bridge forwards only
+  `layer:"ai"`, caps it (32 strokes in progress, 4000 points per stroke, 40 strokes then 15 per
+  second) and maps `color` (`#rrggbb[aa]`) and `brush`/`tool` to xochitl's ARGB and pens.
 
 ## Routers
 
@@ -180,7 +185,9 @@ Fields:
     xochitl draws the highlighter translucent even though its alpha is stored as `ff`. The
     shader's alpha is real.
   - `size`: the tool's thickness setting (`thickness_scale`: 1, 2, 3, or fractions).
-  - `layer`: the layer id.
+  - `layer`: the layer id, or `"ai"` for strokes on the `codrawer: agent` layer: agent ink the
+    tablet committed natively (NATIVE_AGENT_INK). Clients treat those as AI strokes, and a
+    snapshot that carries any replaces the finished live `ai` strokes, which it now holds.
   - `pts`: `[x, y, p, w]`. `x, y` are normalised to the page: `x = (x_rm + w/2) / w` (xochitl's x is
     centred) and `y = y_rm / h`. Points on a scrolled page can fall outside 0..1. `p` is pressure
     0..1. `w` is xochitl's computed stroke width at that point as a fraction of the page width (the
@@ -196,6 +203,26 @@ and on a different `page`/`doc` clear the view (AI layer included) and show the 
 xochitl commits a stroke (ink or erase) when the pen lifts, so the Even G2 client also keeps a
 live stroke that has not ended or whose `stroke_end.ts > rev` (a save taken while the pen was
 down), and applies kept eraser strokes again to the new snapshot.
+
+### `dock_action` (tablet bridge → server → broadcast)
+
+A tap in codrawer's own UI inside xochitl: the dock button the codrawer-layer XOVI extension
+injects into the toolbar (its entries come from `/run/codrawer/dock.json` on the tablet), or a
+selection's "Ask agent". The extension hands it to the bridge, which adds `doc` (when the page is
+the one its page watcher knows) and `ts`, and sends it like a key. Agents act on it; the routers
+relay it.
+
+```json
+{"t":"dock_action","id":"ask_page","page":"<page uuid>","doc":"<doc uuid>","source":"dock","ts":1791262400123}
+{"t":"dock_action","id":"ask_selection","page":"<page uuid>","doc":"<doc uuid>","bbox":[-560,281,-136,379],"items":3,"selected_ms_ago":4200,"source":"dock","ts":1791262400123}
+```
+
+Fields: `id` the entry's id (`status` is answered on the tablet and never sent; first entries
+`agent_ink`, `practice_coach`, `ask_page`, `ask_selection`); `page`, `doc` the page on screen;
+`source` the injection that sent it. `ask_selection` adds the last lasso selection on that page:
+`bbox` `[x0, y0, x1, y1]` as xochitl signalled it (`SceneController.areaSelected`, scene units,
+x centred) and `items`, the number of selected items. Clients resolve the selected strokes from
+their `page` snapshot (strokes with points inside `bbox` after the conversion `x = (x_rm + w/2)/w`).
 
 ### `key` (keyboard bridge → server → broadcast)
 
