@@ -224,6 +224,66 @@ Fields: `id` the entry's id (`status` is answered on the tablet and never sent; 
 x centred) and `items`, the number of selected items. Clients resolve the selected strokes from
 their `page` snapshot (strokes with points inside `bbox` after the conversion `x = (x_rm + w/2)/w`).
 
+### Personal marks: `mark_seen`, `mark_ask`, `mark_define`, `mark_invoke`, `mark_feedback`, `mark_query`, `marks`
+
+Marks that earn their meaning (ADR 013, `packages/marks`): the user invents a glyph; the first
+time it appears beside their notes the agent asks, once, what it means; after that it acts, with a
+quiet confirmation until it has earned trust. Recognition runs in a **recogniser host** for one
+owner (today the owner's phone, `apps/even-g2` "Watch my ink for marks"; later the desktop
+broker). Every router relays these messages to the other clients, like `key` (Go, Rust and Python
+routers), and stores nothing.
+
+Coordinates follow this document (normalized page coordinates, Unix ms), with one exception:
+**glyph ink** `ink_mm` / `examples` is in millimetres relative to the glyph's own bounding box,
+because a mark's examples are shapes, not places, and the recogniser's size gate needs real size.
+
+```jsonc
+// host → all: a gesture read as a mark, an ambiguity, or a candidate worth asking about
+{"t":"mark_seen","occurrence":"oc_k3","owner":"p_alif","strokes":["1:204"],"page":"<page>",
+ "bbox":[0.62,0.18,0.66,0.23],"result":"candidate","reason":"isolated","relation":"beside","why":"…","ts":1791262400123}
+
+// host → all: one batched question, at a pause in the writing, at most one every 5 minutes
+{"t":"mark_ask","ask":"ma_k4","owner":"p_alif","options":["tag","flashcard","ask_agent","delegate","latex","replay_from","send"],
+ "items":[{"occurrence":"oc_k3","strokes":["1:204"],"bbox":[…],"ink_mm":[[[4.1,0],[0.8,3.7],…]],"reason":"isolated","seen":1}],"ts":…}
+
+// any surface → host: an answer or an edit (op: create | decline | refine | rename | add_example |
+// remove_example | retract | restore | share | unshare | adopt)
+{"t":"mark_define","op":"create","by":"p_alif","ask":"ma_k4","occurrence":"oc_k3",
+ "meaning":{"action":"flashcard","params":{}},"ts":…}
+{"t":"mark_define","op":"create","by":"p_alif","examples":[[[[0,0],[3,4]]]],"meaning":{"action":"tag","params":{"tag":"todo"}},"name":"todo bolt","ts":…}
+{"t":"mark_define","op":"retract","by":"p_alif","mark":"mk_k5","ts":…}
+
+// host → all: a mark fired (mode confirm: waits for an accept; notify: done, undo offered; silent: done)
+{"t":"mark_invoke","invocation":"iv_k6","mark":"mk_k5","owner":"p_alif","name":"spark",
+ "meaning":{"action":"flashcard","params":{}},"mode":"confirm","confidence":0.81,"why":"$P 0.043 ≤ τ 0.085, …",
+ "occurrence":{"strokes":["1:240"],"bbox":[…],"page":"<page>"},
+ "target":{"page":"<page>","strokes":["1:231","1:232"],"region":[0.08,0.41,0.39,0.44],"since":1791262390000},
+ "effect":{"t":"primer_request","what":"flashcard","learner":"p_alif","front":{…},"source":"mark","mark":"mk_k5","invocation":"iv_k6"},"ts":…}
+
+// any surface → host: the verdict
+{"t":"mark_feedback","invocation":"iv_k6","verdict":"accept","by":"p_alif","via":"phone","ts":…}
+
+// any surface → hosts: the registry, please; a host answers with the marks visible to the asker
+{"t":"mark_query","by":"p_kim"}
+{"t":"marks","owner":"p_alif","marks":[…],"ts":…}
+```
+
+- **Actions map onto existing messages** (`effect`, sent by the host alongside a `notify` or
+  `silent` invoke, or after the accept of a `confirm`): `delegate` → `task_create`
+  (`trigger:"mark"`, ADR 012); `send` → `task_create` to the `drafts` pod with
+  `authority:"act_with_consent"` (the send itself still needs initials on its card); `flashcard` →
+  `primer_request` `what:"flashcard"` (the Primer schedules it; feat/primer); `ask_agent` →
+  `term_prompt` with `attach:"page"` and the `region`; `latex` → `latex_recognize`
+  (docs/investigations/latex-on-tablet.md §5); `tag` → none (the invocation is the record);
+  `replay_from` → none (a client opens Thinking replay at `target.since`; the phone does).
+- **Who may act.** A mark recognises only its owner's ink. `by` must be the owner for every edit;
+  sharing makes a mark visible in `marks` answers, and another participant adopts it as a copy of
+  their own (`op:"adopt"`). A consequential action (`send`) is always `confirm`.
+- **Built-ins first.** A gesture that answers a task card is a `task_answer` (ADR 012), never a
+  personal mark; ink on a card that answers nothing is not a mark either.
+- The dock entry `mark_teach` (`dock_action`, kind selection) asks the host to treat the lasso
+  selection as a candidate and ask about it now.
+
 ### `key` (keyboard bridge → server → broadcast)
 
 One key-down (or auto-repeat) from a keyboard paired to the tablet. `char` is present only for

@@ -38,7 +38,8 @@ gated only by a prompt.
   - lasso, then `@pod` written beside it;
   - `@pod` typed in a text box;
   - the dock's "Delegate page to…";
-  - later, a learned personal delegate mark (roadmap: marks that earn their meaning).
+  - later, a learned personal delegate mark (ADR 013, `packages/marks`: a mark meaning
+    "delegate to @pod" emits this `task_create` with `trigger:"mark"`).
 
   A pod is chosen explicitly, never inferred from the content.
 - **The task** is a structured object (`packages/delegate/src/task.ts`):

@@ -6,8 +6,12 @@ the caption (what happened, including what the classifier and the consent check 
 the Even G2 glance line, green on black as the glasses show it.
 
     uv run --with pillow python scripts/render_sequence.py
+    uv run --with pillow python ../delegate/scripts/render_sequence.py --src out/marks-sequence.json --prefix marks
+
+The second form is packages/marks' sequence: the same renderer for any `{page, frames}` file.
 """
 
+import argparse
 import json
 import pathlib
 
@@ -103,14 +107,18 @@ def render(frame, page, index):
 
 
 def main():
-    data = json.loads(SRC.read_text(encoding="utf8"))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src", type=pathlib.Path, default=SRC, help="the sequence JSON (default: delegate's)")
+    ap.add_argument("--prefix", default="delegate", help="file name prefix in docs/media")
+    args = ap.parse_args()
+    data = json.loads(args.src.read_text(encoding="utf8"))
     OUT.mkdir(parents=True, exist_ok=True)
     frames = []
     for i, fr in enumerate(data["frames"], 1):
         im = render(fr, data["page"], i)
-        im.save(OUT / f"delegate-{i}-{fr['name']}.png", optimize=True)
+        im.save(OUT / f"{args.prefix}-{i}-{fr['name']}.png", optimize=True)
         frames.append(im.convert("P", palette=Image.ADAPTIVE, colors=64))
-    frames[0].save(OUT / "delegate-sequence.gif", save_all=True, append_images=frames[1:], duration=2600, loop=0, optimize=True)
+    frames[0].save(OUT / f"{args.prefix}-sequence.gif", save_all=True, append_images=frames[1:], duration=2600, loop=0, optimize=True)
     print(f"{len(frames)} frames -> {OUT}")
 
 

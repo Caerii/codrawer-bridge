@@ -148,6 +148,8 @@ For AI ink and Claude Code turns, run the desktop router as well: `scripts/dev/u
 | [`bridge/remarkable/boot/`](bridge/remarkable/boot) | Durable install: boot stub, signed releases, health check, rollback, Bluetooth bring-up |
 | [`apps/even-g2/`](apps/even-g2/README.md) | Even G2 glasses app and phone/browser stage (TypeScript, Even Hub SDK) |
 | [`packages/hand/`](packages/hand/README.md) | Handwriting simulator for agent ink: lognormal motor plans, a damped arm, tremor, personas; CLI |
+| [`packages/delegate/`](packages/delegate) | Delegation on paper (ADR 012): task cards, the built-in pen grammar, consent by pen |
+| [`packages/marks/`](packages/marks/README.md) | Marks that earn their meaning (ADR 013): a personal mark recogniser, the teach flow, a registry with lineage |
 | [`apps/hand-lab/`](apps/hand-lab) | Watch the personas write live, with the arm, speed profiles and tunable parameters |
 | [`src/codrawer_bridge/`](src/codrawer_bridge) | Desktop router (Python, FastAPI): AI worker, `/term` to Claude Code, record/replay tools |
 | [`model-server/`](model-server) | OpenAI-compatible model gateway for the AI worker (Cerebras, Bedrock, Together) |
@@ -169,6 +171,8 @@ What's next: [`docs/roadmap.md`](docs/roadmap.md) (Putnam mock-exam mode, thinki
 | [006](docs/adr/006-latency-budget-per-surface.md) | Latency budgets per surface, from measurements |
 | [007](docs/adr/007-surface-composition.md) | How tablet, glasses, desktop and agents compose |
 | [008](docs/adr/008-universal-page-model.md) | One page model for every participant |
+| [012](docs/adr/012-delegation-on-paper.md) | Delegation on paper: task cards answered with the pen (proposed) |
+| [013](docs/adr/013-marks-that-earn-meaning.md) | Marks that earn their meaning: a personal vocabulary, asked once, trusted gradually (proposed) |
 
 Device research that shaped them, with the evidence, is in [`docs/investigations/`](docs/investigations):
 xochitl's pen data and page files, durable installs across OS updates, direct BLE to the glasses,
