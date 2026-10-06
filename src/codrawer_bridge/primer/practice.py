@@ -25,7 +25,9 @@ train, and a full mock is four sessions with the real breaks.
   the zone of proximal development; Wilson, Shenhav, Straccia & Cohen 2019, "The eighty five
   percent rule for optimal learning", *Nature Communications*, argue for practice at moderate
   error rates), *review* problems on concepts the half-life model says are fading
-  (learner.due), and *reading* problems tied to the textbook section she was just in (coach.py).
+  (learner.due), *weakness* problems on the concepts behind recurring misconceptions (a fresh
+  problem with the same idea), and *reading* problems tied to the textbook section she was just
+  in (coach.py).
   Every pick carries a ``why`` line: the coach must be inspectable (ADR 010).
 - :func:`timed_session` and :func:`mock_exam`: a 90-minute three-problem set, and four of them
   with the exam's break pattern.
@@ -42,7 +44,7 @@ import datetime as dt
 import random
 from dataclasses import dataclass, field
 
-from .concepts import AREA_LABELS, AREAS, CONCEPTS
+from .concepts import AREA_LABELS, AREAS, CONCEPTS, MISCONCEPTIONS
 from .learner import Learner
 
 #: The 87th Putnam (expected date; confirm at maa.org/putnam).
@@ -511,7 +513,7 @@ class Pick:
     problem: str
     title: str
     why: str
-    kind: str  # stretch | review | reading | warmup
+    kind: str  # reading | review | weakness | stretch | warmup
     p_success: float
 
     def to_dict(self) -> dict:
@@ -528,10 +530,11 @@ def choose_queue(
     learner: Learner, now_ms: float, n: int = 5, reading_keywords: list[str] | None = None
 ) -> list[Pick]:
     """
-    The next ``n`` problems for ``learner``: reading-tied first (when she was just in a textbook
-    section that matches a problem), then review of fading concepts, then stretch problems
-    nearest the middle of the 0.35–0.75 success band, skipping problems already solved with 8+.
-    Each pick names its reason.
+    The next ``n`` problems for ``learner``, in this order: up to two tied to the textbook
+    section she was just reading (when a bank problem matches), up to two spaced-review problems
+    on fading concepts, up to two aimed at weak spots (recurring misconceptions, low mastery),
+    then stretch problems nearest the middle of the 0.35–0.75 success band. Problems already
+    solved with 8 or more are skipped. Each pick names its reason.
     """
     done = {pid for pid, s in learner.solved.items() if s >= 8}
     due = set(learner.due(now_ms))
@@ -561,6 +564,37 @@ def choose_queue(
                 add(p, f"Spaced review: {label} is fading (last practised a while ago).", "review")
                 break
         if sum(1 for x in picks if x.kind == "review") >= 2:
+            break
+
+    # Weak spots: the concepts behind recurring misconceptions, and concepts with repeated low
+    # evidence, each get the easiest unsolved problem that exercises them, preferring one she has
+    # not tried (the same idea on a fresh problem, not the one she just failed).
+    weak: list[tuple[float, str]] = []
+    for mid, ms in learner.misconceptions.items():
+        if ms.recurring and mid in MISCONCEPTIONS:
+            for c in MISCONCEPTIONS[mid].concepts:
+                weak.append((learner.mastery(c) - 0.1 * ms.count, c))
+    for cid, st in learner.concepts.items():
+        if st.opportunities >= 2 and st.p < 0.5:
+            weak.append((st.p, cid))
+    targeted: set[str] = set()
+    for _, c in sorted(weak):
+        if c in targeted or c not in CONCEPTS:
+            continue
+        targeted.add(c)
+        cands = sorted(
+            (p for p in BANK.values() if c in p.concepts),
+            key=lambda p: (p.id in learner.seen, p.difficulty),
+        )
+        for p in cands:
+            if p.id not in used and p.id not in done:
+                add(
+                    p,
+                    f"Targets a weak spot: {CONCEPTS[c].label} (mastery {learner.mastery(c):.2f}).",
+                    "weakness",
+                )
+                break
+        if sum(1 for x in picks if x.kind == "weakness") >= 2:
             break
 
     scored = []
@@ -692,10 +726,9 @@ def plan(learner: Learner, today: str, exam: str = EXAM_DATE) -> dict:
     monday = t - dt.timedelta(days=t.weekday())
     weeks_n = max(1, (e - monday).days // 7 + 1)
     sats = [s for s in _saturdays(t, e) if s > t]
-    mocks: set[dt.date] = set()
-    if len(sats) >= 4:
-        for frac in (0.35, 0.6, 0.85):
-            mocks.add(sats[min(len(sats) - 2, int(frac * (len(sats) - 1)))])
+    # Three full mocks, two weeks apart, the last on the Saturday a week before the exam's (so
+    # the final week tapers): 24 Oct, 7 Nov and 21 Nov for the 2026 exam planned from October.
+    mocks: set[dt.date] = {sats[k] for k in (-2, -4, -6) if len(sats) >= -k}
     weak = sorted(AREAS, key=lambda a: area_mastery(learner, a))
     seq = list(BASE_WEEKS)
     while len(seq) < weeks_n - 1:

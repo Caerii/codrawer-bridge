@@ -423,7 +423,7 @@ def test_plan_runs_to_the_exam_with_saturday_mocks():
     assert p["weeks"][0]["start"] == "2026-10-05"
     assert p["weeks"][-1]["exam"] == "2026-12-05"
     mocks = [w["mock"] for w in p["weeks"] if w["mock"]]
-    assert len(mocks) == 3
+    assert mocks == ["2026-10-24", "2026-11-07", "2026-11-21"]
     assert all(dt.date.fromisoformat(m).weekday() == 5 for m in mocks)
     assert p["weeks"][-1]["mock"] is None, "the last week tapers"
 
@@ -452,6 +452,18 @@ def test_queue_explains_every_pick_and_follows_reading():
     )
     assert picks[0].kind == "reading" and picks[0].problem == "pigeonhole_square"
     assert all(p.why for p in picks)
+
+
+def test_queue_targets_a_weak_spot_with_a_fresh_problem():
+    lr = Learner(name="t", created_ms=NOW)
+    lr.seen.append("sqrt2_irrational")
+    for _ in range(2):
+        lr.saw_misconception("sqrt2_no_lowest_terms", NOW)
+        lr.observe("irrationality", 0.0, now_ms=NOW)
+    picks = practice.choose_queue(lr, NOW, n=4)
+    weak = [p for p in picks if p.kind == "weakness"]
+    assert weak and weak[0].problem == "sqrt3_irrational"
+    assert "weak spot" in weak[0].why
 
 
 def test_coach_watches_only_with_consent():
