@@ -4,9 +4,11 @@ Read this before you install codrawer on a reMarkable Paper Pro. It lists every 
 puts on the tablet, what runs and with which privileges, what it never touches, what it opens on
 your network, and how to remove all of it. Each statement is checked against the scripts that do
 the work: [`bridge/remarkable/boot/install.sh`](../bridge/remarkable/boot/install.sh),
-[`boot.sh`](../bridge/remarkable/boot/boot.sh), [`xovi.sh`](../bridge/remarkable/boot/xovi.sh), the three units in
-[`boot/units/`](../bridge/remarkable/boot/units) and
-[`scripts/dev/deploy-tablet.sh`](../scripts/dev/deploy-tablet.sh). The reasoning behind the layout
+[`boot.sh`](../bridge/remarkable/boot/boot.sh), [`xovi.sh`](../bridge/remarkable/boot/xovi.sh),
+[`tailscale.sh`](../bridge/remarkable/boot/tailscale.sh), the four units in
+[`boot/units/`](../bridge/remarkable/boot/units),
+[`scripts/dev/deploy-tablet.sh`](../scripts/dev/deploy-tablet.sh) and
+[`scripts/dev/tailscale-tablet.sh`](../scripts/dev/tailscale-tablet.sh). The reasoning behind the layout
 is in [`investigations/durable-install.md`](investigations/durable-install.md).
 
 Before codrawer, you will have made two changes yourself (see
@@ -31,19 +33,22 @@ is gone at the next reboot; the rootfs copy is the one every later boot uses.
 
 | Path | What it is |
 | --- | --- |
-| `releases/<version>/` | a release: the bridge binaries (Go `codrawer_bridge_native`, and Rust `codrawer_bridge_rs` when built), the boot scripts, the three units, `compat.conf`, `xovi-compat.conf`, the XOVI payload `xovi/` (`xovi.so`, `start`, `stock`, `codrawer-layer.so`), a `MANIFEST` and its ed25519 signature `MANIFEST.sig`. The three newest are kept, plus `current` and `previous`. |
+| `releases/<version>/` | a release: the bridge binaries (Go `codrawer_bridge_native`, and Rust `codrawer_bridge_rs` when built), the boot scripts (`tailscale.sh` among them), the four units, `compat.conf`, `xovi-compat.conf`, the XOVI payload `xovi/` (`xovi.so`, `start`, `stock`, `codrawer-layer.so`), a `MANIFEST` and its ed25519 signature `MANIFEST.sig`. The three newest are kept, plus `current` and `previous`. |
 | `current`, `previous` | symlinks to the active release and the one before it (`boot.sh rollback` swaps them) |
 | `bridge.env` | your settings (router address, input devices, pairing code `ROUTER_TOKEN`, engine). Seeded once from `bridge.env.example`, never overwritten. |
 | `release.pub` | the public key releases must be signed with. Uploaded by `deploy-tablet.sh` on first install (trust on first use, over your SSH session). |
 | `state/` | `os_version` (the OS seen at the last boot) and `os_changed` (set when that differs); `xovi_status` (XOVI's last verdict) and `xovi_pending` (an XOVI start being checked) |
 | `DISABLED` | not created by codrawer: create it yourself as a kill switch (`boot.sh start` then starts nothing, XOVI included) |
 | `XOVI_DISABLED` | XOVI's kill switch, first line the reason: written by `boot.sh xovi off` or by the crash guard (see "XOVI") |
+| `tailscale/` | only if you install Tailscale (see "Tailscale"): `bin/tailscale`, `bin/tailscaled` (Tailscale's official arm64 build, about 70 MB), `VERSION`, and `state/` (the node's keys and login) |
+| `TAILSCALE_DISABLED` | Tailscale's kill switch: written by `boot.sh tailscale off` |
 
 **At every boot, in memory only.** `boot.sh start` copies `codrawer-bluetooth.service`,
-`codrawer-bridge.service` and `codrawer-xovi.service` from the current release into
-`/run/systemd/system/` (tmpfs), writes `/run/codrawer/env` (OS version, whether it is listed in
-`compat.conf`, codrawer version), starts the first two, and then asks systemd, without waiting, to
-run the third (see "XOVI"). Nothing in `/run` survives a reboot.
+`codrawer-bridge.service`, `codrawer-xovi.service` and `codrawer-tailscale.service` from the
+current release into `/run/systemd/system/` (tmpfs), writes `/run/codrawer/env` (OS version,
+whether it is listed in `compat.conf`, codrawer version), starts the first two, and then asks
+systemd, without waiting, to run the third (see "XOVI") and, if Tailscale is installed and not
+switched off, the fourth (see "Tailscale"). Nothing in `/run` survives a reboot.
 
 **`/home/root/xovi/`**, when a release carries the XOVI payload and the OS is one it was tested on:
 XOVI's own directory, in XOVI's own layout (`xovi.so`, `start`, `stock`, `extensions.d/codrawer-layer.so`,
@@ -143,6 +148,56 @@ Nothing else remains: the drop-in was only ever in memory, and `/run/codrawer/to
 next reboot. Removing codrawer (below) also stops XOVI from coming back, since the stub that
 starts it is gone; run `boot.sh xovi off` first to leave XOVI at once rather than at the next reboot.
 
+## Tailscale (remote access, optional)
+
+**What it is.** [Tailscale](https://tailscale.com) is a VPN that joins your own devices into a
+private network (a *tailnet*), wherever each of them is. With it on the tablet, your phone (with the
+Tailscale app, signed in to the same account) reaches the tablet's router from anywhere, not only on
+your home Wi-Fi. codrawer does not install it unless you run `scripts/dev/tailscale-tablet.sh`.
+
+**What gets installed.** The installer downloads Tailscale's official static arm64 build from
+pkgs.tailscale.com, checks it against the sha256 Tailscale publishes next to it, and copies
+`tailscale` and `tailscaled` to `/home/root/codrawer/tailscale/bin/`. The node's keys and login
+live in `/home/root/codrawer/tailscale/state/`. You log in once, with the link the installer
+prints, as your own account; codrawer changes no account setting (key expiry stays your tailnet's
+default). Tailscale SSH, exit node, subnet routes and MagicDNS on the tablet are all left off.
+
+**How it runs.** `codrawer-tailscale.service` (as root, like the other units) runs `tailscaled
+--tun=userspace-networking`: the VPN lives inside that one process. It adds no network interface,
+route, DNS or firewall setting to the tablet. `boot.sh` starts it after the bridge, without
+waiting, at every boot, only if `tailscale/bin/tailscaled` exists and `TAILSCALE_DISABLED` does not.
+Installing, upgrading or rolling back a codrawer release does not restart it.
+
+**What it exposes.** Only to devices signed in to *your* tailnet, never to the internet: every TCP
+port listening on the tablet, at the tablet's tailnet address (`100.x.y.z`) and name
+(`remarkable.<your-tailnet>.ts.net`). Today that is the router on 8577, with the same pairing code
+as on the LAN, and reMarkable's own crash reporter (memfaultd), which listens on
+127.0.0.1:8787 and is reachable from the tailnet too. SSH is **not** reachable over the tailnet
+(reMarkable's SSH listens only on Wi-Fi and USB). Traffic between your devices is encrypted by
+Tailscale (WireGuard), which also covers the router's plain WebSocket. To limit which of your
+devices may reach the tablet, or which ports, use your tailnet's access controls in Tailscale's
+admin console. Tailscale's own service also gets the tablet's connection metadata, as with any
+Tailscale device (see Tailscale's privacy policy).
+
+**Turning it off.**
+
+```sh
+sh /home/root/codrawer/current/boot.sh tailscale off   # stop now and at every later boot (login kept)
+sh /home/root/codrawer/current/boot.sh tailscale on    # start again
+sh /home/root/codrawer/current/boot.sh doctor          # tailscale=up <ip> <name> | needs login | stopped | disabled | not installed
+```
+
+**Removing it completely.**
+
+```sh
+sh /home/root/codrawer/current/boot.sh tailscale off
+rm -rf /home/root/codrawer/tailscale /home/root/codrawer/TAILSCALE_DISABLED
+```
+
+Then remove the machine (`remarkable`) from your tailnet in Tailscale's admin console
+(login.tailscale.com → Machines), which revokes its key. Nothing else remains: the unit and
+the control socket were only ever in `/run`.
+
 ## What it never does
 
 - **It never writes xochitl's data** (your notebooks, documents, templates, settings). The page
@@ -169,6 +224,9 @@ starts it is gone; run `boot.sh xovi off` first to leave XOVI at once rather tha
   loopback (the bridge's own pen stream) are exempt. Without `ROUTER_TOKEN` in `bridge.env` the
   router is open to anyone on the network. The code travels in clear on your LAN: treat it as a
   door code for a trusted Wi-Fi network, not as protection on a public one.
+- **Over Tailscale, if you installed it**: the same listeners at the tablet's tailnet address, to
+  devices on your own tailnet only (see "Tailscale"). `tailscaled` makes outgoing connections to
+  Tailscale's coordination and relay servers and to your other devices.
 - Nothing else listens. The bridge makes outgoing connections only to the router it is configured
   for (`DESKTOP_WS`; loopback by default).
 
@@ -189,6 +247,7 @@ sh /home/root/codrawer/current/boot.sh xovi off
 
 # 3. Remove the opt-in extras, if you used them, and XOVI's files.
 rm -rf /home/root/xovi /tmp/codrawer-layer
+# (Tailscale's files go with step 4; remove the machine from your tailnet's admin console too)
 rm -f /home/root/.vellum/hooks/post-os-upgrade/codrawer
 sed -i '/codrawer-repair/d' /home/root/.ssh/authorized_keys
 
@@ -199,7 +258,7 @@ rm -rf /home/root/codrawer
 systemctl --no-block reboot
 ```
 
-`install.sh --remove` stops the stub and codrawer's three units (stopping `codrawer-xovi` ends
+`install.sh --remove` stops the stub and codrawer's four units (Tailscale included) (stopping `codrawer-xovi` ends
 only its guard; step 0 is what returns xochitl to stock), deletes the stub (and the two units older
 codrawer versions installed there) from the rootfs's `/etc`, deletes the units in
 `/run/systemd/system` and reloads systemd. It leaves step 2 to you because that copy is in memory

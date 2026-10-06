@@ -409,3 +409,42 @@ every boot. codrawer does that from its own boot path, adding no rootfs file: th
 - **Tests:** `bridge/remarkable/boot/test` (fake systemctl and `/proc`): tested OS, untested OS,
   kill switch, crash after start, unfinished previous attempt, missing payload, on/off, a second
   start in the same boot, and the bridge starting in every case.
+
+## Tailscale at boot (implemented 2026-10-06)
+
+Remote access to the tablet's router from the user's own tailnet (the phone on Tailscale, away
+from the home Wi-Fi). Like XOVI, it is optional, added through codrawer's own boot path, and adds
+no rootfs file.
+
+- **Binaries and state in `/home`, outside releases.** `scripts/dev/tailscale-tablet.sh` downloads
+  the official static arm64 build from pkgs.tailscale.com/stable, checks it against the `.sha256`
+  Tailscale publishes next to it, and uploads `tailscale` and `tailscaled` (about 70 MB together)
+  to `/home/root/codrawer/tailscale/bin/`, with `VERSION` next to it. They are not in releases/
+  (each release would carry 70 MB) and not signed by the release key: the installer verified them
+  against Tailscale's own checksum. Node state (keys, login) is in `tailscale/state/`. Both
+  survive an OS update with the rest of `/home`. Installed first: 1.102.5.
+- **Userspace networking.** The kernel has no `/dev/net/tun`, so `tailscaled
+  --tun=userspace-networking`: no interface, route or firewall change in the OS. Incoming TCP to
+  the tailnet address is passed to local listeners by netstack, so `:8577` answers at
+  `<tailnet-ip>:8577` without `tailscale serve`. Loopback-only listeners are reachable too
+  (reMarkable's memfaultd, `127.0.0.1:8787`). SSH is not: the stock `dropbear-wlan.socket` and
+  `dropbear-usb*.socket` use `BindToDevice`. Verified on 1.102.5. `--shields-up` with a
+  `serve` of 8577 only was tried and drops the served port too, so port restriction belongs in the
+  tailnet's ACLs.
+- **Start.** `boot.sh start` installs `codrawer-tailscale.service` into `/run/systemd/system` with
+  the other units and, after the bridge, starts it with `--no-block` when `tailscale.sh gate`
+  holds: `tailscale/bin/tailscaled` exists and `/home/root/codrawer/TAILSCALE_DISABLED` is
+  absent (the unit repeats both as `ConditionPathExists`). `stop`, `activate` and `rollback` never
+  stop it, so a release switch keeps the tailnet connection. `Restart=on-failure`, five starts in
+  300 s. The control socket is `/run/codrawer/tailscaled.sock`.
+- **Login** is once, by the user, with the link `tailscale up` prints (`--hostname=remarkable
+  --accept-dns=false`; no Tailscale SSH, exit node or routes). The node key is in the state
+  directory; Tailscale's key expiry (180 days by default) is an account setting codrawer leaves
+  alone.
+- **Commands.** `boot.sh doctor` adds `tailscale=up <ip> <name>`, `needs login`, `stopped`,
+  `disabled` or `not installed`. `boot.sh tailscale off` stops it and writes the kill switch (the
+  login is kept); `on` removes the switch and starts it.
+- **Tests:** `bridge/remarkable/boot/test`: not installed → skipped, installed → started (and
+  doctor's line), tailscaled's flags, kept across `boot.sh stop`, kill switch → skipped, on/off,
+  and the bridge starting in every case.
+- **Sleep.** The tablet is reachable on the tailnet only while awake, as on the LAN.

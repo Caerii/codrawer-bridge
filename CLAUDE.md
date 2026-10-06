@@ -71,6 +71,15 @@ The payload (`xovi/` in each release) needs XOVI's pinned `xovi.so`/`start`/`sto
 the vendored files in `bridge/remarkable/xovi/vendor` and Docker for `codrawer-layer.so`; without them the release ships without it.
 See `docs/what-codrawer-changes.md` ("XOVI").
 
+Tailnet access (away from the home Wi-Fi): the tablet runs Tailscale from boot.sh
+(`codrawer-tailscale`, userspace networking, files in `/home/root/codrawer/tailscale`), as
+`remarkable` / `100.98.14.46` (`remarkable.tailf05963.ts.net`) on the user's tailnet; this PC is
+`aleph-desktop` there. The router answers at `ws://100.98.14.46:8577/ws/session1` (same pairing
+code); SSH does not go over the tailnet (dropbear is bound to wlan0/usb0). `scripts/dev/pack.sh`
+whitelists both tailnet origins, `scripts/dev/qr.sh --tailnet` points the dev app there,
+`scripts/dev/tailscale-tablet.sh` installs/updates and prints a login link, `boot.sh tailscale
+off|on` is the switch, `boot.sh doctor` prints `tailscale=`.
+
 After a reMarkable OS update the stub is gone (only `/home` survives): `scripts/dev/tablet-guard.sh`
 re-adds it automatically when running, or run `deploy-tablet.sh`, or a phone shortcut with the key
 from `scripts/dev/make-repair-key.sh`. Signing key: `~/.codrawer/release.key` (never commit it).
