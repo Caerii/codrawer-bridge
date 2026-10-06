@@ -9,7 +9,8 @@
  *                    writing pauses; the text shows status, the keyboard transcript, the
  *                    terminal, or a full-screen document editor (hud/, doc/)
  *   on the phone     the page at full resolution, live, on paper, dark or the camera (phone/), and
- *                    a participant's pen: strokes drawn there join the session
+ *                    a participant's pen: strokes drawn there join the session; and the user's
+ *                    personal marks, learned and inspected here (marks/, phone/marks.ts)
  *
  * The one fact that shapes the glasses side (ADR 006): an image update costs ~200 ms whatever its
  * size and only one can be on the wire, so live ink goes through the loupe alone, frames are
@@ -39,11 +40,13 @@ import { attachGlasses, releaseIfStale } from './glasses/page'
 import { onKey } from './hud/keyboard'
 import { onTerm } from './hud/terminal'
 import { link } from './link'
+import { setupMarks } from './marks/host'
 import { flushText, tick } from './loop'
 import { keepScreenAwake } from './phone/awake'
 import { setupCamera } from './phone/camera'
 import { installDevLog } from './phone/devlog'
 import { forgetMyStrokes, setupDrawing } from './phone/draw'
+import { setupMarksUi } from './phone/marks'
 import { setupMenu } from './phone/menu'
 import { askPairingCode, askRouterAddress, onHelloNotice } from './phone/notices'
 import { showStatus } from './phone/panel'
@@ -61,6 +64,7 @@ setupViews()
 setupDrawing()
 setupCamera()
 setupMenu()
+setupMarksUi()
 keepScreenAwake()
 loadDocument()
 
@@ -102,6 +106,7 @@ link.on('doc_update', onDocUpdate)
 link.on('doc_compact', onDocCompact)
 link.on('doc', onPlainDoc)
 link.on('term', onTerm)
+setupMarks() // personal marks: its own handlers for mark_*, dock_action and the ink it reads
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

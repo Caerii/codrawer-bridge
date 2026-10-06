@@ -613,3 +613,27 @@ func TestNonOwnerCannotDeleteUserInk(t *testing.T) {
 		t.Fatalf("the refused delete removed u_1 anyway: %v", m)
 	}
 }
+
+// Personal marks (protocol.md, "Personal marks") are relayed to the others, never back.
+func TestMarksMessagesAreRelayed(t *testing.T) {
+	srv := newServer(t)
+	phone := dial(t, srv, "s1")
+	other := dial(t, srv, "s1")
+	for _, m := range []string{
+		`{"t":"mark_ask","ask":"ma_1","owner":"p1","items":[],"options":["tag"],"ts":1}`,
+		`{"t":"mark_define","op":"create","by":"p1","meaning":{"action":"tag","params":{"tag":"idea"}},"ts":2}`,
+		`{"t":"mark_invoke","invocation":"iv_1","mark":"mk_1","owner":"p1","mode":"notify","ts":3}`,
+		`{"t":"mark_feedback","invocation":"iv_1","verdict":"undo","by":"p1","via":"phone","ts":4}`,
+		`{"t":"mark_query","by":"p2"}`,
+		`{"t":"marks","owner":"p1","marks":[],"ts":5}`,
+		`{"t":"mark_seen","occurrence":"oc_1","owner":"p1","strokes":[],"bbox":[0,0,1,1],"result":"candidate","why":"","ts":6}`,
+	} {
+		send(t, phone, m)
+	}
+	for _, want := range []string{"mark_ask", "mark_define", "mark_invoke", "mark_feedback", "mark_query", "marks", "mark_seen"} {
+		if m := read(t, other); m["t"] != want {
+			t.Fatalf("want %s, got %v", want, m)
+		}
+	}
+	expectQuiet(t, phone, 150*time.Millisecond)
+}

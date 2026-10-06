@@ -1,0 +1,25 @@
+{
+  "name": "marks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marks that earn their meaning: a personal mark recogniser ($P point clouds, context, open-set rejection), the teach flow, and a registry with lineage, on top of packages/delegate's built-in pen grammar",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "eval": "tsx scripts/eval.ts",
+    "sequence": "tsx scripts/sequence.ts && uv run --with pillow python ../delegate/scripts/render_sequence.py --src out/marks-sequence.json --prefix marks"
+  },
+  "dependencies": {
+    "delegate": "workspace:*",
+    "hand": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0"
+  }
+}

@@ -13,6 +13,7 @@
  */
 import { cfg, remember } from '../config'
 import { link } from '../link'
+import { marksStrokeEnded } from '../marks/host'
 import { dirty, store } from '../state'
 import { defaultColorFor } from './palette'
 import { stage } from './screen'
@@ -38,6 +39,11 @@ function participant(): { id: string; color: string } {
 /** Who draws here; set up by {@link setupDrawing}. */
 let me = { id: '', color: '' }
 const drawBtn = () => document.getElementById('drawBtn') as HTMLButtonElement
+
+/** This participant's id (remembered on this device; the owner of the marks taught here). */
+export function myId(): string {
+  return me.id
+}
 
 /** This participant's colour (CSS hex). */
 export function myColor(): string {
@@ -137,6 +143,7 @@ export function setupDrawing() {
       flush()
       store.end(current)
       link.send({ t: 'stroke_end', id: current, ts: Date.now() })
+      marksStrokeEnded(current) // this phone's pen is its owner's too (marks/host.ts)
       current = null
     } else if (performance.now() - flushedAt >= 16) {
       flush() // pen-rate batches, like the tablet's 60 Hz

@@ -62,6 +62,17 @@ here".
 
 ### 3. Marks that earn their meaning
 
+**In progress (2026-10-06): ADR 013 (proposed), `packages/marks`, phone ⋯ → *My marks*.** A
+few-shot, open-set recogniser ($P point clouds with a DTW path check, context gates, per-mark
+thresholds, negatives from rejections) behind packages/delegate's built-in grammar; the batched
+ask ("this mark → ?", answerable by pen on a card or on the phone); confirm → notify → silent as a
+mark earns trust; a registry with lineage, sharing, adoption, drift and conflicts; actions mapped
+onto `task_create`, `primer_request`, `term_prompt`, `latex_recognize`, tags and replay;
+`mark_*` messages relayed by all three routers. Measured on synthetic ink only (3 examples:
+recall 97.5%, no false accepts on 305 words in and beside lines, 6.7% on a held-out set of
+larger words, 2.2% after one rejection each). Open: real-ink tuning, glasses glance lines, the
+tablet dock entry, the broker-side host, registry sync between devices.
+
 A personal mark vocabulary, as described on the vision page ("A mark does not arrive with a
 meaning. It earns one.").
 

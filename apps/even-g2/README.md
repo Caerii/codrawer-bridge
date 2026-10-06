@@ -128,6 +128,20 @@ outside closes it and does nothing else):
   for testing (`pnpm --dir apps/even-g2 exec tsx ../../scripts/dev/replay_scene.ts ws://localhost:8584/ws/replaytest`).
 
   ![Replay at a pause](../../docs/media/replay-pause.png) ![Replay at an erasure](../../docs/media/replay-erase.png)
+- **My marks** (ADR 013, `packages/marks`): the personal marks this phone has learned. A gallery
+  shows each mark's examples, meaning, confidence and how it acts now (asks before acting, acts
+  with an undo, acts silently, retracted), with badges for shared, shadowed on task cards,
+  drifting and conflicting; others' shared marks can be adopted. A mark's page edits its meaning,
+  name and examples, shares, retracts or restores it, and lists its history (every change and
+  every use with its verdict, with accept/undo for open ones). *Teach a mark…* is a 24 mm drawing
+  pad: draw one to five examples, pick a meaning, save (a built-in shape or a look-alike of an
+  existing mark is refused, with the reason). *Watch my ink for marks on this phone* (opt-in,
+  remembered) makes this phone the recogniser host for the tablet's ink and its own pen: a new
+  glyph beside your notes brings up the ask card ("New mark → ?", once, batched, at a pause);
+  later uses show a quiet chip (✓ / ✗ while a mark is confirming, *Undo* once it acts). A mark
+  meaning *replay from here* opens Thinking replay at the marked ink.
+
+  ![My marks: the gallery, a mark, the ask card and a confirmation](../../docs/media/marks-phone.png)
 - **Record session** keeps every message to and from the router (not the router's `ping`) with
   its time, while a red dot shows in the toolbar; bounded at 50,000 messages or 32 M characters,
   past which the oldest are dropped (the count shows in the item's tooltip). Switching it on again
@@ -227,6 +241,7 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `phone/menu.ts`, `phone/invite.ts`, `phone/palette.ts` | the toolbar's "⋯" menu; invite links; participant colours |
 | `phone/timelapse.ts`, `phone/recorder.ts`, `phone/share.ts` | timelapse frames and MediaRecorder, its menu row; the session recorder's link tap and toolbar dot; share sheet or download |
 | `phone/replay.ts` | the replay bar: scrubber, markers, playback, the glasses canvas while replaying, clips |
+| `marks/host.ts`, `phone/marks.ts` | personal marks: the engine for this owner wired to the session; the My marks sheet, teach pad, ask card and chips |
 | `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
 
 Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text

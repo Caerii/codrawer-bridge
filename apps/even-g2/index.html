@@ -100,6 +100,53 @@
       #replay .rp-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: var(--muted); font-size: 11px; }
       #replay .rp-legend span::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: var(--k); }
       @media (max-width: 480px) { #replay .rp-legend { display: none; } }
+      /* personal marks (phone/marks.ts): the sheet, the ask card, the confirmation chips */
+      #marks { position: fixed; inset: 0; z-index: 4; display: flex; flex-direction: column; background: var(--bg); }
+      #marks[hidden], #markAsk[hidden] { display: none; }
+      #marks .mk-head { display: flex; align-items: center; gap: 8px; padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); background: var(--bar); border-bottom: 1px solid var(--line); font-size: 16px; }
+      #marks .mk-body { flex: 1; overflow-y: auto; padding: 12px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left)); max-width: 760px; width: 100%; margin: 0 auto; }
+      #marks h3 { margin: 18px 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+      #marks .mk-note { color: var(--muted); font-size: 13px; margin: 6px 0; }
+      #marks .mk-empty { color: var(--muted); }
+      #marks .mk-error { color: var(--off); font-size: 13px; min-height: 1em; }
+      #marks .mk-warn { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--off) 12%, transparent); font-size: 13px; }
+      #marks .mk-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+      #marks .mk-switch { display: flex; align-items: center; gap: 10px; font-weight: 550; }
+      #marks .mk-switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+      #marks .mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+      #marks .mk-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bar); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+      #marks .mk-card.off { opacity: 0.55; }
+      #marks .mk-name { font-weight: 650; }
+      #marks .mk-meaning, #marks .mk-stats { font-size: 12px; color: var(--muted); }
+      #marks .mk-meter { display: block; width: 100%; height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) var(--v), var(--chip) var(--v)); }
+      #marks .mk-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+      #marks .mk-title { width: 100%; font: inherit; font-size: 18px; font-weight: 650; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); }
+      #marks .mk-examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+      #marks .mk-example { position: relative; border: 1px solid var(--line); border-radius: 8px; }
+      #marks .mk-x { position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; border: 0; border-radius: 50%; background: var(--chip-on); color: var(--chip-on-fg); cursor: pointer; }
+      #marks .mk-meaning-edit { display: flex; flex-direction: column; gap: 8px; }
+      #marks select, #marks .mk-params input, #markAsk input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bar); color: var(--fg); }
+      #marks .mk-params label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+      #marks .mk-params input { flex: 1; }
+      #marks .mk-history { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+      #marks .mk-history li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+      #marks .mk-history time { color: var(--muted); font-size: 12px; min-width: 70px; }
+      #marks .mk-history span { flex: 1; }
+      #marks .mk-pad { width: min(100%, 320px); aspect-ratio: 1; border: 1px dashed var(--muted); border-radius: 12px; background: var(--bar); touch-action: none; display: block; }
+      .mk-thumb { flex: none; fill: none; stroke: var(--fg); stroke-linecap: round; stroke-linejoin: round; }
+      #marks .chipbtn, #markAsk .chipbtn, #markChips button { height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--chip); color: var(--fg); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; }
+      #marks .go, #markAsk .go { height: 32px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--chip-on); color: var(--chip-on-fg); font: inherit; font-weight: 600; cursor: pointer; align-self: flex-start; }
+      #marks .danger { background: var(--off); color: #fff; }
+      #markAsk .quiet { color: var(--muted); }
+      #markAsk { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); z-index: 3; padding: 10px 12px; background: var(--bar); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
+      #markAsk .mk-ask-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+      #markAsk .mk-ask-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
+      #markAsk .mk-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+      #markAsk .mk-note { color: var(--muted); font-size: 12px; }
+      #markChips { position: fixed; top: calc(max(8px, env(safe-area-inset-top)) + 52px); right: max(12px, env(safe-area-inset-right)); z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none; }
+      .mk-chip { pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 8px; border-radius: 999px; background: var(--bar); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,0.12); font-size: 13px; }
+      #markChips .mk-yes { background: var(--accent); color: var(--chip-on-fg); }
+      #markChips button { height: 26px; border-radius: 999px; }
       #debug { display: none; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); font: 11px ui-monospace, SFMono-Regular, monospace; }
       body.debug #debug { display: block; }
       #debug canvas { image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; background: #000; }
@@ -148,6 +195,7 @@
         <div class="tl-done" hidden><button type="button" class="go" data-act="tl-share">Share video</button> <button type="button" data-act="tl-discard">Discard</button></div>
       </div>
       <button class="item" type="button" role="menuitem" data-act="replay"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/></svg>Replay this page</button>
+      <button class="item" type="button" role="menuitem" data-act="marks"><svg viewBox="0 0 24 24"><path d="M13 3l-6 9h5l-2 9 7-11h-5z"/></svg>My marks<span class="note"></span></button>
       <button class="item" type="button" role="menuitem" data-act="replay-file"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M10 11v6l5-3z"/></svg>Replay a recording…</button>
       <hr />
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="rec"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg><span>Record session</span></button>
@@ -182,6 +230,12 @@
       </div>
       <div class="rp-legend" aria-hidden="true"><span style="--k: var(--pause)">Pause</span><span style="--k: var(--erase)">Erase</span><span style="--k: var(--rewrite)">Rewrite</span><span style="--k: var(--hesitation)">Hesitation</span><span style="--k: var(--burst)">Burst</span><span style="--k: var(--contribution)">Others</span></div>
     </div>
+    <div id="marks" role="dialog" aria-label="My marks" hidden>
+      <div class="mk-head"><b>My marks</b><span class="spacer"></span><button class="icon" type="button" data-mk="close" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="mk-body"></div>
+    </div>
+    <div id="markAsk" role="region" aria-label="What does this mark mean?" aria-live="polite" hidden></div>
+    <div id="markChips" aria-live="polite"></div>
     <input id="replayFile" type="file" accept=".jsonl,.ndjson,application/x-ndjson,application/json,text/plain" hidden />
     <video id="camera" playsinline muted autoplay hidden></video>
     <div id="debug">

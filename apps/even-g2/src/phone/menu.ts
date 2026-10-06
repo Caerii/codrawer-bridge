@@ -16,6 +16,8 @@
  *   Replay this page        scrub the page like a video, with the moments of thought marked
  *                           (phone/replay.ts)
  *   Replay a recording…     the same for a session recording (.jsonl), picked from a file
+ *   My marks                the personal marks learned here: gallery, history, edit, retract, and
+ *                           "Teach a mark" on a drawing pad (phone/marks.ts)
  *   Record session          keep every message to and from the router; a red dot in the toolbar
  *                           while on (phone/recorder.ts)
  *   Export recording        what was recorded, as JSONL the replay tools play into any router
@@ -41,6 +43,7 @@ import { inviteUrl, isLoopback } from './invite'
 import { askRouterAddress } from './notices'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
 import { exportRecording, refreshRecorder, setupRecorder, toggleRecording } from './recorder'
+import { markCount, openMarks } from './marks'
 import { pickRecording, refreshReplay, replayThisPage, setupReplay } from './replay'
 import { stage } from './screen'
 import { shareOrDownload, stampedName } from './share'
@@ -104,6 +107,8 @@ function refresh() {
     item(act).title = n === 0 ? none : ''
   }
   ;(item('clear-mine').querySelector('.note') as HTMLSpanElement).textContent = n ? String(n) : ''
+  const kept = markCount()
+  ;(item('marks').querySelector('.note') as HTMLSpanElement).textContent = kept ? String(kept) : ''
   refreshTimelapse()
   refreshRecorder()
   refreshReplay()
@@ -199,6 +204,9 @@ export function setupMenu() {
     } else if (act === 'replay-file') {
       close()
       pickRecording()
+    } else if (act === 'marks') {
+      close()
+      openMarks()
     }
     else if (act === 'rec-export') void exportRecording()
     else if (act === 'undo') {

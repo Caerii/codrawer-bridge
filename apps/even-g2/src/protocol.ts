@@ -10,6 +10,7 @@
  * Outbound messages are plain object literals at their call sites (link.send), so the wire format
  * of each one can be read where it is produced.
  */
+import type { MarkAsk, MarkDefine, MarkFeedback, MarkInvoke, MarkQuery, MarkSeen, MarksSnapshot } from 'marks'
 import type { PageMessage } from './strokes'
 
 /** A key-down bridged from the tablet's keyboard (one per key; the app owns line editing). */
@@ -67,6 +68,16 @@ export interface Inbound {
   /** A plain-text document; `crdt: true` marks copies from live-editing clients. */
   doc: { text?: unknown; crdt?: boolean }
   term: TermMessage
+  /** A tap in codrawer's dock or selection menu on the tablet (only `mark_teach` is read here). */
+  dock_action: { id?: string; bbox?: number[] }
+  /** Personal marks (packages/marks; protocol.md, "Personal marks"). */
+  mark_seen: MarkSeen
+  mark_ask: MarkAsk
+  mark_define: MarkDefine
+  mark_invoke: MarkInvoke
+  mark_feedback: MarkFeedback
+  mark_query: MarkQuery
+  marks: MarksSnapshot
 }
 
 export type InboundType = keyof Inbound

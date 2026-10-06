@@ -15,7 +15,9 @@
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16",
+    "delegate": "workspace:*",
     "fflate": "^0.8.3",
+    "marks": "workspace:*",
     "yjs": "^13.6.33"
   },
   "devDependencies": {

@@ -85,7 +85,11 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                     s.broadcast(&json_msg(&StrokeDelete { t: "stroke_delete", ids: &gone, ts: m.ts }), cid);
                 }
             }
-            "key" | "cursor" | "doc" | "dock_action" => sess.lock().unwrap().broadcast(&raw, cid),
+            "key" | "cursor" | "doc" | "dock_action"
+            // personal marks (protocol.md, "Personal marks"): relayed like a key
+            | "mark_seen" | "mark_ask" | "mark_define" | "mark_invoke" | "mark_feedback" | "mark_query" | "marks" => {
+                sess.lock().unwrap().broadcast(&raw, cid)
+            }
             "clear" => {
                 let mut s = sess.lock().unwrap();
                 s.clear();
