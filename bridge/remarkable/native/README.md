@@ -50,8 +50,10 @@ The bridge reads xochitl's saved pages (read-only) and sends the open page as a 
 per-point width, erases and undos. `rmlines/` parses `.rm` v6 files; `pagewatch/` finds the open
 page and builds the message. It is on when boot.sh marks the OS tested (`CODRAWER_OS_TESTED=1`);
 `PAGE_WATCH=on|off` (`-page-watch`) overrides, `XOCHITL_DIR` (`-xochitl-dir`) and
-`PAGE_POLL_MS` tune it. `codrawer_bridge_native -page-dump` prints the open page's message once
-and exits. Tests run anywhere: `go test ./rmlines/ ./pagewatch/`.
+`PAGE_POLL_MS` tune it. The watcher sleeps on inotify and looks only when xochitl writes;
+`PAGE_POLL_MS` paces retries (a file mid-write) and the fallback when inotify is unavailable
+(docs/investigations/idle-cost.md). `codrawer_bridge_native -page-dump` prints the open page's
+message once and exits. Tests run anywhere: `go test ./rmlines/ ./pagewatch/`.
 
 ## The toolbar eraser (`TOOL_FILE`)
 
@@ -94,8 +96,8 @@ All flags have equivalent env vars (env is the default, flags override).
 
 - **WebSocket**
   - `-ws` / `DESKTOP_WS`: e.g. `ws://<lan-ip>:8577/ws/session1`
-  - `-ping-seconds` / `PING_SECONDS` (default: `2`)
-  - `-pong-timeout-seconds` / `PONG_TIMEOUT_SECONDS` (default: `8`)
+  - `-ping-seconds` / `PING_SECONDS` (default: `10`)
+  - `-pong-timeout-seconds` / `PONG_TIMEOUT_SECONDS` (default: `25`)
 
 - **Input**
   - `-input` / `INPUT_DEVICE`: explicit device path (e.g. `/dev/input/event2`)

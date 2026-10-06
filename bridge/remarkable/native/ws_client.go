@@ -4,9 +4,12 @@ package main
 //
 // The tablet's link is the least reliable part of the system: Wi-Fi drops when the tablet
 // sleeps, and a half-open TCP connection can look healthy for minutes. So the client keeps the
-// connection under constant watch: TCP keepalive on the dialer, a ping every -ping-seconds (2 s),
-// and a read deadline that only a pong extends, so a silent router is detected
-// within -pong-timeout-seconds (8 s). Any failure is reported once on Err(), which the outbox
+// connection under watch: TCP keepalive on the dialer, a ping every -ping-seconds (10 s), and a
+// read deadline that only a pong extends, so a silent router is detected within
+// -pong-timeout-seconds (25 s). The interval is a battery trade: each ping wakes the tablet, and
+// the commonest cause of a dead socket, a suspend, is caught at the next write instead
+// (writeOutbox). With the router on the tablet itself (loopback) a half-open link cannot occur;
+// the glasses app likewise calls a router silent after 25 s. docs/investigations/idle-cost.md. Any failure is reported once on Err(), which the outbox
 // writer selects on; the bridge must notice socket errors even while the pen is idle, not only
 // after the next pen read (CLAUDE.md, "Facts that cost hours").
 //
@@ -31,8 +34,9 @@ type WSConn struct {
 	Conn *websocket.Conn
 	mu   sync.Mutex
 
-	done chan struct{}
-	errC chan error // capacity 1: the first failure wins
+	done    chan struct{}
+	errC    chan error   // capacity 1: the first failure wins
+	suspend suspendCheck // guarded by mu: every text write first checks for a suspend (bridge.go)
 
 	// OnMessage, when set, receives every text frame from the server. The
 	// bridge uses it for `term` replies it types into the tablet.
@@ -64,6 +68,7 @@ func DialWS(ctx context.Context, wsURL string, pingEvery time.Duration, pongWait
 		Conn:      conn,
 		done:      make(chan struct{}),
 		errC:      make(chan error, 1),
+		suspend:   newSuspendCheck(time.Now()),
 		OnMessage: onMessage,
 	}
 
@@ -148,10 +153,14 @@ func (w *WSConn) WriteJSON(v any) error {
 	return w.WriteRaw(b)
 }
 
-// WriteRaw sends an already encoded JSON message (5 s write deadline).
+// WriteRaw sends an already encoded JSON message (5 s write deadline). If the tablet slept since
+// the last write it sends nothing and returns a *resumedError: the socket is presumed dead.
 func (w *WSConn) WriteRaw(b []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if err := w.suspend.resumed(time.Now()); err != nil {
+		return err
+	}
 	w.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	return w.Conn.WriteMessage(websocket.TextMessage, b)
 }

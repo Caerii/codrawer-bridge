@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"codrawer-bridge-native/pen"
+
+	"golang.org/x/sys/unix"
 )
 
 // keyMods is the modifier state sent with every key.
@@ -154,16 +156,54 @@ func pickKeyboard(devices []inputDeviceInfo) string {
 
 // ── reading it ──────────────────────────────────────────────────────────────
 
+// keyboardRescan is, with inotify, the longest the keyboard reader sleeps before rescanning.
+const keyboardRescan = 60 * time.Second
+
+// inputNodes waits for a keyboard to appear. Most of the time none is connected (the Paper
+// Pro's Bluetooth is dormant unless brought up), so this is the keyboard reader's idle state:
+// it sleeps until a node appears in /dev/input (inotify), with a keyboardRescan net, instead of
+// rescanning /proc every 5 s. Without inotify it rescans every 5 s, as before.
+type inputNodes struct {
+	ino *inotify // nil: no inotify
+}
+
+func newInputNodes() *inputNodes {
+	ino, err := newInotify()
+	if err != nil {
+		return &inputNodes{}
+	}
+	if _, err := ino.add("/dev/input", unix.IN_CREATE|unix.IN_MOVED_TO|unix.IN_ATTRIB|unix.IN_ONLYDIR); err != nil {
+		ino.close()
+		return &inputNodes{}
+	}
+	return &inputNodes{ino: ino}
+}
+
+// wait sleeps until /dev/input changes (or the rescan net), or 5 s without inotify.
+func (n *inputNodes) wait() {
+	if n.ino == nil {
+		time.Sleep(5 * time.Second)
+		return
+	}
+	if _, err := n.ino.wait(time.Now().Add(keyboardRescan)); err != nil {
+		n.ino.close()
+		n.ino = nil
+		time.Sleep(5 * time.Second)
+	}
+}
+
 // runKeyboardForever reads the keyboard and pushes key messages into out. It never returns;
-// when the device is missing (retry in 5 s) or drops (reopen in 2 s), it tries again.
+// when the device is missing it waits for one to appear (inputNodes), when it drops it reopens
+// after 2 s.
 func runKeyboardForever(explicit string, grab bool, debug bool, out chan<- outKey) {
+	nodes := newInputNodes()
 	for {
 		path, err := findKeyboardDevice(explicit)
 		if err != nil {
 			if debug {
-				fmt.Printf("[keyboard] %v; retrying in 5s\n", err)
+				fmt.Printf("[keyboard] %v; waiting for an input device\n", err)
 			}
-			time.Sleep(5 * time.Second)
+			nodes.wait()
 			continue
 		}
 		fmt.Printf("[keyboard] using input device: %s\n", path)

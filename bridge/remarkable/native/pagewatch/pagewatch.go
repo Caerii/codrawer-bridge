@@ -13,11 +13,11 @@
 //   - The written page holds exactly the strokes the bridge streamed for it, with the tool,
 //     colour and per-point width the pen stream cannot know.
 //
-// Because the file lags by seconds anyway, the watcher polls: stat calls once a second (the
-// bridge's PAGE_POLL_MS), and a read and parse only when something changed. That is portable and
-// cheap, and inotify would not buy visible latency. It only ever reads xochitl's data directory;
-// the layout is xochitl's private format, which is why the bridge runs the watcher only on an OS
-// version boot.sh lists as tested (page_watch.go).
+// A poll lists the data directory (a stat per entry) and reads and parses a page only when
+// something changed. When to poll is the bridge's business (page_watch.go): on inotify events,
+// since a timed poll of a directory with thousands of entries was the bridge's largest idle
+// cost. It only ever reads xochitl's data directory; the layout is xochitl's private format,
+// which is why the bridge runs the watcher only on an OS version boot.sh lists as tested.
 //
 // # Data flow
 //
@@ -43,7 +43,8 @@ import (
 // DefaultDir is xochitl's data directory on the tablet.
 const DefaultDir = "/home/root/.local/share/remarkable/xochitl"
 
-// Watcher remembers what it last published so that Poll sends only changes. The zero value with
+// Watcher remembers what it last published so that Poll sends only changes; call Poll whenever
+// something may have changed. The zero value with
 // Dir set is ready; it is not safe for concurrent use.
 type Watcher struct {
 	Dir string // xochitl's data directory (read-only)
@@ -54,7 +55,13 @@ type Watcher struct {
 	rmSize  int64
 	rev     int64
 	started bool
+	located string // the document the last poll found open, published or not
 }
+
+// LocatedDoc is the document the last poll found open (its .content is the newest), even if
+// nothing was published for it yet; "" before any was found. The bridge watches this
+// document's folder for .rm writes.
+func (w *Watcher) LocatedDoc() string { return w.located }
 
 // rmFile is what a stat says about the open page's `.rm`. A page with no ink saved yet has no
 // file; it is still published, as an empty page.
@@ -107,6 +114,7 @@ func (w *Watcher) locate() (Location, error) {
 	if err != nil {
 		return loc, err
 	}
+	w.located = loc.Doc
 	if w.started && loc.Doc == w.loc.Doc && loc.ContentMT.Equal(w.loc.ContentMT) && !w.guessed {
 		loc.Page, loc.Title = w.loc.Page, w.loc.Title
 	} else {

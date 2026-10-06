@@ -84,8 +84,8 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 		DumpEvents:         getenvBoolDefault("DUMP_EVENTS", false),
 		ListDevices:        false,
 		ProbeSeconds:       getenvFloatDefault("PROBE_SECONDS", 1.5),
-		PingSeconds:        getenvFloatDefault("PING_SECONDS", 2),
-		PongTimeoutSeconds: getenvFloatDefault("PONG_TIMEOUT_SECONDS", 8),
+		PingSeconds:        getenvFloatDefault("PING_SECONDS", 10),
+		PongTimeoutSeconds: getenvFloatDefault("PONG_TIMEOUT_SECONDS", 25),
 		Keyboard:           getenvDefault("KEYBOARD_DEVICE", "auto"),
 		KeyboardGrab:       getenvBoolDefault("KEYBOARD_GRAB", false),
 		TypeReplies:        getenvBoolDefault("TYPE_REPLIES", true),
@@ -113,7 +113,7 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 	flag.BoolVar(&cfg.DumpEvents, "dump-events", cfg.DumpEvents, "Print raw input events (type/code/value). Noisy.")
 	flag.BoolVar(&cfg.ListDevices, "list-devices", false, "Print /proc/bus/input/devices names/handlers and exit")
 	flag.Float64Var(&cfg.ProbeSeconds, "probe-seconds", cfg.ProbeSeconds, "Seconds to probe each /dev/input/event* for activity when auto-detecting (draw during this!)")
-	flag.Float64Var(&cfg.PingSeconds, "ping-seconds", cfg.PingSeconds, "WebSocket ping interval (seconds). Aggressive keepalive.")
+	flag.Float64Var(&cfg.PingSeconds, "ping-seconds", cfg.PingSeconds, "WebSocket ping interval (seconds).")
 	flag.Float64Var(&cfg.PongTimeoutSeconds, "pong-timeout-seconds", cfg.PongTimeoutSeconds, "Reconnect if no pong is received in this window.")
 	flag.StringVar(&cfg.Keyboard, "keyboard", cfg.Keyboard, "Keyboard device: auto (find a kbd device), off, or /dev/input/eventN. Emits key messages.")
 	flag.BoolVar(&cfg.KeyboardGrab, "keyboard-grab", cfg.KeyboardGrab, "EVIOCGRAB the keyboard so only the bridge receives it (default: the tablet UI keeps it too)")

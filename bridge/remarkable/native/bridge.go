@@ -17,11 +17,18 @@ package main
 //     socket until it dies, then reconnects with backoff. It also notices a suspend/resume and
 //     reconnects at once instead of writing into a socket that died while the tablet slept.
 //
-// The socket is the only thing that comes and goes. Each connection gets its own pumps (keys,
-// pages) next to the outbox writer; WSConn serialises their writes.
+// The socket is the only thing that comes and goes. Each connection gets a page pump next to
+// the outbox writer (which also writes keys); WSConn serialises their writes.
+//
+// Nothing here wakes on a timer while the tablet is idle: the batch timer is armed only while
+// points wait, the suspend check runs at each write rather than every second (suspendCheck), and
+// the only periodic work left on a connection is its keepalive ping (-ping-seconds, 10 s).
+// docs/investigations/idle-cost.md has the measurements.
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -87,7 +94,7 @@ func startPen(cfg BridgeConfig) (<-chan []byte, error) {
 }
 
 // startKeyboard starts the keyboard reader unless KEYBOARD_DEVICE=off. Key events flow through
-// the returned channel regardless of socket state; a connection's pump drains it while up.
+// the returned channel regardless of socket state; the outbox writer drains it while up.
 func startKeyboard(cfg BridgeConfig) chan outKey {
 	if strings.ToLower(strings.TrimSpace(cfg.Keyboard)) == "off" {
 		return nil
@@ -138,6 +145,7 @@ func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, page
 	wsURL := sourceURL(cfg.WsURL)
 
 	reconnectDelay := reconnectMin
+	var held []byte // written first on the next connection (see writeOutbox)
 	for {
 		ws, err := DialWS(context.Background(), wsURL, pingEvery, pongWait, onMessage)
 		if err != nil {
@@ -150,23 +158,20 @@ func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, page
 
 		fmt.Printf("[bridge] connected ws=%s\n", wsURL)
 		reconnectDelay = reconnectMin
-		err = runConnection(ws, outC, keyC, pages)
+		err = runConnection(ws, outC, keyC, pages, &held)
 		fmt.Printf("[bridge] disconnected; reconnecting in %s (err=%v)\n", reconnectDelay, err)
 		time.Sleep(reconnectDelay)
 	}
 }
 
-// runConnection starts this connection's pumps, writes the outbox until the socket fails, then
-// stops the pumps and closes the socket.
-func runConnection(ws *WSConn, outC <-chan []byte, keyC chan outKey, pages *pageFeed) error {
+// runConnection starts this connection's page pump, writes the outbox and keys until the socket
+// fails, then stops the pump and closes the socket.
+func runConnection(ws *WSConn, outC <-chan []byte, keyC chan outKey, pages *pageFeed, held *[]byte) error {
 	stopPump := make(chan struct{})
-	if keyC != nil {
-		go pumpKeys(ws, keyC, stopPump)
-	}
 	if pages != nil {
 		go pumpPages(ws, pages, stopPump)
 	}
-	err := writeOutbox(ws, outC)
+	err := writeOutbox(ws, outC, keyC, held)
 	close(stopPump)
 	ws.Close()
 	return err
@@ -188,45 +193,73 @@ func sourceURL(raw string) string {
 	return u.String()
 }
 
-// writeOutbox writes queued messages until the socket fails. A wall clock that jumps ahead of
-// the monotonic clock means the tablet was suspended (the monotonic clock stops in suspend): the
-// socket is presumed dead, since its timers did not run while asleep, and the caller reconnects
-// immediately.
-func writeOutbox(ws *WSConn, outC <-chan []byte) error {
-	check := time.NewTicker(time.Second)
-	defer check.Stop()
-	lastWall, lastMono := time.Now().Round(0), time.Now()
+// writeOutbox writes queued messages and keys until the socket fails. A tablet that was
+// suspended (suspendCheck, run by every WSConn write) has its socket presumed dead, since its
+// timers did not run while asleep: the message is kept in *held for the next connection and
+// the caller reconnects immediately. A nil keyC is never ready.
+func writeOutbox(ws *WSConn, outC <-chan []byte, keyC <-chan outKey, held *[]byte) error {
+	write := func(msg []byte) error {
+		err := ws.WriteRaw(msg)
+		var r *resumedError
+		if errors.As(err, &r) {
+			*held = msg
+		}
+		// Otherwise a failed message is lost with the socket; the router ends the stroke.
+		return err
+	}
+	if msg := *held; msg != nil {
+		*held = nil
+		if err := write(msg); err != nil {
+			return err
+		}
+	}
 	for {
 		select {
 		case err := <-ws.Err():
 			return err
 		case msg := <-outC:
-			if err := ws.WriteRaw(msg); err != nil {
-				// The message is lost with the socket; the router ends the stroke when we drop.
+			if err := write(msg); err != nil {
 				return err
 			}
-		case <-check.C:
-			wall, mono := time.Now().Round(0), time.Now()
-			if gap := wall.Sub(lastWall) - mono.Sub(lastMono); gap > 2*time.Second {
-				return fmt.Errorf("resumed after ~%s asleep", gap.Round(time.Second))
+		case k := <-keyC:
+			b, err := json.Marshal(k)
+			if err != nil {
+				return err
 			}
-			lastWall, lastMono = wall, mono
+			if err := write(b); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-// pumpKeys forwards keyboard messages over the current socket until stop closes. A write failure
-// is reported to the socket's error channel so the outbox writer reconnects.
-func pumpKeys(ws *WSConn, keyC <-chan outKey, stop <-chan struct{}) {
-	for {
-		select {
-		case <-stop:
-			return
-		case k := <-keyC:
-			if err := ws.WriteJSON(k); err != nil {
-				ws.sendErr(err)
-				return
-			}
-		}
+// resumedError: the tablet slept since the last write on this socket.
+type resumedError struct{ gap time.Duration }
+
+func (e *resumedError) Error() string {
+	return fmt.Sprintf("resumed after ~%s asleep", e.gap.Round(time.Second))
+}
+
+// suspendCheck notices that the tablet slept: the wall clock ran more than 2 s ahead of the
+// monotonic clock (which stops in suspend) since the last look. Looking costs two clock reads,
+// so it is done at each write instead of on a ticker: an idle bridge does not wake to check,
+// and a write is exactly when a socket that died in suspend would swallow ink.
+type suspendCheck struct {
+	wall, mono time.Time
+}
+
+func newSuspendCheck(now time.Time) suspendCheck { return suspendCheck{wall: now.Round(0), mono: now} }
+
+// resumed is resumedAt with both readings of now (time.Now carries a monotonic one).
+func (c *suspendCheck) resumed(now time.Time) error { return c.resumedAt(now.Round(0), now) }
+
+// resumedAt reports a suspend since the last call: wall is a wall-clock reading, mono one whose
+// differences are monotonic. A wall clock stepped back is no suspend.
+func (c *suspendCheck) resumedAt(wall, mono time.Time) error {
+	gap := wall.Sub(c.wall) - mono.Sub(c.mono)
+	c.wall, c.mono = wall, mono
+	if gap > 2*time.Second {
+		return &resumedError{gap: gap}
 	}
+	return nil
 }
