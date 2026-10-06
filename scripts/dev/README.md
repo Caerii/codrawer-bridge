@@ -12,6 +12,7 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 | `deploy-tablet.sh` | builds the bridge and deploys it + boot files to the tablet, restarts, health-checks |
 | `replay_to.py <ws-url> <recording.jsonl> <secs>` | streams a recording's strokes into any session, capping idle gaps |
 | `termdirect.py` | sends one `term_prompt` (edit the text / `attach` field) and prints the reply |
+| `showcase.py` | the README showcase: eight scripted scenes (pens, a simulated agent, `stroke_delete` animation) played into a Rust router on :8580 and recorded from the simulator (:9902) and a headless browser into `docs/media/showcase.{mp4,gif}`; `--preview DIR` renders each scene's page without a router. Run line in its header. |
 
 Simulator automation (`evenhub-simulator --automation-port 9898 …`):
 `curl http://127.0.0.1:9898/api/screenshot/glasses -o shot.png`,
