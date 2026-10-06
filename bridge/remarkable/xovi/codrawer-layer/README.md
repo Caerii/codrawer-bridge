@@ -1,32 +1,90 @@
-# codrawer-layer (XOVI probe)
+# codrawer-layer (XOVI extension)
 
-> **Status (2026-10-06): run on the device (3.29.0.149).** `dump`, the erase probe's `watch` and
-> tool following work. **Probe 1 passed**: `stroke` put a 120-point fineliner wave on its own
-> layer; it rendered at once, saved into the notebook, and the user's undo removed it
-> (`docs/investigations/native-multiplayer-layer.md`). Built on top, not yet run on the device:
-> placement through the view transform, the agent ink socket, text insertion, the dock, the
-> selection follower, and event-driven tool following.
+> **Status (2026-10-06): runs at every boot on the device (3.29.0.149).** Verified there: `dump`,
+> the erase probe's `watch`, tool following, **Probe 1** (a stroke on its own layer; renders,
+> saves, undoes), agent ink through the socket placed in page coordinates (verified at pan and
+> zoom), the dock and its actions, the lasso follower. Built, less exercised on the device: text
+> insertion routes, UI automation milestones 2 and 3 (`grab`, input, navigation).
 
-A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
-open page, on its own layer named `codrawer: test`, through xochitl's own commit path
-(`SceneController.addDrawingLine` + `SceneTileManager.renderLineToTiles`). It is Probe 0 and
-Probe 1 of `docs/investigations/native-multiplayer-layer.md`; the results are recorded there.
+A XOVI extension that runs inside xochitl on the reMarkable Paper Pro. It puts strokes on the
+open page, each source on its own layer (`codrawer: agent`, `codrawer: test`), through xochitl's
+own commit path (`SceneController.addDrawingLine` + `SceneTileManager.renderLineToTiles`); it
+types text into the focused text box, follows the selected tool and the lasso, injects a dock
+button into the toolbar, and offers a guarded UI automation socket. It is Probe 0 and Probe 1 of
+`docs/investigations/native-multiplayer-layer.md`, grown into the native half of codrawer.
 
-It hooks no function. It finds the visible DocumentView, takes its `SceneController`, pen handler,
-tile manager and viewport, and calls their meta-methods by name on the GUI thread. The stroke's
-`Line` value is created by xochitl's own default constructor (through `QMetaType`) and then given
-our points by filling its documented fields; `main.cpp` explains the layout and the run-time
-checks that refuse to build a `Line` if this xochitl differs.
+It hooks no function. It finds the visible DocumentView, takes its `SceneController`, pen
+handler, tile manager and viewport, and calls their meta-methods by name on the GUI thread. A
+stroke's `Line` value is created by xochitl's own default constructor (through `QMetaType`) and
+then given our points by filling its documented fields; `src/line_layout.h` explains the layout
+and `src/line.cpp` the run-time checks that refuse to build a `Line` if this xochitl differs.
 
 Target (run on it): reMarkable 3.29.0.149 / Codex 6.0.105, xochitl Qt 6.10.3, XOVI v0.3.3
 (`xovi.so` sha256 `d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446`, identical in
 rm-xovi-extensions `v19-23052026` and `pre-v20-08092026`). The build is reproducible: the same
 source gives the same `codrawer-layer.so` hash.
 
-## Build
+## Module map
+
+Every module opens with its own prose overview (the problem, the facts and measurements it rests
+on, the data flow, the threading). Read them in this order:
+
+| # | module | lines | what it is |
+| --- | --- | --- | --- |
+| 1 | `src/entry.cpp` | 98 | `_xovi_construct`, the extension's thread, and the wiring of the modules (hooks) |
+| 2 | `src/log.{h,cpp}`, `src/paths.h` | 146 | one stamped log line per fact; every file and socket path |
+| 3 | `src/qtmeta.{h,cpp}` | 291 | meta-calls by name (`invoke`), signals into functions (`Relay`), `waitFor` |
+| 4 | `src/scene.{h,cpp}` | 347 | the item tree, the visible page (`findOpenPage`), layers, selectors, `tree` |
+| 5 | `src/line_layout.h` *(pure)*, `src/line.{h,cpp}` | 323 | xochitl's `Line` bytes; building one from our points, reading one back |
+| 6 | `src/ink.{h,cpp}` | 370 | the commit chain: our layer, `addDrawingLine`, the user's layer back; the queue |
+| 7 | `src/toolfollow.{h,cpp}` | 258 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
+| 8 | `src/text.{h,cpp}` | 204 | text into the focused text box (route A `replaceText`, route B input method) |
+| 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 468 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, status, actions |
+| 10 | `src/selection.{h,cpp}` | 171 | the last lasso selection (`areaSelected`) |
+| 11 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 414 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
+| 12 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
+| 13 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 137 | `grab`: the display buffer copied out of xochitl's memory |
+| 14 | `src/autoinput.{h,cpp}` | 247 | synthesized taps and swipes behind the deny list; navigation; text |
+| 15 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
+| 16 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 212 | the command file `/tmp/codrawer-layer/cmd` |
+| 17 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
+
+What each module uses (besides `log`, `paths` and `qtmeta`, which nearly all use); the graph has
+no cycle:
+
+```
+log, paths, the pure headers         (depend on nothing of ours)
+qtmeta     <- log
+scene      <- qtmeta
+line       <- line_layout
+toolfollow <- scene
+text       <- toolfollow
+ink        <- line, scene, toolfollow, ink_protocol
+inksock    <- ink, text, ink_protocol
+selection  <- scene, toolfollow
+autostate  <- scene, toolfollow
+inject     <- inksock, selection, autostate, inject_conf
+grab       <- procmaps
+autoinput  <- autostate, grab, text, auto_rules
+automation <- autoinput, autostate, inksock, auto_rules
+probes     <- ink, line, scene;  watch <- line, scene
+commands   <- probes, watch, inject, toolfollow
+entry      <- everything it wires
+```
+
+Where a module must tell one that depends on it, it offers a hook that `entry.cpp` sets: the
+user's pen pauses automation; the bridge's status line, automation clients coming and going, and
+a settled lasso refresh or create the injected UI.
+
+*(pure)* headers use no Qt and are tested on the desktop (`test.sh`, `tests/*_test.cpp`).
+
+## Build and test
 
 ```bash
 bridge/remarkable/xovi/codrawer-layer/build.sh      # needs Docker; output in out/
+bridge/remarkable/xovi/codrawer-layer/test.sh       # host tests of the pure headers (Docker, any g++ image)
+bridge/remarkable/xovi/codrawer-layer/qmltest.sh    # the injected QML, offscreen (Docker, Qt 6 QML runtime)
+scripts/dev/inktest.py                              # on-device regression: agent ink lands where aimed
 ```
 
 The first run builds `codrawer-xovi-build:trixie` (Debian trixie, aarch64 g++, Qt 6.8 arm64).
@@ -83,10 +141,10 @@ that page is the one on screen.
 | `watch page=<uuid> [full=1]` | Erase probe (`docs/investigations/native-erase.md`): connects a logging receiver to the pen handler's `strokeCompleted(Line)` (decoded; eraser paths, or every path with `full=1`, are written to `/tmp/codrawer-layer/line-<ms>.txt`), `gestureStarted/Ended`, and every signal of the page's SceneController, DocumentWorker (except `tileReady`), QmlDocumentWrapper and DocumentLockManager. Hooks no function; rate-limited to 20 lines per signal per second. Read-only. |
 | `unwatch` | Disconnects everything `watch` connected. |
 | `pending page=<uuid>` | Logs whether the document has unsaved lines and the worker's queue (read-only). |
-| `save page=<uuid> via=deferred\|modified\|abouttosleep\|sleepcycle` | Asks xochitl to store the page's pending lines now through one of its own meta-methods (see `main.cpp` `cmdSave`); with `watch` on, `worker.linesStored` shows whether and when it did. Try the routes in that order; `sleepcycle` last. |
+| `save page=<uuid> via=deferred\|modified\|abouttosleep\|sleepcycle` | Asks xochitl to store the page's pending lines now through one of its own meta-methods (see `src/watch.cpp` `cmdSave`); with `watch` on, `worker.linesStored` shows whether and when it did. Try the routes in that order; `sleepcycle` last. |
 | `dumpscene page=<uuid>` | Calls xochitl's debug slot `SceneController::dumpScene()`; output, if any, goes to xochitl's journal. |
 | `tool` | Logs the tool line last written to `/run/codrawer/tool` (see below). |
-| `stroke … adopt=<n> restore=<n> raw=1` | Probe options: name an existing last layer instead of adding one; select layer `n` afterwards; skip the scene → view mapping. |
+| `stroke … adopt=<n> restore=<n>` | Probe options: name an existing last layer instead of adding one; select layer `n` afterwards. |
 | `xform page=<uuid>` | Logs every view↔scene transform xochitl exposes for the page (read-only). |
 | `tree [match=<spec>] [depth=<n>]` | Logs the live QML item tree, or the items matching `class:`/`name:`/`text:`/`prop:` with their ancestry (read-only; for finding where to inject). |
 | `inject name=<n> parent=<spec>[^] qml=<file> [after=1]` | Creates our QML file in xochitl's engine, parented into the matched item (`^`: its parent; `after=1`: stacked after it). `uninject name=<n>` removes it. `exthome/codrawer-layer/inject.conf` lists the ones to make from load on. |
@@ -119,6 +177,13 @@ selection. A tap sends a `dock_action` (docs/protocol.md). Where it goes is a li
 `inject.conf`, found with `tree` on the device; the release ships `dock.qml` and `inject.conf`
 into `exthome/codrawer-layer/` (xovi.sh).
 
+The button is xochitl's own `ArkControls.ToolButton` (the face of every toolbar button), created
+at run time, so it shows the native press feedback (a black cell, the icon inverted) and stays
+"selected" while its list is open, like the layers button. Like undo and redo it is an action:
+it never selects itself in the toolbar, so the drawing tool stays as it was. Without
+`ark.controls` it falls back to the same look in plain QtQuick. `qmltest.sh` loads the file
+offscreen on the desktop both ways and fails on any QML warning (one on the tablet would trip
+the XOVI_NO_INJECT gate).
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'

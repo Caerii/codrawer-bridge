@@ -562,7 +562,7 @@ Rules, consistent with ADR 007:
 **Project:**
 - `docs/investigations/native-multiplayer-layer.md`
 - `docs/investigations/native-erase.md`
-- `bridge/remarkable/xovi/codrawer-layer/` (README, main.cpp, Dockerfile)
+- `bridge/remarkable/xovi/codrawer-layer/` (README, src/, Dockerfile)
 - `docs/adr/005`, `007`, `008`
 - `docs/investigations/keyboard-latency.md`
 - `docs/what-codrawer-changes.md` (Tailscale)

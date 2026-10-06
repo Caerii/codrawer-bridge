@@ -2,8 +2,8 @@ package main
 
 // The bridge's end of the codrawer-layer extension's socket (/run/codrawer/ink.sock).
 //
-// Two things travel over it (bridge/remarkable/xovi/codrawer-layer/main.cpp, "The agent ink
-// socket" and "Actions"):
+// Two things travel over it (bridge/remarkable/xovi/codrawer-layer/src/inksock.h and inject.h,
+// "Actions"):
 //
 //   - bridge → extension: agent ink. With NATIVE_AGENT_INK=1 the router's ai-layer strokes are
 //     followed by package agentink and each finished stroke becomes one line, which the

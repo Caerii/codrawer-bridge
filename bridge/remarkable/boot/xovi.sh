@@ -85,7 +85,7 @@ STATUS=$STATE/xovi_status
 X=${CODRAWER_XOVI_HOME:-/home/root/xovi} # xovi's own directory (its scripts hard-code this path)
 PAYLOAD="xovi.so start stock codrawer-layer.so"
 # The extension's own files (its injected QML and which injections to make), when the release has
-# them; they go to the extension's home, exthome/codrawer-layer (main.cpp, "Injected UI").
+# them; they go to the extension's home, exthome/codrawer-layer (codrawer-layer src/inject.h).
 EXTRAS="dock.qml selection-ask.qml inject.conf"
 DROPIN=/etc/systemd/system/xochitl.service.d
 PROC=${CODRAWER_TEST_PROC:-/proc} # tests point this at a fake /proc
