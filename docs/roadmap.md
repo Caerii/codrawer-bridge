@@ -44,6 +44,12 @@ already exists or is landing.
 
 ### 2. Thinking replay
 
+**Phone: done (2026-10-06).** ⋯ → *Replay this page* / *Replay a recording…*: a scrubber with
+play, speeds, compressed pauses, stroke stepping and clip export; markers for pauses, erasures,
+rewrites, hesitations, bursts and others' ink (`apps/even-g2/src/replay/`, README "Replay this
+page"); the glasses canvas follows. Open: the tablet dock entry, and the Primer reading
+`MomentsSummary`.
+
 Every stroke carries a timestamp, so any page can be scrubbed like a video: "show me how I got
 here".
 

@@ -24,6 +24,9 @@
  * - Export: paintPage() draws strokes onto a canvas that holds exactly the page, the same way:
  *   pagePng() uses it for the phone menu's "Download page as PNG", phone/timelapse.ts for every
  *   frame of "Export timelapse".
+ * - Replay: {@link Stage.replay} swaps the store drawn for the replay cursor's (replay/cursor.ts,
+ *   the page as it stood at the scrubber's time), framed by the whole replay's ink so the camera
+ *   holds still while the page fills; the live pen pointer is hidden meanwhile.
  */
 import type { Stroke, StrokeStore } from '../strokes'
 import { ERASER_TOOLS, WASH_TOOLS } from '../strokes'
@@ -86,12 +89,17 @@ export class Stage {
   /** normalized region whose ink an eraser changed since the last frame (repainted in the cache) */
   private erasedBox: Box | null = null
   private suppressClick = false
+  /** the store drawn: the live one, or a replay's (see {@link replay}) */
+  private store: StrokeStore
+  /** while replaying: the ink box the camera frames (normalized), null for the whole page */
+  private replayFrame: Box | null | undefined = undefined
 
   constructor(
     private canvas: HTMLCanvasElement,
-    private store: StrokeStore,
+    private liveStore: StrokeStore,
     private pageAspect: number, // width / height (Paper Pro 1620/2160)
   ) {
+    this.store = liveStore
     this.cam.cx = this.camAt.cx = pageAspect / 2
     new ResizeObserver(() => this.resize()).observe(canvas)
     this.wireHandle()
@@ -140,6 +148,24 @@ export class Stage {
     return this.backdrop !== null
   }
 
+  /**
+   * Draw `source` instead of the live store (a replay: phone/replay.ts), framing `frame` (the
+   * replay's whole ink, normalized; null frames the page) in the Fit view; null goes back to live.
+   * Call again whenever the replay's store object is replaced (a rebuild).
+   */
+  replay(source: StrokeStore | null, frame: Box | null = null) {
+    const was = this.store
+    this.store = source ?? this.liveStore
+    this.replayFrame = source ? frame : undefined
+    if (source) this.pointer = null
+    if (was !== this.store) this.invalidate()
+  }
+
+  /** Whether the stage is showing a replay rather than the live page. */
+  get replaying(): boolean {
+    return this.store !== this.liveStore
+  }
+
   setView(v: View) {
     this.view = v
     this.dirty = true
@@ -147,6 +173,7 @@ export class Stage {
 
   /** The pen hovers at (x, y) in normalized page coords; null when it left range. */
   setPointer(x: number | null, y = 0, tool = 'pen') {
+    if (this.replaying && x !== null) return // the live pen is not on the replayed page
     this.pointer = x === null ? null : { x, y, tool, at: performance.now() }
     this.dirty = true
   }
@@ -182,13 +209,19 @@ export class Stage {
     let y0 = Infinity
     let x1 = -Infinity
     let y1 = -Infinity
-    for (const s of this.store.all()) {
-      if (s.layer === 'ai' && !this.showAi) continue
-      if (s.pts.length === 0) continue
-      x0 = Math.min(x0, s.box[0])
-      y0 = Math.min(y0, s.box[1])
-      x1 = Math.max(x1, s.box[2])
-      y1 = Math.max(y1, s.box[3])
+    // a replay frames all of its ink at once, so the camera holds still while the page fills
+    const rf = this.replayFrame
+    if (rf === null) return whole
+    if (rf) [x0, y0, x1, y1] = rf
+    else {
+      for (const s of this.store.all()) {
+        if (s.layer === 'ai' && !this.showAi) continue
+        if (s.pts.length === 0) continue
+        x0 = Math.min(x0, s.box[0])
+        y0 = Math.min(y0, s.box[1])
+        x1 = Math.max(x1, s.box[2])
+        y1 = Math.max(y1, s.box[3])
+      }
     }
     if (this.pointer) {
       x0 = Math.min(x0, this.pointer.x)
@@ -418,7 +451,7 @@ export class Stage {
     }
     // Draw mode takes the pointer first: every down/move/up becomes a stroke in page coords.
     this.canvas.addEventListener('pointerdown', (e) => {
-      if (!this.drawMode) return
+      if (!this.drawMode || this.replaying) return // a replay is history: nothing is drawn into it
       const [x, y] = this.toPage(e)
       this.drawing = true
       this.canvas.setPointerCapture(e.pointerId)
@@ -554,7 +587,7 @@ export class Stage {
 
   private paintGlasses(ctx: CanvasRenderingContext2D) {
     this.handle = null
-    if (this.view === 'follow' || this.backdrop) return
+    if (this.view === 'follow' || this.backdrop || this.replaying) return // the live loupe is not on a replay
     const box = this.loupeRect()
     if (!box) return
     const { X, Y } = this.xf(this.cam)

@@ -103,6 +103,31 @@ outside closes it and does nothing else):
   42%", with Cancel), as H.264 MP4 where the browser can (Safari, iOS WebViews, Chrome 126+) else
   WebM, then downloads it, or on a phone offers *Share video* (the share sheet needs a fresh tap).
   Disabled, with the reason as its tooltip, where MediaRecorder or `canvas.captureStream` is missing.
+- **Replay this page** scrubs the page like a video ("show me how I got here"). The stage draws
+  the page as it stood at the playhead, with the stage's own painter (peers in their colours,
+  agent ink in its style, the tablet's eraser cutting ink as it did); the camera frames all the
+  replay's ink, so it holds still. A bar under the stage has play/pause, previous/next stroke
+  (each step shows one more stroke whole), 1× / 2× / 4× / 8×, *Compress pauses* (on: idle
+  stretches over 1 s grow a tenth as fast, capped at 2.5 s; the pen keeps its own speed) and
+  *Clip*. The track carries the **moments of thought** (src/replay/moments.ts), coloured by kind:
+  pauses (pen up ≥ 4× the writer's median gap, within 2–4 s), erasures (eraser strokes that cut
+  ink, or strokes taken back), rewrites (ink within 0.03 of just-erased ink, within 60 s),
+  hesitations (strokes under half the writer's median speed), bursts (runs of ≥ 4 strokes at
+  ≥ 1.5× the writer's median run rate) and other participants' or the agent's ink. Tap a marker
+  to jump to it and see its caption. The saved page's strokes (no times) are on the page at 0,
+  "before this session". The glasses canvas shows the replayed page too, at most every 200 ms
+  (the loupe stays live). *Clip* sets a range (*Start here*, *End here*, shaded on the track) and
+  exports it through the timelapse recorder: ink finished before the range is the first frame,
+  the range plays at the chosen speed (3–60 s), then the hold. Leave with the toolbar's
+  *Replay · Live* chip, the bar's *Live* or Escape (keys: space, ←/→, Home/End). The replay is a
+  snapshot: ink arriving meanwhile shows when you go back to live.
+- **Replay a recording…** does the same for a session recording (`.jsonl` from *Export
+  recording*), picked from a file: strokes at their own stamps (one clock offset per sender),
+  `stroke_delete` and `clear` taking ink away at their time, the first saved `page` as the base.
+  `scripts/dev/replay_scene.ts` streams a scripted page with every kind of moment into a router
+  for testing (`pnpm --dir apps/even-g2 exec tsx ../../scripts/dev/replay_scene.ts ws://localhost:8584/ws/replaytest`).
+
+  ![Replay at a pause](../../docs/media/replay-pause.png) ![Replay at an erasure](../../docs/media/replay-erase.png)
 - **Record session** keeps every message to and from the router (not the router's `ping`) with
   its time, while a red dot shows in the toolbar; bounded at 50,000 messages or 32 M characters,
   past which the oldest are dropped (the count shows in the item's tooltip). Switching it on again
@@ -184,6 +209,7 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `strokes.ts` | stroke store (with each live point's time), rasterizer, loupe camera, PNG/Gray encoders |
 | `erase.ts` | pure: the tablet eraser's model (radius from xochitl's thickness, cut masks) and the grid that finds the ink near it |
 | `timelapse.ts`, `recording.ts` | pure: timelapse pacing (stroke order, time mapping) and the recorder format pick; the session recording's bounded log and JSONL |
+| `replay/timeline.ts`, `replay/cursor.ts`, `replay/moments.ts` | pure: thinking replay: strokes (live store or recording) on one clock and the compressed axis; the page at any t as a stroke store; the moments of thought and `MomentsSummary` |
 | `glasses/layout.ts` | container sets for the canvas / text / edit layouts, menu ids |
 | `glasses/page.ts` | create / rebuild / retry the page, layout switches, `?probe=1`, stale-copy release |
 | `glasses/input.ts` | touchpad, ring and menu events → actions |
@@ -200,11 +226,13 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `phone/draw.ts`, `phone/camera.ts`, `phone/notices.ts` | drawing as a participant; camera backdrop; tablet notices and the pairing prompt |
 | `phone/menu.ts`, `phone/invite.ts`, `phone/palette.ts` | the toolbar's "⋯" menu; invite links; participant colours |
 | `phone/timelapse.ts`, `phone/recorder.ts`, `phone/share.ts` | timelapse frames and MediaRecorder, its menu row; the session recorder's link tap and toolbar dot; share sheet or download |
+| `phone/replay.ts` | the replay bar: scrubber, markers, playback, the glasses canvas while replaying, clips |
 | `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
 
 Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text
 pacing, reconnect policy, loupe geometry, view mirroring, the HUD text helpers, invite links,
-the palette, timelapse pacing and the session recording's JSONL.
+the palette, timelapse pacing, the session recording's JSONL, and the replay's timeline, cursor
+and moments.
 
 ## What the SDK actually does (learned in the simulator)
 

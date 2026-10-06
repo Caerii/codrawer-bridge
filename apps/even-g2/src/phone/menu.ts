@@ -13,6 +13,9 @@
  *   Tablet address…         change the router this page connects to (phone/notices.ts)
  *   Export timelapse…       the page redrawn stroke by stroke into a 10/20/40 s video, after an
  *                           inline row of options (phone/timelapse.ts)
+ *   Replay this page        scrub the page like a video, with the moments of thought marked
+ *                           (phone/replay.ts)
+ *   Replay a recording…     the same for a session recording (.jsonl), picked from a file
  *   Record session          keep every message to and from the router; a red dot in the toolbar
  *                           while on (phone/recorder.ts)
  *   Export recording        what was recorded, as JSONL the replay tools play into any router
@@ -38,6 +41,7 @@ import { inviteUrl, isLoopback } from './invite'
 import { askRouterAddress } from './notices'
 import { COLOR_NAMES, PARTICIPANT_COLORS } from './palette'
 import { exportRecording, refreshRecorder, setupRecorder, toggleRecording } from './recorder'
+import { pickRecording, refreshReplay, replayThisPage, setupReplay } from './replay'
 import { stage } from './screen'
 import { shareOrDownload, stampedName } from './share'
 import { refreshTimelapse, timelapseAction, timelapseEscape, timelapseMenuClosed } from './timelapse'
@@ -102,6 +106,7 @@ function refresh() {
   ;(item('clear-mine').querySelector('.note') as HTMLSpanElement).textContent = n ? String(n) : ''
   refreshTimelapse()
   refreshRecorder()
+  refreshReplay()
 }
 
 // ── The actions ───────────────────────────────────────────────────────────────────────────────
@@ -179,6 +184,7 @@ export function setupMenu() {
     swatches.append(s)
   }
   setupRecorder()
+  setupReplay()
 
   button.onclick = () => (isOpen() ? close(true) : open())
   menu.addEventListener('click', (e) => {
@@ -186,6 +192,14 @@ export function setupMenu() {
     const act = target.closest<HTMLElement>('[data-act]')?.dataset.act
     if (act?.startsWith('tl') || target.closest('#tlBox')) timelapseAction(act ?? '', target)
     else if (act === 'rec') toggleRecording()
+    else if (act === 'replay') {
+      if (item('replay').getAttribute('aria-disabled') === 'true') return
+      close()
+      replayThisPage()
+    } else if (act === 'replay-file') {
+      close()
+      pickRecording()
+    }
     else if (act === 'rec-export') void exportRecording()
     else if (act === 'undo') {
       undoMyLastStroke()

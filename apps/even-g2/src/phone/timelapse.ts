@@ -33,6 +33,9 @@
  * Formats: H.264 MP4 where the recorder can (Safari, iOS WebViews including the Even app's, Chrome
  * 126+), else WebM (VP9 / VP8). Without MediaRecorder or canvas.captureStream the item is disabled
  * and its tooltip says why.
+ *
+ * The replay bar's *Clip* (phone/replay.ts) records through the same path with its own strokes
+ * ({@link ClipSource}): a range of a replay, the ink before it on the first frame.
  */
 import { ERASER_TOOLS, type Stroke } from '../strokes'
 import { LENGTHS_S, pickVideoType, planTimelapse, revealedPoints, videoExtension, type TimelapsePlan } from '../timelapse'
@@ -145,18 +148,32 @@ class FramePainter {
 }
 
 /**
- * Record the page as a timelapse `lengthS` seconds long on `theme`. `onProgress` hears the share
- * done (0..1) on every frame. Resolves null if `signal` aborts it; rejects if the page is empty or
- * the browser cannot record.
+ * Strokes of someone else's choosing to record instead of the page (a replay's range,
+ * phone/replay.ts): `start` and `times` on any one clock, strokes without `start` drawn as the
+ * base, which takes `baseShare` of the drawing time (0: all on the first frame).
  */
-export async function recordTimelapse(lengthS: number, theme: Theme, onProgress: (f: number) => void, signal: AbortSignal): Promise<Timelapse | null> {
+export interface ClipSource {
+  strokes: Stroke[]
+  baseShare: number
+  /** file name prefix, e.g. "codrawer-replay" */
+  prefix: string
+}
+
+/**
+ * Record the page (or `clip`'s strokes) as a timelapse `lengthS` seconds long on `theme`.
+ * `onProgress` hears the share done (0..1) on every frame. Resolves null if `signal` aborts it;
+ * rejects if the page is empty or the browser cannot record.
+ */
+export async function recordTimelapse(lengthS: number, theme: Theme, onProgress: (f: number) => void, signal: AbortSignal, clip?: ClipSource): Promise<Timelapse | null> {
   const why = timelapseUnsupported()
   if (why) throw new Error(why)
-  const strokes = snapshot()
+  const strokes = clip ? clip.strokes : snapshot()
   if (strokes.length === 0) throw new Error('The page is empty')
   const plan = planTimelapse(
-    strokes.map((s) => ({ n: s.pts.length, fromPage: s.fromPage, start: s.ts ?? s.startedAt, times: s.times })),
+    strokes.map((s) => ({ n: s.pts.length, fromPage: s.fromPage, start: clip ? s.startedAt : (s.ts ?? s.startedAt), times: s.times })),
     lengthS * 1000,
+    undefined,
+    clip?.baseShare,
   )
   const painter = new FramePainter(strokes, plan, theme, videoSize())
   const type = pickVideoType((t) => MediaRecorder.isTypeSupported(t))!
@@ -192,7 +209,7 @@ export async function recordTimelapse(lengthS: number, theme: Theme, onProgress:
   for (const track of stream.getTracks()) track.stop()
   if (signal.aborted) return null
   const blob = new Blob(chunks, { type: type.split(';')[0] })
-  return { blob, name: stampedName('codrawer-timelapse', videoExtension(type)), ms: plan.totalMs }
+  return { blob, name: stampedName(clip?.prefix ?? 'codrawer-timelapse', videoExtension(type)), ms: plan.totalMs }
 }
 
 // ── The menu row ──────────────────────────────────────────────────────────────────────────────

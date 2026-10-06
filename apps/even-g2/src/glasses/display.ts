@@ -6,7 +6,9 @@
  * "Glasses" panel previews (shown at 2×; the toolbar's glasses button opens the panel), so what
  * you see there is exactly what is encoded and sent.
  *
- * Framing. The canvas frames the page by {@link view} (follow-crop or fit). The loupe has its own
+ * Framing. The canvas frames the page by {@link view} (follow-crop or fit). While the phone replays
+ * a page (phone/replay.ts) the canvas draws the replay's store ({@link canvasSource}) instead of
+ * the live one, at the scrubber's time; the loupe stays live. The loupe has its own
  * camera that follows the pen, zooms with speed and widens to hold the word being written
  * (LoupeCamera, strokes.ts; inputs from glasses/loupe.ts); `?loupe_cam=0` replaces it with plain
  * re-centring on the pen.
@@ -17,8 +19,8 @@
  */
 import { ImageRawDataUpdate, ImageRawDataUpdateResult, TextContainerUpgrade } from '@evenrealities/even_hub_sdk'
 import { BINARIZE, CANVAS_MIN_MS, ENC, FMT, HAS_LOUPE, IMG_H, IMG_W, INFLIGHT, INITIAL_LOUPE_ZOOM, LOUPE_CAM, LOUPE_H, LOUPE_MIN_MS, LOUPE_W, remember, SIM_TEXT_MS } from '../config'
-import { glasses, isWide, store, view } from '../state'
-import { LoupeCamera, rasterize, type RasterOptions } from '../strokes'
+import { glasses, isWide, store, store as live, view } from '../state'
+import { LoupeCamera, rasterize, type RasterOptions, type StrokeStore } from '../strokes'
 import { makeEncoder } from './encode'
 import { IMG_ID, LOUPE_ID, TEXT_ID, WIDE_TILE_W } from './layout'
 import { loupeBaseWindow, writingContext, zoomForBoxWidth } from './loupe'
@@ -97,12 +99,16 @@ export function loupeRect(): [number, number, number, number] | null {
 
 const encode = makeEncoder({ fmt: FMT, enc: ENC, binarize: BINARIZE })
 
+/** The store the canvas draws: null for the live page; a replay's while the phone replays. */
+export const canvasSource: { store: StrokeStore | null } = { store: null }
+
 /**
  * Re-rasterize the canvas surface. In the full-page view it outlines the loupe's view so you can
  * see where you are zoomed in (in follow view the canvas is zoomed in too, and only a stray edge
  * would show).
  */
 export function drawCanvas() {
+  const store = canvasSource.store ?? live
   if (isWide()) {
     // the whole page across both tiles; no loupe, so no marker
     if (canvasCtx.canvas.width !== 2 * WIDE_TILE_W) surface('preview', 2 * WIDE_TILE_W, IMG_H)
@@ -110,7 +116,7 @@ export function drawCanvas() {
     return
   }
   if (canvasCtx.canvas.width !== IMG_W) surface('preview', IMG_W, IMG_H)
-  const marked = HAS_LOUPE && LOUPE_CAM && view.mode === 'full'
+  const marked = HAS_LOUPE && LOUPE_CAM && view.mode === 'full' && !canvasSource.store // the live loupe is not on a replay
   const plain = { ...view, fitZoom: 1 } // the ring zooms the fit view only in the wide layout
   rasterize(canvasCtx, store, marked ? { ...plain, marker: loupeCam.rect() } : plain)
 }

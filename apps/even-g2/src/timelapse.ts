@@ -121,9 +121,11 @@ export function strokeTiming(s: TimelapseStroke): { duration: number; offsets: n
 
 /**
  * Plan a timelapse of `strokes` (in drawing order) lasting `totalMs`, the last `holdMs` of it on
- * the finished page. Strokes with no points get an empty slot at 0.
+ * the finished page. Strokes with no points get an empty slot at 0. `baseShare` is the share of
+ * the drawing time the saved-page strokes take when live strokes follow ({@link BASE_SHARE}); 0
+ * puts them all on the first frame (a replay clip, phone/replay.ts, starts on the page as it was).
  */
-export function planTimelapse(strokes: TimelapseStroke[], totalMs: number, holdMs = HOLD_MS): TimelapsePlan {
+export function planTimelapse(strokes: TimelapseStroke[], totalMs: number, holdMs = HOLD_MS, baseShare = BASE_SHARE): TimelapsePlan {
   const hold = Math.max(0, Math.min(holdMs, totalMs))
   const drawMs = Math.max(0, totalMs - hold)
   const out: PlannedStroke[] = strokes.map(() => ({ start: 0, end: 0, at: [] }))
@@ -135,7 +137,7 @@ export function planTimelapse(strokes: TimelapseStroke[], totalMs: number, holdM
     if (s.fromPage || typeof s.start !== 'number' || !isFinite(s.start)) base.push(i)
     else live.push(i)
   })
-  const baseMs = base.length === 0 ? 0 : live.length === 0 ? drawMs : drawMs * BASE_SHARE
+  const baseMs = base.length === 0 ? 0 : live.length === 0 ? drawMs : drawMs * baseShare
 
   // The base: one slot per stroke, proportional to its points, drawn evenly.
   const basePoints = base.reduce((sum, i) => sum + strokes[i].n, 0)
