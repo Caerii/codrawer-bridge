@@ -34,6 +34,9 @@ Subcommands (run from the repo root with `uv run python scripts/dev/keylat.py �
                             (.codrawer/logs/phone.log) into OUT, optionally only after SINCE (ISO)
     inject URL N [GAP_MS]   type N keys into a (local) session as the bridge would, with a fresh
                             `ts`, GAP_MS apart (or replayed gaps from a tap file: GAP_MS=@tap.jsonl)
+    relay URL N OUT         the router + Wi-Fi hop alone: two clients on this PC, one sends N keys
+                            through the router to the other; records half of each trip (use a
+                            scratch session, never session1)
     report FILE…            per-hop median and p95 (ms) over tap and phonelog files
 
 Tap lines: {"kind":"key","ts":<tablet ms>,"recv":<PC ms>,"key":"a"};
@@ -185,6 +188,27 @@ async def inject(url: str, n: int, gaps: list[float]) -> None:
         await ws.send(json.dumps({"t": "key", "key": "Escape", "code": 0, "repeat": False, "mods": {}, "ts": int(time.time() * 1000)}))
 
 
+async def relay(url: str, n: int, out: str) -> None:
+    """Router + Wi-Fi hop without the bridge: client A sends `n` key messages through the router
+    to client B on this PC; half of each send → receive time is the one-way router hop. Use a
+    scratch session (never session1): the keys land in that session's line editor."""
+    import websockets
+
+    async with websockets.connect(url) as a, websockets.connect(url) as b:
+        await a.recv()
+        await b.recv()
+        with open(out, "a", encoding="utf-8") as f:
+            for i in range(n):
+                sent = time.time() * 1000
+                await a.send(json.dumps({"t": "key", "key": "x", "char": "x", "code": 45, "repeat": False, "mods": {}, "ts": int(sent)}))
+                while True:
+                    m = json.loads(await b.recv())
+                    if m.get("t") == "key":
+                        break
+                f.write(json.dumps({"kind": "relay", "half": round((time.time() * 1000 - sent) / 2, 1)}) + "\n")
+                await asyncio.sleep(0.1)
+
+
 def tap_gaps(path: str, cap_ms: float = 1000) -> list[float]:
     """Inter-key gaps (ms) from a tap file, idle gaps capped at `cap_ms` (pauses between bursts)."""
     ts = [r["ts"] for r in map(json.loads, open(path, encoding="utf-8")) if r.get("kind") == "key"]
@@ -213,6 +237,9 @@ def report(paths: list[str]) -> None:
         if gaps:
             hops["inter-key gap (< 1 s)"] = gaps
         print(f"clock offset tablet-PC {off['offset']:.0f} ms +- {off['err']:.0f} ms ({len(clocks)} samples)")
+    halves = [r["half"] for r in recs if r["kind"] == "relay"]
+    if halves:
+        hops["router + Wi-Fi (relay / 2)"] = halves
     for name, field in (("app wait (recv → send start)", "wait"), ("glasses text update", "glass"),
                         ("app total (recv → shown)", "total"), ("bridge → app (local clocks)", "net")):
         xs = [r[field] for r in recs if r["kind"] == "app" and r.get(field) is not None]
@@ -240,6 +267,8 @@ def main(argv: list[str]) -> None:
         g = args[2] if len(args) > 2 else "80"
         gaps = tap_gaps(g[1:]) if g.startswith("@") else [float(g)]
         asyncio.run(inject(args[0], int(args[1]), gaps))
+    elif cmd == "relay":
+        asyncio.run(relay(args[0], int(args[1]), args[2]))
     elif cmd == "report":
         report(args)
     else:
