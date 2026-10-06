@@ -76,6 +76,11 @@ export class Stage {
   showAi = false
   /** agent ink by these authors is hidden (the Proof panel's "Show marks": author `primer:teacher`) */
   hiddenAuthors = new Set<string>()
+  /**
+   * agent ink by these authors shows even while the AI layer is off: the teacher's marks are
+   * feedback she asked for, not ambient agent ink (hidden only through {@link hiddenAuthors})
+   */
+  shownAuthors = new Set<string>(['primer:teacher'])
   /** the glasses loupe's view in normalized page coords [x0, y0, x1, y1]; null hides it */
   loupeRect: () => number[] | null = () => null
   /** the loupe box was resized to this width (fraction of the page width) */
@@ -192,9 +197,10 @@ export class Stage {
     ctx.restore()
   }
 
-  /** Agent ink from an author the viewer has hidden. */
-  private hides(s: Stroke): boolean {
-    return s.author !== undefined && this.hiddenAuthors.has(s.author)
+  /** Whether an agent stroke is drawn: the AI layer is on or its author always shows, and the viewer has not hidden that author. */
+  private aiVisible(s: Stroke): boolean {
+    if (s.author !== undefined && this.hiddenAuthors.has(s.author)) return false
+    return this.showAi || (s.author !== undefined && this.shownAuthors.has(s.author))
   }
 
   /** Show or hide one author's agent ink as a layer; the page repaints. */
@@ -286,7 +292,7 @@ export class Stage {
     if (rf) [x0, y0, x1, y1] = rf
     else {
       for (const s of this.store.all()) {
-        if (s.layer === 'ai' && (!this.showAi || this.hides(s))) continue
+        if (s.layer === 'ai' && !this.aiVisible(s)) continue
         if (s.pts.length === 0) continue
         x0 = Math.min(x0, s.box[0])
         y0 = Math.min(y0, s.box[1])
@@ -408,7 +414,7 @@ export class Stage {
 
   private paintStroke(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
     if (s.pts.length === 0) return
-    if (s.layer === 'ai' && (!this.showAi || this.hides(s))) return
+    if (s.layer === 'ai' && !this.aiVisible(s)) return
     if (!this.history && fullyErased(s)) return
     if (s.fromPage) return this.paintPageStroke(ctx, s, cam)
     const eraser = s.brush === 'eraser'

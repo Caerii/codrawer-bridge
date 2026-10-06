@@ -19,7 +19,9 @@ times real time; the Primer, the router and the app are the real programs. In of
 Primer's transcription is the fixture's hand-written one (the panel says "offline: fixture
 transcription"); with a key it is a live model reading.
 
-``--shots DIR`` writes ``primer-proof.png`` (the Proof tab with the step the Primer asks about
+``--what grade`` asks for the teacher's markup instead and, with ``--shots``, writes
+``primer-markup-phone.png`` and ``primer-markup-desktop.png`` (one mark opened) once the red ink has
+written itself in. ``--shots DIR`` otherwise writes ``primer-proof.png`` (the Proof tab with the step the Primer asks about
 picked out on the page), ``primer-plan.png``, ``primer-coach.png`` and ``primer-phone.png`` (a
 phone-sized view) with a headless Edge or Chrome.
 """
@@ -39,7 +41,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "src" / "codrawer_bridge" / "primer" / "fixtures"
 
 
-async def play(ws_url: str, fixture: str, speed: float, learner: str) -> dict | None:
+async def play(
+    ws_url: str, fixture: str, speed: float, learner: str, what: str = "proof"
+) -> dict | None:
     """Send the fixture's strokes (time-compressed), then a primer_request; return the reading."""
     lines = (FIXTURES / f"{fixture}.jsonl").read_text(encoding="utf-8").splitlines()
     async with websockets.connect(ws_url, max_size=2**24) as ws:
@@ -64,7 +68,7 @@ async def play(ws_url: str, fixture: str, speed: float, learner: str) -> dict | 
             await ws.send(json.dumps(o["msg"], separators=(",", ":")))
         await asyncio.sleep(0.5)
         asking = True
-        await ws.send(json.dumps({"t": "primer_request", "what": "proof", "learner": learner}))
+        await ws.send(json.dumps({"t": "primer_request", "what": what, "learner": learner}))
         try:
             return await asyncio.wait_for(got, 60)
         except TimeoutError:
@@ -76,7 +80,7 @@ async def play(ws_url: str, fixture: str, speed: float, learner: str) -> dict | 
 async def run(args) -> dict | None:
     """Open the app (when screenshots are wanted) first, since readings are not replayed to joiners."""
     if not args.shots:
-        return await play(args.ws, args.fixture, args.speed, args.learner)
+        return await play(args.ws, args.fixture, args.speed, args.learner, args.what)
     from playwright.async_api import async_playwright
 
     out = Path(args.shots)
@@ -106,10 +110,12 @@ async def run(args) -> dict | None:
             await page.goto(url)
             await page.wait_for_selector("#primer:not([hidden])", timeout=30_000)
         await asyncio.sleep(1.0)
-        reading = await play(args.ws, args.fixture, args.speed, args.learner)
+        reading = await play(args.ws, args.fixture, args.speed, args.learner, args.what)
         if reading is None:
             await browser.close()
             return None
+        if args.what == "grade":
+            return await shoot_markup(desktop, phone, out, args.wait_marks, browser, reading)
         step = int((reading.get("move") or {}).get("step") or 1)
         for page in (desktop, phone):
             await page.wait_for_selector("#primer .pstep", timeout=30_000)
@@ -133,6 +139,32 @@ async def run(args) -> dict | None:
         return reading
 
 
+async def shoot_markup(desktop, phone, out: Path, wait_s: float, browser, reading: dict) -> dict:
+    """The marked-up page: wait for the teacher's ink to finish, open one mark's explanation."""
+    await asyncio.sleep(wait_s)
+    for page in (desktop, phone):
+        await page.click('.seg button[data-view="page"]')
+        await page.wait_for_selector("#primer .pmark", timeout=30_000)
+        await page.wait_for_timeout(600)
+    # the phone: the marked-up page itself (the panel closed), as she would look at it
+    await phone.click("#primer .pclose")
+    await phone.wait_for_timeout(800)
+    await phone.screenshot(path=str(out / "primer-markup-phone.png"))
+    # open the circled step's mark: its strokes are picked out and the long version shows
+    marks = (reading.get("markup") or {}).get("marks") or []
+    target = next((m for m in marks if m["kind"] == "circle"), marks[0] if marks else None)
+    if target:
+        await desktop.click(f'#primer .pmark[data-mark="{target["id"]}"]')
+        await desktop.wait_for_timeout(800)
+        await desktop.evaluate(
+            "document.querySelector('#primer .pmark.open')?.scrollIntoView({block: 'center'})"
+        )
+        await desktop.wait_for_timeout(300)
+    await desktop.screenshot(path=str(out / "primer-markup-desktop.png"))
+    await browser.close()
+    return reading
+
+
 def main() -> None:
     a = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     a.add_argument("--ws", default="ws://127.0.0.1:8583/ws/primerdemo")
@@ -143,6 +175,15 @@ def main() -> None:
     a.add_argument("--learner", default="nell")
     a.add_argument("--speed", type=float, default=20.0, help="times real time")
     a.add_argument("--shots", default=None, help="directory for the screenshots")
+    a.add_argument(
+        "--what", default="proof", choices=["proof", "grade"], help="grade: the teacher's markup"
+    )
+    a.add_argument(
+        "--wait-marks",
+        type=float,
+        default=20.0,
+        help="grade: seconds to let the marks write themselves in",
+    )
     args = a.parse_args()
     for stream in (sys.stdout, sys.stderr):  # √ and ⇒ on a cp1252 Windows console
         if hasattr(stream, "reconfigure"):

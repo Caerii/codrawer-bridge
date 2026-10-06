@@ -129,7 +129,14 @@ async def run_live(args) -> int:
                     flush=True,
                 )
 
-        agent = PrimerAgent(send, learner=args.learner, mode=args.mode, auto=args.auto, store=store)
+        agent = PrimerAgent(
+            send,
+            learner=args.learner,
+            mode=args.mode,
+            auto=args.auto,
+            store=store,
+            markup_speed=args.markup_speed,
+        )
         print(
             f"primer joined {args.ws} as learner {agent.learner_name} ({agent.recognizer.mode} recognition)",
             flush=True,
@@ -205,6 +212,9 @@ def main(argv: list[str] | None = None) -> int:
             "--ws", required=True, help="router session URL, ws://host:port/ws/<session>"
         )
         p.add_argument("--auto", action="store_true", help="also read the page at lulls")
+        p.add_argument(
+            "--markup-speed", type=float, default=1.0, help="the teacher's pen, times real time"
+        )
         return asyncio.run(run_live(p.parse_args(argv[1:])))
     if argv and argv[0] == "score":
         from . import scoring as primer_eval
