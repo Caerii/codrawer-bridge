@@ -21,6 +21,8 @@
  *   repaints only the region that changed ({@link Stage.erased}), so ink vanishes under the
  *   eraser at the frame rate, whatever the page's size. The eraser itself shows as the circle it
  *   sweeps, at its true radius.
+ * - Highlight: the Proof panel's tapped step picks out its strokes with a halo under the ink and
+ *   a dashed box round them ({@link Stage.highlight}); screen only, never in an export.
  * - Export: paintPage() draws strokes onto a canvas that holds exactly the page, the same way:
  *   pagePng() uses it for the phone menu's "Download page as PNG", phone/timelapse.ts for every
  *   frame of "Export timelapse".
@@ -93,6 +95,8 @@ export class Stage {
   private store: StrokeStore
   /** while replaying: the ink box the camera frames (normalized), null for the whole page */
   private replayFrame: Box | null | undefined = undefined
+  /** strokes to pick out (the Proof panel's tapped step) and their bounds; null: none */
+  private marked: { ids: Set<string>; box: Box | null } | null = null
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -131,6 +135,59 @@ export class Stage {
     const b = this.erasedBox
     this.erasedBox = b ? [Math.min(b[0], box[0]), Math.min(b[1], box[1]), Math.max(b[2], box[2]), Math.max(b[3], box[3])] : [box[0], box[1], box[2], box[3]]
     this.dirty = true
+  }
+
+  /**
+   * Pick out strokes on screen (the Proof panel's tapped step, primer/panel.ts): a soft rounded
+   * box around `box` (normalized page coords) and a translucent halo under each stroke in `ids`,
+   * drawn beneath the ink so the writing stays legible. Only the screen shows it; exports
+   * (paintPage) never do. `null` clears it.
+   */
+  highlight(ids: Iterable<string> | null, box: Box | null = null) {
+    const set = ids ? new Set(ids) : null
+    this.marked = set && (set.size || box) ? { ids: set, box } : null
+    this.dirty = true
+  }
+
+  /** The highlight's halo and box, under the finished-ink blit. */
+  private paintHighlight(ctx: CanvasRenderingContext2D, cam: Cam) {
+    const m = this.marked
+    if (!m) return
+    const { s: scale, X, Y } = this.xf(cam)
+    const t = THEMES[this.theme]
+    const halo = this.theme === 'dark' ? 'rgba(255,200,90,0.30)' : 'rgba(255,196,0,0.38)'
+    ctx.save()
+    let box = m.box
+    if (m.ids.size) {
+      ctx.strokeStyle = halo
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.lineWidth = Math.max(6, 0.012 * scale)
+      for (const s of this.store.all()) {
+        if (!m.ids.has(s.id) || s.pts.length === 0) continue
+        ctx.beginPath()
+        s.pts.forEach((p, i) => (i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))))
+        if (s.pts.length === 1) ctx.lineTo(X(s.pts[0][0]) + 0.5, Y(s.pts[0][1]))
+        ctx.stroke()
+        if (!m.box) box = box ? [Math.min(box[0], s.box[0]), Math.min(box[1], s.box[1]), Math.max(box[2], s.box[2]), Math.max(box[3], s.box[3])] : [s.box[0], s.box[1], s.box[2], s.box[3]]
+      }
+    }
+    if (box) {
+      const pad = 0.012 * scale
+      const x = X(box[0]) - pad
+      const y = Y(box[1]) - pad
+      const w = X(box[2]) - X(box[0]) + 2 * pad
+      const h = Y(box[3]) - Y(box[1]) + 2 * pad
+      ctx.beginPath()
+      ctx.roundRect(x, y, w, h, Math.min(16, pad * 1.5))
+      ctx.fillStyle = this.theme === 'dark' ? 'rgba(255,200,90,0.08)' : 'rgba(255,196,0,0.10)'
+      ctx.fill()
+      ctx.strokeStyle = t.pointer
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 5])
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   setTheme(t: Theme) {
@@ -667,6 +724,7 @@ export class Stage {
     this.cachedLastId = done.length ? done[done.length - 1].id : ''
     const ctx = this.canvas.getContext('2d')!
     this.paintBackground(ctx, cam)
+    this.paintHighlight(ctx, cam)
     ctx.drawImage(this.cache, 0, 0)
     // live strokes go through a scratch layer too, so an eraser cuts ink and never the background
     if (strokes.some((s) => !s.done)) {

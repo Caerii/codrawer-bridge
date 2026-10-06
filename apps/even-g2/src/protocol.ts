@@ -67,6 +67,11 @@ export interface Inbound {
   /** A plain-text document; `crdt: true` marks copies from live-editing clients. */
   doc: { text?: unknown; crdt?: boolean }
   term: TermMessage
+  /**
+   * A reading from the Primer (ADR 010): the proof re-typeset, findings, a score estimate, the
+   * next move, the learner and the plan. Normalized by primer/model.ts parseReading.
+   */
+  primer: Record<string, unknown>
 }
 
 export type InboundType = keyof Inbound

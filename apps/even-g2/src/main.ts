@@ -9,7 +9,8 @@
  *                    writing pauses; the text shows status, the keyboard transcript, the
  *                    terminal, or a full-screen document editor (hud/, doc/)
  *   on the phone     the page at full resolution, live, on paper, dark or the camera (phone/), and
- *                    a participant's pen: strokes drawn there join the session
+ *                    a participant's pen: strokes drawn there join the session; the Proof panel
+ *                    shows the Primer's reading of a handwritten proof (primer/, ADR 010)
  *
  * The one fact that shapes the glasses side (ADR 006): an image update costs ~200 ms whatever its
  * size and only one can be on the wire, so live ink goes through the loupe alone, frames are
@@ -50,8 +51,10 @@ import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
 import { setupToolbar, showConnection } from './phone/toolbar'
 import { setupViews } from './phone/views'
+import { acceptReading, glanceFor, parseReading } from './primer/model'
+import { onReading, setupPrimerPanel } from './primer/panel'
 import * as session from './session'
-import { dirty, glasses, view } from './state'
+import { dirty, glasses, hud, view } from './state'
 
 // ── 1. The phone page ─────────────────────────────────────────────────────────────────────────
 installDevLog() // first, so the console of everything below reaches the desktop in dev builds
@@ -61,6 +64,7 @@ setupViews()
 setupDrawing()
 setupCamera()
 setupMenu()
+setupPrimerPanel()
 keepScreenAwake()
 loadDocument()
 
@@ -102,6 +106,20 @@ link.on('doc_update', onDocUpdate)
 link.on('doc_compact', onDocCompact)
 link.on('doc', onPlainDoc)
 link.on('term', onTerm)
+link.on('primer', (m) => {
+  // The panel shows every reading; the glasses get the move's one line (the HUD's intent line),
+  // unless the Primer chose silence.
+  const r = parseReading(m)
+  if (!r) return
+  const shown = acceptReading(r)
+  onReading()
+  const line = glanceFor(r.move)
+  if (line) {
+    hud.intent = line
+    dirty.text = true
+  }
+  console.log('[codrawer] primer', shown.mode, shown.move?.kind ?? '-', shown.proof?.steps.length ?? 0, 'steps')
+})
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

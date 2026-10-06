@@ -19,6 +19,8 @@
  *   Record session          keep every message to and from the router; a red dot in the toolbar
  *                           while on (phone/recorder.ts)
  *   Export recording        what was recorded, as JSONL the replay tools play into any router
+ *   Proof panel             the Primer's latest reading of the page: the proof typeset, its
+ *                           score estimate, the next move, the plan and the learner (primer/panel.ts)
  *   Diagnostics             off by default: the Glasses panel here and the metrics line on the
  *                           glasses' status strip (also the toolbar's glasses button)
  *   Glasses: wide fit view  the fit view across the glasses' full width (config.ts INITIAL_WIDE_FIT)
@@ -35,6 +37,7 @@
  */
 import { applyAction } from '../actions'
 import { link } from '../link'
+import { isOpen as primerOpen, togglePanel as togglePrimer } from '../primer/panel'
 import { glasses } from '../state'
 import { clearMyStrokes, myColor, myStrokes, setMyColor, undoMyLastStroke } from './draw'
 import { inviteUrl, isLoopback } from './invite'
@@ -91,6 +94,7 @@ function refresh() {
   item('diag').setAttribute('aria-checked', String(diagnosticsShown()))
   item('wide').setAttribute('aria-checked', String(glasses.wideFit))
   item('dark').setAttribute('aria-checked', String(stage.theme === 'dark'))
+  item('primer').setAttribute('aria-checked', String(primerOpen()))
   for (const s of Array.from(swatches.querySelectorAll<HTMLButtonElement>('.swatch'))) s.setAttribute('aria-checked', String(s.dataset.color === myColor()))
   const invite = link.address ? inviteUrl(location.href, link.address, link.code) : null
   const inviteItem = item('invite')
@@ -217,7 +221,10 @@ export function setupMenu() {
       close()
       askRouterAddress()
     }
-    else if (act === 'diag') {
+    else if (act === 'primer') {
+      togglePrimer()
+      close(true)
+    } else if (act === 'diag') {
       toggleDiagnostics()
       refresh()
     } else if (act === 'wide') {
