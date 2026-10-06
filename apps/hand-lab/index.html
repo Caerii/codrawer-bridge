@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4efe4" />
+    <title>Hand lab</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%23f4efe4%22/%3E%3Cpath d=%22M6 21c3-9 6-12 8-9s-3 9 1 8 5-10 7-9-1 8 4 7%22 fill=%22none%22 stroke=%22%2323263a%22 stroke-width=%222.2%22 stroke-linecap=%22round%22/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Hand lab</h1>
+      <p class="dek">Agent ink with the gesture of a real hand. Choose a writer, give it a thought, and watch it write.</p>
+    </header>
+
+    <main class="layout">
+      <section class="sheet" aria-label="Paper">
+        <div class="personas" id="personas" role="radiogroup" aria-label="Writer"></div>
+        <div class="paper" id="paper-wrap">
+          <canvas id="paper" aria-label="The page the hand writes on; you can draw on it too"></canvas>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div class="state" id="state" aria-live="polite"></div>
+        </div>
+        <form class="compose" id="compose">
+          <label class="sr" for="text">What the hand writes</label>
+          <textarea id="text" rows="2" spellcheck="false">what if ink could travel?</textarea>
+          <div class="actions">
+            <button type="submit" class="primary" id="write">Write</button>
+            <button type="button" id="replay">Replay</button>
+            <button type="button" id="clear">Clear</button>
+          </div>
+        </form>
+        <div class="options">
+          <div class="seg" role="radiogroup" aria-label="Ink" id="ink-mode">
+            <button type="button" data-v="pressure" aria-pressed="true">Pressure</button>
+            <button type="button" data-v="speed" aria-pressed="false">Speed</button>
+          </div>
+          <div class="seg" role="radiogroup" aria-label="Pace" id="pace">
+            <button type="button" data-v="1" aria-pressed="true">1×</button>
+            <button type="button" data-v="2" aria-pressed="false">2×</button>
+            <button type="button" data-v="4" aria-pressed="false">4×</button>
+          </div>
+          <label class="check"><input type="checkbox" id="show-plan" /> motor plan</label>
+        </div>
+        <p class="hint">Draw on the paper while it writes: the hand finishes its stroke and waits until you pause. <em>Mirror</em> takes your pace and size from what you draw.</p>
+      </section>
+
+      <aside class="instruments">
+        <figure class="card">
+          <figcaption>Arm <span class="aside">shoulder · elbow · wrist · fingers</span></figcaption>
+          <canvas id="arm" aria-label="The writing arm, moving"></canvas>
+        </figure>
+        <figure class="card">
+          <figcaption>Speed of the stroke <span class="legend"><i class="sw tip"></i>pen tip <i class="sw plan"></i>plan <i class="sw comp"></i>impulses</span></figcaption>
+          <canvas id="plot" aria-label="Speed profile of the current stroke and its lognormal impulses"></canvas>
+          <p class="readout" id="readout"></p>
+        </figure>
+        <section class="card" aria-label="Parameters">
+          <h2>The hand</h2>
+          <div class="controls" id="controls"></div>
+        </section>
+        <section class="card" aria-label="Send to a codrawer session">
+          <h2>Send to a session</h2>
+          <div class="session">
+            <input id="ws-url" type="url" value="ws://localhost:8577/ws/handlab" spellcheck="false" aria-label="Router WebSocket URL" />
+            <button type="button" id="send">Send</button>
+          </div>
+          <p class="note" id="session-note">Streams the writing into a router as <code>stroke_*</code> on the <code>ai</code> layer, with real timestamps, and waits while anyone else in the session draws.</p>
+        </section>
+      </aside>
+    </main>
+    <footer class="colophon">
+      Sigma-lognormal motor plans, a damped arm and physiological tremor, after Plamondon, Viviani and Lacquaniti. Skeletons: A. V. Hershey's single-line fonts.
+      <a href="https://github.com/Caerii/codrawer-bridge/blob/dev/docs/investigations/hand-simulator.md">How it works</a>
+    </footer>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

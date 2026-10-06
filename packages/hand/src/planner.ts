@@ -341,6 +341,9 @@ function speedCurvature(tr: Trajectory, i0: number, i1: number): { lk: Float64Ar
 /** Curvature below this (1/mm, a 200 mm radius) counts as straight: it keeps log κ finite. */
 const CURVATURE_FLOOR = 1 / 200
 
+/** The most a warp may stretch or squeeze one instant of a stroke (beyond it, speed spikes). */
+const WARP_MAX = 2
+
 /**
  * Re-time each pen-down toward the two-thirds power law (see the overview), in place. Geometry
  * is kept and each pen-down keeps its duration; inside it, time stretches where the path curves
@@ -349,7 +352,7 @@ const CURVATURE_FLOOR = 1 / 200
  * the stroke's own exponent (plus `w · bias`: simulate.ts uses it to pre-compensate what the
  * arm's dynamics will take off). Whatever of the speed the curvature does not explain (the
  * lognormal bumps) is left as it was. Stretching changes how samples weight the fit, so the estimate is
- * repeated over `passes` passes; stretch factors are bounded to [1/4, 4].
+ * repeated over `passes` passes; stretch factors are bounded to [1/2, 2].
  */
 export function powerLawWarp(tr: Trajectory, pens: PenDown[], w: number, bias = 0, passes = 3): void {
   if (w <= 0) return
@@ -367,7 +370,7 @@ export function powerLawWarp(tr: Trajectory, pens: PenDown[], w: number, bias = 
       if (!target.has(s)) target.set(s, fit.beta + w * (1 / 3 - fit.beta) + w * bias)
       const gain = target.get(s)! - fit.beta
       let sum = 0
-      for (let i = i0; i < i1; i++) sum += f[i] = Math.min(4, Math.max(0.25, Math.exp(gain * (fit.lk[i - i0] - fit.meanK))))
+      for (let i = i0; i < i1; i++) sum += f[i] = Math.min(WARP_MAX, Math.max(1 / WARP_MAX, Math.exp(gain * (fit.lk[i - i0] - fit.meanK))))
       const mean = sum / (i1 - i0)
       for (let i = i0; i < i1; i++) f[i] /= mean
     })

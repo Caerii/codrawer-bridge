@@ -183,7 +183,7 @@ export function runArm(
     const d2 = dx * dx + dy * dy
     const c2 = Math.max(-1, Math.min(1, (d2 - L1 * L1 - L2 * L2) / (2 * L1 * L2)))
     // the elbow bends outward: away from the body (to the right for a right hand)
-    const q2 = mx * Math.acos(c2)
+    const q2 = -mx * Math.acos(c2)
     const q1 = Math.atan2(dy, dx) - Math.atan2(L2 * Math.sin(q2), L1 + L2 * Math.cos(q2))
     out[0] = q1
     out[1] = q2

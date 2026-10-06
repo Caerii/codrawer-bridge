@@ -1,0 +1,383 @@
+/*
+ * Hand lab: a quiet desk. Warm paper, ink-coloured type, hairline rules, nothing that blinks.
+ * One column on a phone (16 px gutters), the paper beside its instruments from 980 px.
+ */
+
+:root {
+  --desk: #ece5d6;
+  --paper: #f8f4ea;
+  --paper-edge: #e3d9c5;
+  --rule: #e6ddca;
+  --ink: #25283a;
+  --ink-soft: #4a4c5e;
+  --muted: #847b6c;
+  --faint: #b5ab98;
+  --accent: #5a4fb0;
+  --accent-soft: #e6e2f4;
+  --warn: #9a5b2e;
+  --serif: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--desk);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.masthead {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 28px 16px 10px;
+}
+.masthead h1 {
+  margin: 0;
+  font-weight: 500;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+}
+.dek {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-style: italic;
+  max-width: 40em;
+}
+
+.layout {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 8px 16px 24px;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 980px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    align-items: start;
+  }
+  .instruments {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+/* --- the writers ---------------------------------------------------------------------------- */
+.personas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.persona {
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--paper-edge);
+  border-radius: 999px;
+  padding: 5px 13px 6px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.persona:hover {
+  border-color: var(--faint);
+}
+.persona[aria-checked='true'] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.persona small {
+  display: none;
+}
+
+/* --- the page --------------------------------------------------------------------------------- */
+.paper {
+  position: relative;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 30px -18px rgba(60, 45, 20, 0.35);
+  aspect-ratio: 2 / 1;
+  min-height: 220px;
+  touch-action: none;
+  overflow: hidden;
+}
+.paper canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#overlay {
+  pointer-events: none;
+}
+.state {
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.state .yield {
+  color: var(--warn);
+}
+
+.compose {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+textarea {
+  flex: 1 1 320px;
+  min-width: 0;
+  font: inherit;
+  font-size: 17px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+textarea:focus,
+input[type='url']:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+.actions {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+button {
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--faint);
+}
+button.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.seg button {
+  border: 0;
+  border-radius: 0;
+  font-size: 14px;
+  padding: 4px 11px;
+  background: transparent;
+  color: var(--ink-soft);
+}
+.seg button + button {
+  border-left: 1px solid var(--paper-edge);
+}
+.seg button[aria-pressed='true'] {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+.hint {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+/* --- instruments ------------------------------------------------------------------------------ */
+.instruments {
+  display: grid;
+  gap: 14px;
+}
+.card {
+  margin: 0;
+  background: rgba(248, 244, 234, 0.7);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  padding: 10px 12px 12px;
+}
+.card h2,
+figcaption {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.aside,
+.legend {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--muted);
+  font-style: italic;
+}
+.legend .sw {
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  vertical-align: middle;
+  margin: 0 4px 0 8px;
+  border-top: 2px solid var(--ink);
+}
+.legend .sw.plan {
+  border-top: 2px dashed var(--accent);
+}
+.legend .sw.comp {
+  border-top: 1px solid var(--faint);
+}
+#arm {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  display: block;
+}
+#plot {
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  display: block;
+}
+.readout {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.controls {
+  display: grid;
+  gap: 6px 12px;
+  grid-template-columns: auto minmax(0, 1fr) 4.8em;
+  align-items: center;
+  font-size: 14px;
+}
+.controls label {
+  color: var(--ink-soft);
+}
+.controls output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 13px;
+}
+.controls .sep {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--rule);
+  margin: 4px 0;
+}
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.session {
+  display: flex;
+  gap: 6px;
+}
+.session input {
+  flex: 1;
+  min-width: 0;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  padding: 6px 8px;
+}
+.note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.note.live {
+  color: var(--accent);
+}
+code {
+  font: 12px ui-monospace, 'Cascadia Code', Menlo, monospace;
+}
+
+.colophon {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 4px 16px 32px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.colophon a {
+  color: var(--ink-soft);
+}
+
+@media (max-width: 520px) {
+  .masthead h1 {
+    font-size: 26px;
+  }
+  .paper {
+    aspect-ratio: 4 / 3;
+  }
+  .actions {
+    width: 100%;
+  }
+  .actions button {
+    flex: 1;
+  }
+}
