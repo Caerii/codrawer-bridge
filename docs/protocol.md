@@ -304,6 +304,107 @@ Clients may show `plan` as a status line; it never carries ink.
 
 SIG mode adds `participant_id` and `run_id` (see `docs/sig-integration.md`).
 
+### `primer` (Primer agent → clients) and `primer_request` (client → Primer agent)
+
+The Primer (ADR 010) is a tutor that reads a learner's handwritten proof, re-renders it as LaTeX,
+tracks what the learner knows, and answers in the page's own medium. It runs inside the desktop
+router (`CODRAWER_PRIMER=1`) or joins any router as a client
+(`uv run python -m codrawer_bridge.primer live --ws ws://<router>/ws/<session> --learner NAME`).
+The Go and Rust routers relay both messages to every other client and do not replay them.
+
+A client asks for a reading or a hint, or manages the learner's file:
+
+```json
+{"t":"primer_request","what":"proof","learner":"nell","ts":1759700000000}
+```
+
+- `what`: `proof` (read the page now), `hint` (the next rung of the hint ladder for the current
+  proof), `plan` (send the plan and learner summary again), `forget` (delete this learner's file
+  on the desktop; the Primer answers with an empty learner), `coach_on` / `coach_off` (consent
+  to, and pause, the practice coach's watching: reading positions and the attempt log).
+- `learner`: the learner's chosen name. Identity is per person, not per device, because a family
+  shares one tablet and one Even account (ADR 010). Lowercase letters, digits, `-` and `_`, at
+  most 32 characters; anything else is folded to that alphabet.
+
+A line typed on the tablet's keyboard that reads `/proof` or `/hint` is the same request (and
+`/coach` asks for the coach view); the Primer assembles lines from `key` messages itself.
+
+The Primer answers with one message per reading:
+
+```json
+{"t":"primer","v":1,"id":"pr_3","mode":"offline","model":null,
+ "proof":{"title":"√2 is irrational","goal":"\\sqrt{2}\\notin\\mathbb{Q}","technique":"contradiction",
+   "steps":[{"n":1,"latex":"\\sqrt{2}=\\tfrac{p}{q},\\ p,q\\in\\mathbb{Z},\\ q\\neq 0","text":"Suppose √2 = p/q",
+             "justification":"assumption for contradiction","refs":[],"concepts":["contradiction"],
+             "confidence":0.93,"status":"gap","note":"lowest terms is never assumed",
+             "strokes":["u_12","u_13"],"bbox":[0.11,0.31,0.62,0.36]}],
+   "tex":"\\documentclass{article}…","check":{"prover":"lean","status":"failed","detail":"…"}},
+ "findings":[{"id":"sqrt2_no_lowest_terms","label":"Never assumes p/q is in lowest terms","step":1,"kind":"missing_rigor"}],
+ "grade":{"score":2,"max":10,"band":"partial","estimate":true,"rigor":"…","exposition":"…"},
+ "move":{"kind":"socratic","text":"In step 5 you conclude both p and q are even. Why is that a contradiction?",
+         "glance":"Primer: why is 'both even' a contradiction?","step":5,"hint_level":0},
+ "learner":{"name":"nell","summary":"…","mastery":[{"concept":"parity","label":"Parity","p":0.71}],
+            "misconceptions":[{"id":"…","label":"…","count":1}],"due":["induction"]},
+ "plan":{"exam":"2026-12-05","weeks":[{"n":1,"start":"2026-10-12","focus":["…"],"problems":12,"mock":null}],
+         "queue":[{"id":"pigeonhole_square","title":"…","why":"stretch"}]}}
+```
+
+Fields:
+- `mode`: `live` (a Claude model read the page; `model` names it) or `offline` (no API key: a
+  fixture transcription matched to these strokes, or nothing). Clients show which.
+- `proof.steps[]`: one per logical step, in order. `latex` is the step re-typeset (KaTeX-safe,
+  no `$` delimiters), `text` a plain reading, `justification` the reason the learner gave (or
+  `""`), `refs` the earlier step numbers it uses, `concepts` concept ids (ADR 010's graph),
+  `confidence` the recognizer's 0..1, `status` `ok` | `gap` | `error` | `unclear`, `note` the
+  Primer's one-line comment. `strokes` are the `stroke_begin` ids of the ink the step was read
+  from and `bbox` their normalized bounds `[x0, y0, x1, y1]`: a client highlights them when the
+  step is tapped.
+- `proof.tex`: a complete LaTeX document. `proof.check.status` is `checked`, `failed` or
+  `not_checked`; `checked` only ever follows a prover run that succeeded.
+- `grade`: a Putnam-style 0–10 estimate, always `estimate: true`; `band` is `complete` (10),
+  `minor_flaws` (8–9), `partial` (1–7) or `none` (0).
+- `move.kind`: `socratic` | `hint` | `worked_example` | `affirm` | `debrief` | `notice` (the
+  Primer could not read the page, e.g. offline with unknown ink) | `silence`. `glance` is one line
+  (at most 48 characters) for the glasses. A `silence` move is never sent: the Primer simply
+  waits. `move.finding` names the catalog entry the move addresses.
+- `learner` and `plan` summarize the learner's file, which stays on the desktop (ADR 010);
+  `learner.name` says whose it is. `plan.queue[]` items carry `why`, the coach's reason.
+- `coach`: the practice coach's view: `watching` (consented and on), `next` (suggested problems,
+  each with `why`), `weak` (weak concepts and recurring misconceptions, each with `why`),
+  `attempts` (count), `last_reading` (the document she last had open), `nudge` (one short line
+  after an attempt, or null).
+- `proof`, `findings`, `grade` and `move` are absent from an answer to `plan`, `forget` or the
+  coach dock entry.
+
+The Primer never draws on the user's layer. When it writes on the page (a suggested problem, and
+later its replies: ADR 009, call and response), its ink is `stroke_*` on the `ai` layer with
+`author: "primer"`, like any agent ink (ADR 003).
+
+### `dock_entries`, `dock_query`, `dock_action` (the tablet's toolbar dock)
+
+The tablet's toolbar dock (a XOVI extension, configured from `/run/codrawer/dock.json`) shows
+entries contributed by agents. The Primer contributes its entries as
+
+```json
+{"t":"dock_entries","owner":"primer","entries":[
+  {"id":"primer.coach","label":"Practice coach · watching","icon":"compass","kind":"button","badge":"watching","hint":"What's next, weak spots, today's plan"},
+  {"id":"primer.ask_page","label":"Ask about this page","icon":"question","kind":"button","hint":"The Primer reads the proof on this page"},
+  {"id":"primer.ask_selection","label":"Ask agent","icon":"lasso","kind":"selection","hint":"The Primer reads the selected ink"}]}
+```
+
+sent by the desktop router to every joining client when `CODRAWER_PRIMER=1`, and in answer to
+`{"t":"dock_query"}`. The tablet's bridge merges each owner's entries into `dock.json` (one
+array per owner, replaced whole). `badge: "watching"` and the label show that the practice coach
+is observing. A press arrives as
+
+```json
+{"t":"dock_action","id":"primer.ask_selection","doc":"<doc uuid>","page":"<page uuid>","bbox":[0.1,0.3,0.7,0.5],"line_ids":["u_12","u_13"]}
+```
+
+`bbox` and `line_ids` (the selected strokes' ids) come with `kind: "selection"` entries only.
+The routers relay all three messages as they are; the desktop router also feeds them to its
+Primer.
+
 ## Compatibility notes
 
 - The server is a **router**; it does not render and should not send full canvas state.

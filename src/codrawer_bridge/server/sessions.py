@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -59,6 +60,9 @@ class Session:
 
     # Last time the agentic loop emitted a job (perf_counter seconds).
     last_agentic_ts: float = 0.0
+
+    # The session's Primer (server/primer_link.PrimerLink) when CODRAWER_PRIMER=1, else None.
+    primer: Any = None
 
 
 SESSIONS: dict[str, Session] = {}
