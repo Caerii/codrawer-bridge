@@ -292,9 +292,10 @@ tripletap has exactly this limitation ("re-run enable.sh after software updates"
     `{"t":"sys","kind":"feature","name":"display_buffer","state":"disabled","reason":"untested os 6.1.2"}`
     and clients fall back to vector ink.
   - An optional `FORCE_FEATURES=display_buffer` setting in `bridge.env` lets us test new versions.
-- **xovi hooks:** we never inject by default. If a future feature needs xovi, follow its tethered
-  model: a tmpfs drop-in, never a persistent `LD_PRELOAD`. Gate it on the OS version and on
-  `rebuild_hashtable` having run for that version, the way tripletap's version switcher does.
+- **xovi hooks:** follow xovi's tethered model: a tmpfs drop-in, never a persistent `LD_PRELOAD`.
+  Gate it on the OS version (and on `rebuild_hashtable` for that version, should we ever ship
+  qt-resource-rebuilder). Built on 2026-10-06 for the codrawer-layer extension: see "XOVI at boot"
+  below.
 
 ### 6.7 Coexisting with xovi and Vellum
 
@@ -366,3 +367,45 @@ After the next OS update, record:
   Apr 2025, i.e. it survived the Sep 28 update (6.0.100 → 6.0.105): **the host key persists**.
 - `authorized_keys` is `/home/root/.ssh/authorized_keys`; `/run/systemd/system` exists (empty);
   `/usr/bin/wget` exists (boot.sh health check); no Vellum (`/home/root/.vellum` absent).
+
+## XOVI at boot (implemented 2026-10-06)
+
+The codrawer-layer XOVI extension tells the bridge which tool xochitl has selected
+(`/run/codrawer/tool`, native-erase.md §6). XOVI is tethered, so it has to be started again after
+every boot. codrawer does that from its own boot path, adding no rootfs file: the stub is unchanged.
+
+- **Payload.** Every release built by `deploy-tablet.sh` carries `xovi/`: `xovi.so`, `start` and
+  `stock` from rm-xovi-extensions (v0.3.3, pinned by sha256), and `codrawer-layer.so` built from
+  `bridge/remarkable/xovi/codrawer-layer`. The signed MANIFEST covers it like every other file.
+- **Start.** `boot.sh start` installs `codrawer-xovi.service` into `/run/systemd/system` with the
+  other units. After the bridge has started, it starts that oneshot with `--no-block`; `start` on
+  a oneshot that already ran is a no-op, so `activate` and `rollback` never restart xochitl.
+  The unit runs `xovi.sh boot`.
+- **Gates**, all required: the payload is in the active release; `IMG_VERSION` is in
+  `xovi-compat.conf` (separate from `compat.conf`); `/home/root/codrawer/XOVI_DISABLED` is
+  absent; `state/xovi_pending` is absent; xochitl has been active with one main PID for 20 s.
+  The pending marker is written before XOVI starts and removed only at a verdict. Finding it at
+  boot means the previous attempt ended mid-check (a crash, an emergency reboot), and XOVI is then
+  disabled, with the reason. A stop that interrupts a check that had seen nothing wrong, such as a
+  shutdown, forgets the attempt instead.
+- **Install.** Into `/home/root/xovi` in xovi's own layout, file by file with copy-then-rename,
+  and only while XOVI is not running, because a mapped `.so` must not be rewritten. A new
+  extension therefore takes effect at the next boot.
+- **Crash guard.** xochitl.service has `StartLimitBurst=4` in 600 s, then `OnFailure=emergency.target`.
+  Boot, XOVI's restart, one crash restart and a restart back to stock add up to exactly four
+  starts, so the guard cannot wait for a second crash. It trips on the first automatic restart
+  (`NRestarts` rises), a changed main PID, or xochitl not active for 10 s during the 60 s watch.
+  It runs xovi's `stock` immediately and writes `XOVI_DISABLED` with the reason and time. Before
+  every xochitl start it causes, it runs `systemctl reset-failed xochitl.service`, which also
+  resets the start-rate counter, so the stock restart always has headroom. If stock xochitl then
+  crash-loops on its own, the stock limit applies unchanged.
+- **Commands.** `boot.sh doctor` adds one `xovi=` line: `running`, `disabled (<reason>)`,
+  `untested OS <v>`, `payload missing`, or `stock (<last verdict>)`. `boot.sh xovi off` returns
+  xochitl to stock now and writes the kill switch. `boot.sh xovi on` removes it and reruns the
+  unit under the gates.
+- **After an OS update** the stub is gone, so nothing of codrawer runs until it is re-added. Once
+  it is, the new `IMG_VERSION` is not yet in `xovi-compat.conf`, and XOVI stays off until a
+  release lists it.
+- **Tests:** `bridge/remarkable/boot/test` (fake systemctl and `/proc`): tested OS, untested OS,
+  kill switch, crash after start, unfinished previous attempt, missing payload, on/off, a second
+  start in the same boot, and the bridge starting in every case.

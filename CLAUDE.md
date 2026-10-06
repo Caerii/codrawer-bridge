@@ -60,7 +60,16 @@ scripts/dev/deploy-tablet.sh            # build, sign, upload, activate (60 s he
 ssh root@<tablet-ip> sh /home/root/codrawer/current/boot.sh doctor     # status
 ssh root@<tablet-ip> sh /home/root/codrawer/current/boot.sh rollback   # previous release
 ssh root@<tablet-ip> "journalctl -u codrawer-bridge -f"
+ssh root@<tablet-ip> sh /home/root/codrawer/current/boot.sh xovi off   # XOVI: stock now + kill switch (on: back)
 ```
+
+XOVI (the codrawer-layer extension, which feeds `/run/codrawer/tool` for toolbar-eraser strokes)
+starts after every boot from `codrawer-xovi.service` (`boot/xovi.sh`), never in the boot path:
+only on an OS in `boot/xovi-compat.conf`, without `/home/root/codrawer/XOVI_DISABLED`, after
+xochitl has settled 20 s, with a 60 s crash guard that returns to stock and writes the kill switch.
+The payload (`xovi/` in each release) needs XOVI's pinned `xovi.so`/`start`/`stock` in
+`~/.codrawer/xovi` and Docker for `codrawer-layer.so`; without them the release ships without it.
+See `docs/what-codrawer-changes.md` ("XOVI").
 
 After a reMarkable OS update the stub is gone (only `/home` survives): `scripts/dev/tablet-guard.sh`
 re-adds it automatically when running, or run `deploy-tablet.sh`, or a phone shortcut with the key

@@ -3,7 +3,8 @@
 > **Status (2026-10-06): run on the device (3.29.0.149, tethered).** `dump` and the erase probe's
 > `watch` work: `strokeCompleted` decodes ink, the eraser end and the toolbar eraser
 > (`docs/investigations/native-erase.md`). Tool following (below) feeds the bridge. `stroke` (Probe 1)
-> and the `save` routes are still untested.
+> and the `save` routes are still untested. Since 2026-10-06 every codrawer release ships it, and
+> the tablet starts it after each boot under a crash guard (Install, below).
 
 A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
 open page, on its own layer named `codrawer: test`, through xochitl's own commit path
@@ -16,8 +17,10 @@ tile manager and viewport, and calls their meta-methods by name on the GUI threa
 our points by filling its documented fields; `main.cpp` explains the layout and the run-time
 checks that refuse to build a `Line` if this xochitl differs.
 
-Target (not yet run on it): reMarkable 3.29.0.149 / Codex 6.0.105, xochitl Qt 6.10.3, XOVI v0.3.3
-(`xovi.so` sha256 `d4df820c…6ffd446`, from rm-xovi-extensions `v19-23052026`/`pre-v20-08092026`).
+Target (run on it): reMarkable 3.29.0.149 / Codex 6.0.105, xochitl Qt 6.10.3, XOVI v0.3.3
+(`xovi.so` sha256 `d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446`, identical in
+rm-xovi-extensions `v19-23052026` and `pre-v20-08092026`). The build is reproducible: the same
+source gives the same `codrawer-layer.so` hash.
 
 ## Build
 
@@ -30,20 +33,37 @@ An extension built against Qt 6.8 runs on the tablet's Qt 6.10.3 (Qt 6 binary co
 `_xovi_construct` is marked `visibility("default")`: under `-fvisibility=hidden` it was missing
 from the dynamic symbol table, and xovi loaded the extension without ever calling it.
 
-## Install (tethered: gone after a reboot)
+## Install: every codrawer release, started at boot
 
-XOVI's tethered start mounts a tmpfs over `/etc/systemd/system/xochitl.service.d`, writes the
-`LD_PRELOAD` drop-in there and restarts xochitl. Nothing is written to the rootfs or to the
-persistent `/etc`; a reboot returns the tablet to stock. Only `xovi.so`, its `start`/`stock`
-scripts and this extension are needed. qt-resource-rebuilder is **not** activated, so no
-`rebuild_hashtable` is required.
+`scripts/dev/deploy-tablet.sh` builds this extension (`build.sh`) and puts it in the release's
+`xovi/` with XOVI's `xovi.so`, `start` and `stock` (pinned by sha256, taken from
+`~/.codrawer/xovi`), all covered by the release signature. qt-resource-rebuilder is **not**
+shipped, so no `rebuild_hashtable` is needed.
+
+On the tablet, `boot.sh start` (the boot stub) starts the bridge and then `codrawer-xovi.service`,
+which runs `bridge/remarkable/boot/xovi.sh boot`. It installs the payload into `/home/root/xovi`
+(XOVI's own layout) and runs XOVI's own tethered `start`: a tmpfs over
+`/etc/systemd/system/xochitl.service.d` with the `LD_PRELOAD` drop-in, then one xochitl restart.
+It does so only on an OS listed in `bridge/remarkable/boot/xovi-compat.conf`, without the kill
+switch `/home/root/codrawer/XOVI_DISABLED`, and once xochitl has run settled for 20 s. For 60 s
+after the start it watches xochitl; at the first sign of trouble it runs `stock` and writes the
+kill switch with the reason. The full rules are in `xovi.sh` and `docs/what-codrawer-changes.md`
+("XOVI").
 
 ```bash
-# on the desktop
+ssh root@<tablet> sh /home/root/codrawer/current/boot.sh doctor     # xovi=running | disabled (…) | …
+ssh root@<tablet> journalctl -u codrawer-xovi                       # what the guard saw
+```
+
+A new extension in a release replaces the file only while XOVI is not running (a mapped `.so` is
+never rewritten), so it takes effect at the next boot; `doctor` says so meanwhile.
+
+By hand, for a quick test of a new build without a release (gone at the next reboot):
+
+```bash
+sh /home/root/codrawer/current/boot.sh xovi off                    # stock, so the .so is not mapped
 scp out/codrawer-layer.so root@<tablet>:/home/root/xovi/extensions.d/
-# on the tablet (xovi/ unpacked from the official rm-xovi-extensions xovi-aarch64.tar.gz,
-# with qt-resource-rebuilder moved out of extensions.d)
-/home/root/xovi/start
+/home/root/xovi/start                                              # unguarded; the next boot reinstalls the release's copy
 ```
 
 ## Use
@@ -87,9 +107,9 @@ Ink is `eraser=0` (tool 13 SharpPencilv2, 21 Calligraphy).
 
 ## Remove
 
-- Reboot (`systemctl --no-block reboot`): the tmpfs drop-in disappears and xochitl starts stock.
-- Or without a reboot: `/home/root/xovi/stock` (unmounts the drop-in and restarts xochitl).
-- Files: `rm -rf /home/root/xovi /tmp/codrawer-layer`.
+- Off, now and at every later boot: `sh /home/root/codrawer/current/boot.sh xovi off` (runs
+  `stock`, writes `XOVI_DISABLED`). Back on: `boot.sh xovi on`.
+- Files: after `xovi off`, `rm -rf /home/root/xovi /tmp/codrawer-layer`.
 
 The test layer and stroke are ordinary page content: undo them in xochitl, or delete the layer
 from the layers panel.
