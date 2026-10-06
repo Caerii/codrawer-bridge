@@ -113,6 +113,8 @@
 //
 // Build: `build.sh` (aarch64, Qt 6 headers). Install and use: `README.md`.
 
+#include "auto_rules.h"
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
@@ -1188,6 +1190,8 @@ const char *toolWord(int tool) {
     }
 }
 
+void pauseAutomationForUser();  // section "UI automation"
+
 struct ToolFollow {
     QPointer<QObject> pen;
     QPointer<QQuickItem> view;  // the DocumentView the handler belongs to
@@ -1253,6 +1257,7 @@ void followPen(QObject *pen, QQuickItem *view) {
         if (tf.relay->on(pen, Relay::notifyOf(pen, prop), [](void **) { toolChanged(); })) ++n;
     }
     tf.relay->on(pen, Relay::signalNamed(pen, "gestureStarted"), [](void **) {
+        pauseAutomationForUser();
         toolFollow().penDown = true;
         toolFollow().penDownSince = nowMs();
     });
@@ -2316,6 +2321,7 @@ QString &bridgeStatus() {
 }
 
 void refreshInjected(struct Injection &in);
+bool autoClientsActive();  // section "UI automation"
 
 // From the socket's thread: keep the line, and show it on the next refresh (GUI thread).
 void setBridgeStatus(const QString &line) {
@@ -2346,6 +2352,7 @@ QString localStatus() {
     }
     if (!bridge) s = QStringLiteral("bridge not connected");
     else if (s.isEmpty()) s = QStringLiteral("bridge connected");
+    if (autoClientsActive()) s += QStringLiteral("; automation active");
     return s;
 }
 
@@ -2662,6 +2669,254 @@ void cmdXform(const QStringList &w) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// UI automation, milestone 1: /run/codrawer/auto.sock (docs/investigations/ui-automation.md).
+//
+// Read and look only: `state`, `find`, `wait_for`, plus `resume`. One JSON request per line, one
+// JSON reply per line, in order. The socket exists only while /home/root/codrawer/AUTOMATION
+// exists (the user's opt-in); it is checked at load and by the 2 s tick. The guardrails that
+// later milestones need (the deny list, edits only in "codrawer: test", the conditions) are pure
+// functions in auto_rules.h, tested on the desktop (test.sh). While a client is connected the
+// dock's status says "automation active"; the user's pen or finger pauses automation until
+// `resume`; with the lock screen up only `state` answers (`locked`).
+
+constexpr const char *kAutoSock = "/run/codrawer/auto.sock";
+constexpr const char *kAutoOptIn = "/home/root/codrawer/AUTOMATION";
+
+std::atomic<int> &autoClients() {
+    static std::atomic<int> n{0};
+    return n;
+}
+std::atomic<bool> &autoPaused() {
+    static std::atomic<bool> p{false};
+    return p;
+}
+
+// The lock screen, if it is up: a visible item whose class or objectName names a lock or
+// passcode view.
+bool lockScreenUp() {
+    for (QQuickItem *it : allItems()) {
+        if (!it->isVisible()) continue;
+        const QString n = QString::fromLatin1(it->metaObject()->className()) + QLatin1Char(' ') + it->objectName();
+        if (n.contains(QLatin1String("LockScreen"), Qt::CaseInsensitive) || n.contains(QLatin1String("Passcode"), Qt::CaseInsensitive) ||
+            n.contains(QLatin1String("PinCode"), Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
+// The first of `names` that `o` has as a readable property, as a JSON value (null if none).
+QJsonValue firstProp(QObject *o, std::initializer_list<const char *> names) {
+    if (!o) return QJsonValue();
+    for (const char *n : names) {
+        if (o->metaObject()->indexOfProperty(n) < 0) continue;
+        const QVariant v = o->property(n);
+        if (!v.isValid()) continue;
+        if (v.metaType().id() == QMetaType::Bool) return v.toBool();
+        bool num = false;
+        const double d = v.toDouble(&num);
+        if (num && v.metaType().id() != QMetaType::QString) return d;
+        if (v.canConvert<QString>()) return v.toString();
+    }
+    return QJsonValue();
+}
+
+QJsonObject autoState() {
+    QJsonObject st;
+    const bool locked = lockScreenUp();
+    st.insert(QStringLiteral("locked"), locked);
+    st.insert(QStringLiteral("paused"), autoPaused().load());
+    ToolFollow &tf = toolFollow();
+    st.insert(QStringLiteral("tool"), QString::fromLatin1(tf.last));
+    if (tf.view && tf.view->isVisible()) {
+        QQuickItem *v = tf.view;
+        QObject *c = v->property("controller").value<QObject *>();
+        QObject *docObj = v->metaObject()->indexOfProperty("document") >= 0 ? v->property("document").value<QObject *>() : nullptr;
+        QJsonObject doc{{QStringLiteral("id"), firstProp(docObj, {"id", "documentId", "uuid"})},
+                        {QStringLiteral("title"), firstProp(docObj, {"title", "visibleName", "name"})}};
+        st.insert(QStringLiteral("doc"), doc);
+        QJsonObject page{{QStringLiteral("id"), v->property("pageId").toString()},
+                         {QStringLiteral("index"), firstProp(v, {"currentPage", "pageIndex", "currentPageIndex", "page"})},
+                         {QStringLiteral("count"), firstProp(docObj, {"pageCount"})}};
+        st.insert(QStringLiteral("page"), page);
+        QObject *tiles = v->property("tileManager").value<QObject *>();
+        const QVariant tv = tiles ? tiles->property("sceneToViewTransform") : QVariant();
+        if (tv.metaType().id() == QMetaType::QTransform) {
+            const QTransform t = tv.value<QTransform>();
+            st.insert(QStringLiteral("zoom"), t.m11());
+            st.insert(QStringLiteral("scroll"), QJsonArray{t.dx(), t.dy()});
+        }
+        if (c) {
+            st.insert(QStringLiteral("layers"), c->property("layerCount").toInt());
+            st.insert(QStringLiteral("undo"), c->property("undoAvailable").toBool());
+            st.insert(QStringLiteral("selection"), QJsonObject{{QStringLiteral("items"), c->property("selectionItemCount").toInt()}});
+        }
+    } else {
+        st.insert(QStringLiteral("doc"), QJsonValue());
+    }
+    if (auto *qw = qobject_cast<QQuickWindow *>(QGuiApplication::focusWindow())) {
+        if (QQuickItem *f = qw->activeFocusItem())
+            st.insert(QStringLiteral("focus"), QString::fromLatin1(f->metaObject()->className()) + QLatin1Char(' ') + f->objectName());
+    }
+    QJsonArray popups;
+    for (QQuickItem *it : allItems()) {
+        if (!it->isVisible()) continue;
+        const QString cls = QString::fromLatin1(it->metaObject()->className());
+        if (cls.contains(QLatin1String("Popup")) || cls.contains(QLatin1String("Foldout_")) || cls.contains(QLatin1String("Dialog")) ||
+            cls.contains(QLatin1String("ContextualMenu")))
+            popups << QStringLiteral("%1 %2").arg(cls, it->objectName()).trimmed();
+    }
+    st.insert(QStringLiteral("popups"), popups);
+    return st;
+}
+
+// A dotted path into the state (`page.index`), as text for autorules::evalCond.
+std::string statePath(const QJsonObject &st, const std::string &path) {
+    QJsonValue v = st;
+    for (const QString &k : QString::fromStdString(path).split(QLatin1Char('.'))) v = v.toObject().value(k);
+    if (v.isBool()) return v.toBool() ? "true" : "false";
+    if (v.isDouble()) return QString::number(v.toDouble(), 'g', 15).toStdString();
+    if (v.isString()) return v.toString().toStdString();
+    return "";
+}
+
+QJsonObject autoFind(const QString &selector) {
+    QJsonArray out;
+    for (QQuickItem *it : matchItems(selector)) {
+        const QPointF p = it->mapToScene(QPointF(0, 0));
+        QJsonObject o{{QStringLiteral("class"), QString::fromLatin1(it->metaObject()->className())},
+                      {QStringLiteral("name"), it->objectName()},
+                      {QStringLiteral("bounds"), QJsonArray{p.x(), p.y(), it->width(), it->height()}},
+                      {QStringLiteral("visible"), it->isVisible()}};
+        if (it->metaObject()->indexOfProperty("text") >= 0) o.insert(QStringLiteral("text"), it->property("text").toString());
+        out << o;
+        if (out.size() >= 50) break;
+    }
+    return QJsonObject{{QStringLiteral("items"), out}};
+}
+
+// Handles one request on the GUI thread; `reply` gets the JSON reply (possibly later: wait_for).
+void autoRequest(const QJsonObject &req, std::function<void(QJsonObject)> reply) {
+    const QString id = req.value(QStringLiteral("id")).toVariant().toString();
+    const QString cmd = req.value(QStringLiteral("cmd")).toString();
+    auto answer = [id, reply](QJsonObject o) {
+        o.insert(QStringLiteral("id"), id);
+        reply(o);
+    };
+    auto fail = [answer](const QString &why) { answer(QJsonObject{{QStringLiteral("ok"), false}, {QStringLiteral("error"), why}}); };
+    logLine(QStringLiteral("auto: %1 %2").arg(cmd, QString::fromUtf8(QJsonDocument(req).toJson(QJsonDocument::Compact)).left(200)));
+    if (cmd == QLatin1String("state")) {
+        answer(QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("state"), autoState()}});
+        return;
+    }
+    if (lockScreenUp()) return fail(QStringLiteral("locked"));
+    if (cmd == QLatin1String("resume")) {
+        autoPaused() = false;
+        answer(QJsonObject{{QStringLiteral("ok"), true}});
+        return;
+    }
+    if (autoPaused()) return fail(QStringLiteral("paused (the user touched the page; send resume)"));
+    if (cmd == QLatin1String("find")) {
+        const QString sel = req.value(QStringLiteral("selector")).toString();
+        if (sel.indexOf(QLatin1Char(':')) <= 0) return fail(QStringLiteral("selector must be class:|name:|text:|prop:"));
+        QJsonObject o = autoFind(sel);
+        o.insert(QStringLiteral("ok"), true);
+        answer(o);
+        return;
+    }
+    if (cmd == QLatin1String("wait_for")) {
+        const autorules::Cond c = autorules::parseCond(req.value(QStringLiteral("cond")).toString().toStdString());
+        if (!c.ok) return fail(QStringLiteral("cond must be '<path> <op> <value>'"));
+        const int timeout = std::clamp(req.value(QStringLiteral("timeout_ms")).toInt(3000), 0, 60000);
+        const qint64 t0 = nowMs();
+        waitFor([c] { return autorules::evalCond(c, statePath(autoState(), c.path)); }, timeout,
+                [answer, c, t0](bool ok) {
+                    answer(QJsonObject{{QStringLiteral("ok"), ok},
+                                       {QStringLiteral("waited_ms"), double(nowMs() - t0)},
+                                       {QStringLiteral("value"), QString::fromStdString(statePath(autoState(), c.path))}});
+                });
+        return;
+    }
+    fail(QStringLiteral("unknown or not yet available command (milestone 1: state, find, wait_for, resume)"));
+}
+
+void serveAuto(const std::shared_ptr<InkClient> &cl) {
+    ++autoClients();
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [] { for (Injection &in : injections()) refreshInjected(in); },
+                              Qt::QueuedConnection);
+    QByteArray buf;
+    char chunk[8192];
+    for (;;) {
+        const ssize_t n = read(cl->fd, chunk, sizeof chunk);
+        if (n <= 0) break;
+        buf.append(chunk, int(n));
+        if (buf.size() > (1 << 16)) break;
+        qsizetype nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+            const QByteArray line = buf.left(nl).trimmed();
+            buf.remove(0, nl + 1);
+            if (line.isEmpty()) continue;
+            const QJsonDocument d = QJsonDocument::fromJson(line);
+            if (!d.isObject()) {
+                cl->reply(QStringLiteral("{\"ok\":false,\"error\":\"bad json\"}"));
+                continue;
+            }
+            const QJsonObject req = d.object();
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [cl, req] {
+                autoRequest(req, [cl](const QJsonObject &o) { cl->reply(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))); });
+            }, Qt::QueuedConnection);
+        }
+    }
+    cl->open = false;
+    --autoClients();
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [] { for (Injection &in : injections()) refreshInjected(in); },
+                              Qt::QueuedConnection);
+}
+
+// The socket's thread: only while the opt-in file exists (checked before each accept and every
+// 2 s while waiting for it).
+void autoServer() {
+    for (;;) {
+        while (access(kAutoOptIn, F_OK) != 0) sleep(2);
+        unlink(kAutoSock);
+        const int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, kAutoSock, sizeof addr.sun_path - 1);
+        if (s < 0 || bind(s, reinterpret_cast<sockaddr *>(&addr), sizeof addr) != 0 || listen(s, 1) != 0) {
+            logLine(QStringLiteral("auto: cannot listen on %1 (errno %2)").arg(QString::fromLatin1(kAutoSock)).arg(errno));
+            if (s >= 0) close(s);
+            sleep(10);
+            continue;
+        }
+        chmod(kAutoSock, 0600);
+        logLine(QStringLiteral("auto: listening on %1 (opt-in %2 present)").arg(QString::fromLatin1(kAutoSock), QString::fromLatin1(kAutoOptIn)));
+        while (access(kAutoOptIn, F_OK) == 0) {
+            const int fd = accept4(s, nullptr, nullptr, SOCK_CLOEXEC);
+            if (fd < 0) continue;
+            if (access(kAutoOptIn, F_OK) != 0) {
+                close(fd);
+                break;
+            }
+            logLine(QStringLiteral("auto: client connected"));
+            serveAuto(std::make_shared<InkClient>(fd));
+            logLine(QStringLiteral("auto: client gone"));
+        }
+        close(s);
+        unlink(kAutoSock);
+        logLine(QStringLiteral("auto: opt-in removed; socket closed"));
+    }
+}
+
+
+bool autoClientsActive() { return autoClients().load() > 0; }
+
+// A real pen or finger on the page while automation is connected: pause until `resume`.
+// (Milestone 1 synthesizes no input, so every gesture is the user's.)
+void pauseAutomationForUser() {
+    if (autoClients().load() > 0 && !autoPaused().exchange(true)) logLine(QStringLiteral("auto: paused by the user's pen or touch"));
+}
+
 void runCommand(const QString &text) {
     for (const QString &rawLine : text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
         const QStringList w = rawLine.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -2701,6 +2956,7 @@ void worker() {
         tickHooks().push_back([] { injectTick(); });
         startToolFollow();
     }, Qt::QueuedConnection);
+    std::thread(autoServer).detach();
     std::thread(inkServer).detach();
     for (;;) {
         usleep(250 * 1000);
