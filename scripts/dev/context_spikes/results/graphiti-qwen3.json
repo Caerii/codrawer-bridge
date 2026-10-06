@@ -1,0 +1,21 @@
+{
+ "llm": "qwen3:4b with num_ctx 16384 (Ollama alias, since removed)",
+ "embedder": "nomic-embed-text",
+ "note": "qwen3 spends the 4096-token budget thinking and returns no JSON; the first try at the default 262k context timed out at 10 min per call",
+ "episodes": [
+  {
+   "name": "reading",
+   "s": 202.9,
+   "calls": {
+    "completions": 4
+   },
+   "tokens": {
+    "prompt": 3844,
+    "completion": 16384
+   },
+   "entities": [],
+   "facts": [],
+   "error": "EmptyResponseError: LLM returned an empty response"
+  }
+ ]
+}

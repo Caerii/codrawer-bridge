@@ -28,6 +28,8 @@ Facts that shape the decision (investigation §0):
   without supporting a claim.
 - Graphiti's embedded backend (Kuzu) is deprecated by Graphiti because upstream Kuzu is
   unmaintained; its alternatives are graph servers, and every episode costs several LLM calls.
+  In the spike no episode could be ingested locally (Kuzu's search path lacked its full-text
+  index; 4B local models timed out or thought past their output budget).
 
 ## Decision
 

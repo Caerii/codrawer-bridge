@@ -44,8 +44,10 @@ annoying".
    but codrawer's events are already structured (the Primer emits concept ids, misconceptions,
    attempts, reading positions), so the extraction calls buy little; its local-first embedded
    backend, Kuzu, is deprecated by Graphiti itself because upstream Kuzu is no longer maintained
-   (warning printed by graphiti-core 0.30.2 in the spike), leaving Neo4j or FalkorDB servers; and
-   every episode costs several LLM calls (§5.2 for the measured numbers).
+   (warning printed by graphiti-core 0.30.2 in the spike), leaving Neo4j or FalkorDB servers; on
+   this machine no episode could be ingested (the Kuzu path lacks a full-text index its own
+   search needs, and 4B local models either timed out or thought past their output budget); and
+   every episode costs several LLM calls (§5.2).
 6. **Consent by source, set once** (§7): scopes on folders, books, notebooks and tags, inherited
    down the tree; `#private` (in ink or as a xochitl tag) always wins; each agent has its own
    allowed set and starts with nothing; one batched ask, only for genuinely new access, where the
@@ -270,7 +272,8 @@ Three numbers per page, all stored: the **PDF page index** (0-based), the **prin
 (`Page.get_label()`, from the PDF's /PageLabels; `xiv`, `139`), and the **tablet page index**. For
 an unedited PDF the tablet index is the PDF index. When the user inserted pages on the tablet,
 `.content` `redirectionPageMap[i]` gives the original PDF page for tablet page `i` (with a
-negative value for an inserted blank page); the `page` message's page id resolves through
+negative value for an inserted blank page, as community tools read it; to confirm on the device
+with a PDF that has an inserted page); the `page` message's page id resolves through
 `cPages.pages`. Citations show the printed label ("p. 139"); "open it" jumps by the tablet index.
 For EPUBs, citations use the EPUB's chapter and heading and a paragraph id; the tablet page index
 is computed only for "you are here", from the reading position the page watcher reports.
@@ -445,7 +448,27 @@ episodes (a reading position, a Primer reading, an attempt, a note).
   deprecated and will be removed in a future release — the upstream Kuzu project is no longer
   maintained. Migrate to Neo4j or FalkorDB." Local-first then means running a Neo4j (JVM, ~1 GB
   RAM) or FalkorDB (Redis module, Docker on Windows) server beside the router.
-- **Per-episode cost and latency**: GRAPHITI_RESULTS.
+- **No episode was ingested.** Three runs, all on the desktop GPU through Ollama:
+  - `qwen3:4b` at Ollama's default context (262,144 tokens): the KV cache made the model 43 GB,
+    7.9 GB of it in VRAM, and the first extraction call hit Ollama's 10-minute limit (HTTP 500).
+  - `qwen3:4b` at 16,384 tokens (a temporary Ollama alias, removed afterwards): each call spent
+    its whole 4,096-token output budget thinking and returned no JSON; 4 calls, 3,844 prompt and
+    16,384 completion tokens, 203 s, then `EmptyResponseError` (`results/graphiti-qwen3.json`).
+  - `gemma3:4b` at 16,384 tokens: node extraction worked (2 chat calls and 4–7 embedding calls
+    per episode, ~2,500 prompt and 260–770 completion tokens, 6–34 s warm, 97 s with model load),
+    then every episode failed in deduplication with Kuzu's `Binder exception: Table
+    RelatesToNode_ doesn't have an index with name edge_name_and_fact`:
+    `build_indices_and_constraints` did not create the full-text index the Kuzu search path
+    queries, and search failed the same way (`results/graphiti.json`).
+- **What a working episode costs**: the two calls measured are the start of Graphiti's pipeline;
+  edge extraction, edge resolution against existing facts, and attribute and summary updates
+  follow, so a full episode is several more calls. With a hosted model that is seconds and a
+  few thousand tokens per episode; a learner produces dozens of codrawer events a day (pages,
+  readings, attempts), so it adds up, and every call sends the event text out.
+- **Small local models are not enough.** Graphiti's prompts expect a capable model that follows
+  structured output reliably; the 4B models either thought past their budget or needed the
+  context trimmed by hand. Local-first Graphiti would mean a larger local model (tens of GB of
+  VRAM) or a hosted model, plus Neo4j or FalkorDB.
 
 | | Graphiti | Typed graph in SQLite |
 | --- | --- | --- |
@@ -733,7 +756,9 @@ uv run --no-project --python 3.12 --with "graphiti-core[kuzu]" --with httpx pyth
 ```
 
 Results: `results/bench.json` (with glyph repair and rerank), `results/bench-v0-no-glyph-repair.json`,
-`results/graphiti.json`.
+`results/graphiti.json` (gemma3:4b), `results/graphiti-qwen3.json`. Small local models need a
+bounded context in Ollama (`num_ctx`, e.g. a Modelfile alias), or the default 262k-token context
+makes a 4B model spill out of VRAM; set `CODRAWER_GRAPHITI_LLM` to the alias.
 
 ## Sources
 
