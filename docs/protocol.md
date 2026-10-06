@@ -55,6 +55,10 @@ Fields:
   (layer `user`) within the eraser radius of its path goes, splitting lines; other layers are not
   cut. The radius is 28.8 page px plus the ink's half width at the tablet's default zoom
   (`docs/investigations/native-erase.md`, `apps/even-g2/src/erase.ts`).
+  The toolbar's Eraser used with the tip is sent the same way when xochitl reports it (the
+  codrawer-layer XOVI extension; `bridge/remarkable/native/README.md`, "The toolbar eraser"), with
+  `"tool":"eraser"` added. Its radius depends on the eraser size (5 × size² page px; 20 at size 2),
+  while clients use the eraser end's radius.
 - `color` (optional): client hint (e.g. `"#00ff88"`). Input events do not provide UI-selected color; set it via client/bridge config.
 - `ts`: ms timestamp
 

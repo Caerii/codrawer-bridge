@@ -194,3 +194,56 @@ func TestHoverSendsPacedCursorAndGone(t *testing.T) {
 		t.Fatalf("want gone, got %v", last)
 	}
 }
+
+func TestToolbarEraserMakesTipStrokesErasers(t *testing.T) {
+	r := newRig(t)
+	tool := "eraser"
+	r.m.cfg.Tool = func() string { return tool }
+	r.ev(EvKey, BtnToolPen, 1)
+	r.point(1000, 1000)
+	if r.out[0]["t"] != "stroke_begin" || r.out[0]["brush"] != "eraser" || r.out[0]["tool"] != "eraser" {
+		t.Fatalf("toolbar eraser: %v", r.out[0])
+	}
+	r.up()
+	// back to a pen in the toolbar: ink again
+	tool = "pen"
+	n := len(r.out)
+	r.advance(50)
+	r.point(2000, 2000)
+	if r.out[n]["brush"] != "pen" || r.out[n]["tool"] != nil {
+		t.Fatalf("toolbar pen: %v", r.out[n])
+	}
+}
+
+func TestUnknownToolKeepsInk(t *testing.T) {
+	for _, tool := range []string{"", "erase_area", "highlighter"} {
+		r := newRig(t)
+		r.m.cfg.Tool = func() string { return tool }
+		r.point(1000, 1000)
+		if r.out[0]["brush"] != "pen" || r.out[0]["tool"] != nil {
+			t.Fatalf("tool %q: %v", tool, r.out[0])
+		}
+	}
+}
+
+func TestRubberEndStaysEraserWhateverTheToolbar(t *testing.T) {
+	r := newRig(t)
+	r.m.cfg.Tool = func() string { return "pen" }
+	r.ev(EvKey, BtnToolRubber, 1)
+	r.point(1000, 1000)
+	if r.out[0]["brush"] != "eraser" || r.out[0]["tool"] != nil {
+		t.Fatalf("eraser end: %v", r.out[0])
+	}
+}
+
+func TestHoverShowsToolbarEraser(t *testing.T) {
+	r := newRig(t)
+	r.m.cfg.Tool = func() string { return "eraser" }
+	r.ev(EvKey, BtnToolPen, 1)
+	r.ev(EvAbs, AbsX, 1000)
+	r.ev(EvAbs, AbsY, 1000)
+	r.syn()
+	if len(r.out) != 1 || r.out[0]["t"] != "cursor" || r.out[0]["tool"] != "eraser" {
+		t.Fatalf("hover: %v", r.out)
+	}
+}

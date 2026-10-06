@@ -53,6 +53,16 @@ page and builds the message. It is on when boot.sh marks the OS tested (`CODRAWE
 `PAGE_POLL_MS` tune it. `codrawer_bridge_native -page-dump` prints the open page's message once
 and exits. Tests run anywhere: `go test ./rmlines/ ./pagewatch/`.
 
+## The toolbar eraser (`TOOL_FILE`)
+
+evdev shows the pen's eraser end (brush `eraser`), but not the Eraser picked in xochitl's
+toolbar and used with the tip. When the codrawer-layer XOVI extension runs inside xochitl
+(`../xovi/codrawer-layer`, tethered), it writes the selected tool to `/run/codrawer/tool`. The pen
+machine checks it at each pen-down: while it says `eraser`, a tip stroke goes out as
+`"brush":"eraser","tool":"eraser"` and every client cuts ink with it. A missing file, or one
+older than 3 s, changes nothing. `TOOL_FILE` (`-tool-file`) moves it; `off` disables it. Tests:
+`go test ./pen/ ./toolhint/`.
+
 ## Build (desktop)
 
 From repo root (Linux/ARM64 target for Paper Pro):

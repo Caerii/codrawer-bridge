@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"codrawer-bridge-native/pagewatch"
+	"codrawer-bridge-native/toolhint"
 )
 
 // BridgeConfig is the bridge's whole configuration. Field comments give the env var and the
@@ -59,6 +60,11 @@ type BridgeConfig struct {
 	PageWatch  string
 	XochitlDir string
 	PagePollMs int
+
+	// ToolFile (TOOL_FILE, package toolhint): where the codrawer-layer XOVI extension reports
+	// xochitl's selected tool, so that the toolbar Eraser used with the tip streams as an
+	// eraser. "off" disables it; an absent or stale file changes nothing.
+	ToolFile string
 }
 
 // loadConfig reads the environment, then the flags. pageDump reports -page-dump.
@@ -90,6 +96,7 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 		PageWatch:          getenvDefault("PAGE_WATCH", "auto"),
 		XochitlDir:         getenvDefault("XOCHITL_DIR", pagewatch.DefaultDir),
 		PagePollMs:         getenvIntDefault("PAGE_POLL_MS", 1000),
+		ToolFile:           getenvDefault("TOOL_FILE", toolhint.DefaultPath),
 	}
 
 	flag.StringVar(&cfg.WsURL, "ws", cfg.WsURL, "WebSocket URL to desktop server")
@@ -118,6 +125,7 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 	flag.StringVar(&cfg.PageWatch, "page-watch", cfg.PageWatch, "Send xochitl's saved page as `page` snapshots: auto (only on an OS boot.sh lists as tested), on, off")
 	flag.StringVar(&cfg.XochitlDir, "xochitl-dir", cfg.XochitlDir, "xochitl's data directory (read-only)")
 	flag.IntVar(&cfg.PagePollMs, "page-poll-ms", cfg.PagePollMs, "How often the page watcher checks xochitl's files (ms)")
+	flag.StringVar(&cfg.ToolFile, "tool-file", cfg.ToolFile, "xochitl's selected tool, written by the codrawer-layer XOVI extension (toolbar Eraser → eraser strokes); off disables")
 	flag.BoolVar(&pageDump, "page-dump", false, "Print the `page` message for the open document and page, then exit (read-only)")
 	flag.Parse()
 	return cfg, pageDump

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"codrawer-bridge-native/pen"
+	"codrawer-bridge-native/toolhint"
 )
 
 // penReaderForever reads the pen device into evC for the lifetime of the process, reopening it
@@ -133,6 +134,7 @@ func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, o
 		FlushEvery:        time.Second / time.Duration(max(1, cfg.BatchHz)),
 		MaxBatch:          cfg.MaxBatchPoints,
 		HoverEvery:        hoverEvery(cfg.HoverHz),
+		Tool:              toolOf(cfg.ToolFile),
 	}, rng, func(msg []byte) bool {
 		select {
 		case outC <- msg:
@@ -169,6 +171,16 @@ func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, o
 			fmt.Printf("[bridge] stats touching=%v strokes=%d skipped=%d outbox=%d\n", m.Touching(), m.Strokes(), m.LostStrokes(), len(outC))
 		}
 	}
+}
+
+// toolOf follows xochitl's selected tool in path (package toolhint), or returns nil for "off"
+// or "". The file exists only while the codrawer-layer extension runs inside xochitl.
+func toolOf(path string) func() string {
+	if path == "" || path == "off" {
+		return nil
+	}
+	f := &toolhint.File{Path: path}
+	return f.Tool
 }
 
 // hoverEvery converts HOVER_HZ to the machine's pacing interval (0 disables hover).

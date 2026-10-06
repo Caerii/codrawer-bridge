@@ -5,7 +5,8 @@
 //
 // The Paper Pro's pen (the Elan marker, /dev/input/event2) reports absolute axes (x, y,
 // pressure, distance) and tool keys (BTN_TOUCH, BTN_TOOL_PEN, BTN_TOOL_RUBBER), grouped into
-// samples by SYN_REPORT. A stroke is the run of samples between contact and lift. The bridge has
+// samples by SYN_REPORT. The keys tell the eraser end from the tip, but not the tool picked in
+// xochitl's toolbar: that comes from Config.Tool (package toolhint), when xochitl reports it. A stroke is the run of samples between contact and lift. The bridge has
 // to cut that stream into strokes, normalise the coordinates, batch the points for the network
 // (~60 batches/s, ADR 006) and survive a network that comes and goes.
 //
@@ -89,6 +90,10 @@ type Config struct {
 	// HoverEvery paces `cursor` messages while the pen hovers in range without touching
 	// (a pointer for viewers to follow); 0 disables them.
 	HoverEvery time.Duration
+	// Tool, if set, reports the tool xochitl's toolbar has selected for the tip ("eraser",
+	// "pen", …, or "" when unknown; package toolhint). It is asked at each pen-down with the tip
+	// and on hover samples. "eraser" makes a tip stroke an eraser stroke, the same as the eraser end.
+	Tool func() string
 }
 
 // sample is the device state as of the latest event: evdev reports only what changed, so the
@@ -249,12 +254,20 @@ func (m *Machine) beginStroke(now time.Time, tsMS int64) {
 	m.batch, m.batchN = m.batch[:0], 0
 	m.lastFlush = time.Time{} // the first point goes out at once
 	m.brush = m.cfg.Brush
-	if m.dev.toolRubber {
+	toolbar := false // the eraser came from xochitl's toolbar, not from the pen's eraser end
+	switch {
+	case m.dev.toolRubber:
 		m.brush = "eraser"
+	case m.toolbarEraser():
+		m.brush, toolbar = "eraser", true
 	}
 	m.id = fmt.Sprintf("u_%x", now.UnixNano())
 	msg := []byte(`{"t":"stroke_begin","id":"` + m.id + `","layer":"user","brush":`)
 	msg = strconv.AppendQuote(msg, m.brush) // config strings are ASCII; Go quoting is valid JSON
+	if toolbar {
+		// receivers treat it as any eraser (brush); `tool` says it is xochitl's toolbar Eraser
+		msg = append(msg, `,"tool":"eraser"`...)
+	}
 	if m.cfg.Color != "" {
 		msg = append(msg, `,"color":`...)
 		msg = strconv.AppendQuote(msg, m.cfg.Color)
@@ -266,6 +279,12 @@ func (m *Machine) beginStroke(now time.Time, tsMS int64) {
 		m.OnStroke(true)
 	}
 	m.send(msg)
+}
+
+// toolbarEraser reports whether xochitl's toolbar has the Eraser selected, so that the tip
+// erases. Unknown (no Config.Tool, or it returns "") is false: the stroke stays ink, as before.
+func (m *Machine) toolbarEraser() bool {
+	return m.cfg.Tool != nil && m.cfg.Tool() == "eraser"
 }
 
 // endStroke flushes the pending points and sends stroke_end.
@@ -387,7 +406,7 @@ func (m *Machine) hover(now time.Time, tsMS int64) {
 	msg = append(msg, `,"y":`...)
 	msg = appendFixed(msg, y, 4)
 	msg = append(msg, `,"tool":`...)
-	if m.dev.toolRubber {
+	if m.dev.toolRubber || m.toolbarEraser() {
 		msg = append(msg, `"eraser"`...)
 	} else {
 		msg = append(msg, `"pen"`...)
