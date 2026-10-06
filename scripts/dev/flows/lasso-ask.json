@@ -1,0 +1,7 @@
+[
+  {"name": "in the test notebook", "cmd": "state", "expect": {"ok": true, "state.doc.title": "codrawer: test"}},
+  {"name": "selection tool", "cmd": "tool", "name": "selectionButton"},
+  {"name": "lasso a region (a drag across the page)", "cmd": "swipe", "x0": 400, "y0": 500, "x1": 900, "y1": 800, "ms": 600,
+   "after": {"cmd": "wait_for", "cond": "selection.items >= 1", "timeout_ms": 3000}, "shot": true},
+  {"name": "tap Ask agent in the selection menu", "cmd": "tap_item", "selector": "text:Ask agent", "shot": true}
+]

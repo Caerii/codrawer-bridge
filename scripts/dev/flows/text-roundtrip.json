@@ -1,0 +1,7 @@
+[
+  {"name": "in the test notebook", "cmd": "state", "expect": {"ok": true, "state.doc.title": "codrawer: test"}},
+  {"name": "typing tool", "cmd": "tool", "name": "typingMenu"},
+  {"name": "focus a text box on the page", "cmd": "tap", "x": 810, "y": 400, "shot": true},
+  {"name": "insert text", "cmd": "text_insert", "text": "rmflow [ok] {1} ^ ~", "shot": true},
+  {"name": "read it back", "cmd": "text_read"}
+]

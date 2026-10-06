@@ -91,8 +91,10 @@ would trip xochitl's 60 s watchdog), and the fallback is reading the display buf
 
 ## The desktop runner: scripts/dev/rmflow.py
 
-`uv run scripts/dev/rmflow.py flows/<name>.json` opens an SSH tunnel to the socket
-(`ssh -L` to a Unix socket; nothing on the router, nothing on the network), runs a flow's steps
+`uv run scripts/dev/rmflow.py flows/<name>.json` opens an SSH tunnel to the extension's loopback
+listener (127.0.0.1:8579, the same protocol as auto.sock; dropbear forwards TCP ports but not
+Unix sockets, and the tablet has no Unix-socket client), so nothing is on the router or the
+network, runs a flow's steps
 in order, grabs a screenshot after each step that asks for one, and prints a report: step, ok or
 the error, time, screenshot path. A flow is a JSON list of commands with expectations
 (`expect: {"state.page.index": 2}`), so the flows double as tests.
@@ -106,6 +108,22 @@ Sample flows (`scripts/dev/flows/`):
    the bridge to log the `dock_action`.
 3. `text-roundtrip.json`: focus a text box (tap the typing tool, then the page) → `text_insert`
    → `text_read` → expect the text back → `undo` → expect it gone.
+
+## As built (2026-10-06)
+
+- Milestone 1 (`state`, `find`, `wait_for`, `resume`, the opt-in file, pause, lock) and the
+  pure guardrails (`auto_rules.h`, tested by `test.sh`) are in the extension.
+- Milestones 2 and 3 are built and not yet run on the device: `grab` (copies the display buffer
+  from the process's own memory and encodes the PNG off the GUI thread), `tap`, `long_press`,
+  `swipe`, `tap_item selector`, `tool name` (taps the ToolLoader `editingToolLoader_<name>`),
+  `open title` (taps the library tile's title), `goto page` (the first of `goToPageId`,
+  `goToPage`, `setCurrentPage` found on the DocumentView chain), and `text_insert`/`text_read`
+  (the ink socket's routes; insert only in the test notebook). Every press is checked against
+  the deny list on the item under the point and its ancestry; with another notebook open only
+  the close button and the page overview may be tapped.
+- Open questions for the device: whether xochitl's lasso takes mouse drags at all (the selection
+  tool may follow only the pen; then the lasso flow needs a synthesized tablet event), and the
+  display buffer's pixel format (Probe 1's grabs came out with shifted colours).
 
 ## Milestones
 
