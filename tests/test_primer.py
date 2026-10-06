@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from codrawer_bridge.primer import assess, check, coach, latex, policy, practice
+from codrawer_bridge.primer import assess, check, coach, latex, markup, policy, practice
 from codrawer_bridge.primer.agent import PrimerAgent
 from codrawer_bridge.primer.concepts import (
     CONCEPTS,
@@ -610,6 +610,8 @@ def test_a_mock_collects_write_ups_and_grades_them_the_next_morning(tmp_path):
 
     agent = PrimerAgent(
         send,
+        renderer=markup.Renderer(),
+        markup_speed=0,
         learner="nell",
         mode="offline",
         store=LearnerStore(tmp_path),
@@ -657,7 +659,7 @@ def test_a_mock_collects_write_ups_and_grades_them_the_next_morning(tmp_path):
         await agent.tick()
 
     asyncio.run(go())
-    report = sent[-1]["mock"]["report"]
+    report = [m for m in sent if m.get("t") == "primer"][-1]["mock"]["report"]
     assert report["estimate"] is True and report["max"] == 120
     by_id = {r["problem"]: r for r in report["problems"]}
     assert by_id["sqrt2_irrational"]["score"] == 2 and "lowest terms" in " ".join(

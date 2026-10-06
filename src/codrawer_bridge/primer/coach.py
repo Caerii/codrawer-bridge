@@ -75,6 +75,17 @@ DOCK_ENTRIES: list[dict[str, Any]] = [
         "kind": "selection",
         "hint": "The Primer reads the selected ink",
     },
+    {
+        "id": "grade_page",
+        "label": "Grade this page",
+        "hint": "Teacher's marks in red, on their own layer",
+    },
+    {
+        "id": "grade_selection",
+        "label": "Grade selection",
+        "kind": "selection",
+        "hint": "Teacher's marks on the lassoed proof",
+    },
 ]
 
 

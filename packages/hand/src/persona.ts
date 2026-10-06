@@ -344,8 +344,27 @@ export const calligrapher = definePersona({
   timing: { lift: 0.06, flightBase: 0.1, word: 0.35, phrase: 0.7, hesitation: 0.9, doubt: 0.4, correction: 0.03 },
 })
 
+/**
+ * The Teacher: a red pen marking up a student's proof (the Primer's markup, ADR 010). Quick,
+ * confident and slightly slanted print, small enough for a margin; short commands with little
+ * hesitation, a firm well-damped arm, and almost no pauses between words: a teacher who has
+ * written "justify this" ten thousand times. Marks (circles, ticks, strikes) are drawn by the
+ * Primer at this persona's pace.
+ */
+export const teacher = definePersona({
+  id: 'teacher',
+  name: 'Teacher',
+  blurb: 'quick confident red-pen marks, slightly slanted print',
+  letters: { face: 'futural', join: false, capHeight: 3.8, slant: 0.2, letterSpacing: 0.95, wordSpacing: 1.0, sizeJitter: 0.05, slantJitter: 0.04, baselineWander: 0.15, delayDots: false },
+  motor: { tempo: 1.8, sigma: 0.26, overlap: 0.35, powerLaw: 0.9, noise: { D: 0.06, theta: 0.07, t0: 0.03, mu: 0.04, sigma: 0.05 } },
+  arm: { stiffness: 1.2, damping: 0.8, carriage: 0.4 },
+  tremor: { amplitude: 0.012, frequency: 10.5 },
+  pressure: { base: 0.6, downstroke: 0.14, speedDrop: 0.15, swell: 0.03 },
+  timing: { lift: 0.025, flightBase: 0.04, word: 0.06, phrase: 0.15, sentence: 0.25, hesitation: 0.15, doubt: 0.1, correction: 0.02 },
+})
+
 /** The built-in personas, in the lab's order. */
-export const PERSONAS: Persona[] = [archivist, sketcher, elder, mathematician, calligrapher]
+export const PERSONAS: Persona[] = [archivist, sketcher, elder, mathematician, calligrapher, teacher]
 
 /** A built-in persona by id (`mirror` needs {@link mirror}). */
 export function persona(id: string): Persona | undefined {

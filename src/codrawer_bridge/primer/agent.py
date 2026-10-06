@@ -39,6 +39,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import assess, check, coach, latex, policy
+from . import markup as markupmod
 from . import mock as mockmod
 from .ink_signals import InkLog, InkStroke, LineSignals, LullDetector, line_features, segment_lines
 from .learner import Learner, LearnerStore, safe_name
@@ -70,6 +71,8 @@ class PrimerAgent:
         store: LearnerStore | None = None,
         today: str | None = None,
         clock: Callable[[], float] = _now_ms,
+        renderer: markupmod.Renderer | None = None,
+        markup_speed: float = 1.0,
     ) -> None:
         self.send = send
         self.learner_name = safe_name(learner)
@@ -96,6 +99,13 @@ class PrimerAgent:
         self._mock_saved = 0.0
         self.ink_enabled = os.environ.get("CODRAWER_PRIMER_INK", "") in ("1", "true", "yes", "on")
         self._load_mock()
+        # Teacher's markup (markup.py): the renderer, the last marks (for "remove marks"), marks
+        # waiting for their page to be on screen (a mock's write-ups), and running performances.
+        self.renderer = renderer
+        self.markup_speed = markup_speed
+        self.last_marks: list[str] = []
+        self.pending_marks: dict[str, list[dict]] = {}
+        self._performances: set[asyncio.Task] = set()
 
     # ── Input ────────────────────────────────────────────────────────────────────────────────
 
@@ -110,6 +120,9 @@ class PrimerAgent:
         self.log.observe(msg, now)
         if self.mock is not None and self.mock.status == "running":
             await self._mock_observe(msg, now)
+        if t == "page" and self.pending_marks.get(self.log.page_key):
+            # a mock's graded write-up is on screen again: its marks go on now
+            self._perform(self.pending_marks.pop(self.log.page_key))
         if t == "page":
             lr = self.store.load(self.learner_name)
             if coach.note_reading(lr, msg, now):
@@ -134,6 +147,8 @@ class PrimerAgent:
                 await self.read("proof")
             elif line == "/hint":
                 await self.read("hint")
+            elif line == "/grade":
+                await self.read("proof", markup=True)
             elif line == "/coach":
                 await self.send_plan(include_coach=True)
             elif line == "/mock start":
@@ -154,6 +169,10 @@ class PrimerAgent:
         elif what == "forget":
             self.store.delete(self.learner_name)
             await self.send_plan(include_coach=False)
+        elif what == "grade":
+            await self.read("proof", markup=True)
+        elif what == "clear_marks":
+            await self.clear_marks()
         elif what == "mock_start":
             await self.mock_start(
                 problems=msg.get("problems"), scale=float(msg.get("scale") or 1.0)
@@ -176,7 +195,11 @@ class PrimerAgent:
     async def _on_dock(self, msg: dict) -> None:
         """The tablet dock's entries (docs/protocol.md ``dock_action``; ids as the extension's)."""
         aid = msg.get("id")
-        if aid == "practice_coach":
+        if aid == "grade_page":
+            await self.read("proof", markup=True)
+        elif aid == "grade_selection":
+            await self.read("proof", selection=msg, markup=True)
+        elif aid == "practice_coach":
             await self.send_plan(include_coach=True, sketch=True)
         elif aid == "ask_page":
             await self.read("proof")
@@ -238,7 +261,9 @@ class PrimerAgent:
                 out.strokes[s.id] = InkStroke(**{**s.__dict__})
         return out
 
-    async def read(self, request: str = "proof", selection: dict | None = None) -> dict | None:
+    async def read(
+        self, request: str = "proof", selection: dict | None = None, markup: bool = False
+    ) -> dict | None:
         """One reading (module docstring); returns the message sent, or None for silence."""
         if self.mock is not None and self.mock.status == "running":
             # A mock is an exam: no readings or hints until it is graded (mock.py).
@@ -311,6 +336,12 @@ class PrimerAgent:
                 lr.attempts[-1].hints = max(lr.attempts[-1].hints, self.hints.level)
             self.store.save(lr)
             out = self._message(doc, move, lr, now, nudge=coach.nudge(lr, attempt, now))
+            if markup and doc.steps:
+                # The teacher's red pen over her page (markup.py), drawn at its own pace.
+                mk = await self._build_markup(doc, log)
+                out["markup"] = mk.block()
+                self.last_marks = mk.stroke_ids()
+                self._perform(mk.messages)
             await self.send(out)
             return out
 
@@ -689,6 +720,17 @@ class PrimerAgent:
                         coach.log_attempt(lr, doc, now_ms=now, minutes=minutes, hints=0)
                     from .concepts import MISCONCEPTIONS
 
+                    if doc.steps:
+                        # marks for the write-up, put on when its page is on screen (or now)
+                        mk = await self._build_markup(doc, log)
+                        entry["marks"] = len(mk.marks)
+                        page = w.pages[-1] if w.pages else ""
+                        if page and page != self.log.page_key:
+                            self.pending_marks[page] = (
+                                self.pending_marks.get(page, []) + mk.messages
+                            )
+                        else:
+                            self._perform(mk.messages)
                     g = doc.grade
                     entry.update(
                         score=g.score if g else 0,
@@ -738,3 +780,41 @@ class PrimerAgent:
             out = self._message(None, None, lr, now)
             await self.send(out)
             return out
+
+    # ── Teacher's markup (markup.py) ─────────────────────────────────────────────────────────
+
+    async def _build_markup(self, doc: ProofDoc, log: InkLog) -> markupmod.Markup:
+        ink = [st.bbox() for st in log.ink()]
+        boxes = {st.id: st.bbox() for st in log.ink()}
+        renderer = self.renderer or markupmod.default_renderer()
+        return await asyncio.to_thread(
+            markupmod.build, doc, ink, renderer, int(self.clock()), boxes
+        )
+
+    def _perform(self, messages: list[dict]) -> None:
+        """Play marks at their own timing in the background, yielding while her pen is down."""
+        if not messages:
+            return
+        task = asyncio.ensure_future(
+            markupmod.perform(
+                messages,
+                self.send,
+                user_active=lambda: bool(self.log.pen_down),
+                speed=self.markup_speed,
+            )
+        )
+        self._performances.add(task)
+        task.add_done_callback(self._performances.discard)
+
+    async def clear_marks(self) -> None:
+        """Take the last marks back (``stroke_delete``: agent ink may be deleted by anyone)."""
+        if self.last_marks:
+            await self.send(
+                {"t": "stroke_delete", "ids": list(self.last_marks), "ts": int(self.clock())}
+            )
+            self.last_marks = []
+
+    async def settle(self) -> None:
+        """Wait for running performances (tests and the CLI)."""
+        while self._performances:
+            await asyncio.gather(*list(self._performances))
