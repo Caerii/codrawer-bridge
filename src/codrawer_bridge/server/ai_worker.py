@@ -549,6 +549,13 @@ async def ai_loop(session_id: str, session: Session) -> None:
                 break
         pending.clear()
 
+        # Strokes alone never summon the AI unless auto mode is on (CODRAWER_AI_AUTO_ENABLED=1):
+        # every stroke_end is queued here, and without this gate the heuristic stub answered each
+        # one with ghost ellipses, including other participants' and the hand simulator's ink.
+        # Explicit prompts are always answered.
+        if job_type != "prompt" and not settings.ai_auto_enabled:
+            continue
+
         session.last_model_call_ts = _now()
 
         # If auto mode is enabled and this wasn't an explicit prompt, wait for a user pause.
