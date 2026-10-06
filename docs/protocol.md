@@ -325,14 +325,21 @@ A client asks for a reading or a hint, or manages the learner's file:
   (read the page and mark it up in red pen, below), `clear_marks` (take the last marks back),
   `mock_start` (start a mock exam; optional `problems`, four lists of three bank ids, and `scale`,
   a time compression for demos and tests only), `mock_problem` with `n` 1–3 (the problem she is
-  writing now), `mock_grade` (grade now instead of the next morning), `mock_stop`, `mock_status`.
+  writing now), `mock_grade` (grade now instead of the next morning), `mock_stop`, `mock_status`,
+  `features` with `features` (`{"<feature>": true|false}`: consent per kind of watching),
+  `goals_set` with `goals` (her edits; only she agrees), `goals`, `dispute` with `target`
+  (`mastery:<concept>`, `misconception:<id>`, `calibration`) and `claim` (`known`, `not_known`,
+  `wrong`), `insight` with `id` and `verdict` (`confirmed` or `dismissed`), `review` (the next due
+  item), `review_answer` with `id` and `grade` (1 Again … 4 Easy), `self_explanation` with `text`
+  (the key idea, in her words, for the notebook), and `report`. A `proof` request may carry
+  `confidence` (0..1, how sure she is before the check).
 - `learner`: the learner's chosen name. Identity is per person, not per device, because a family
   shares one tablet and one Even account (ADR 010). Lowercase letters, digits, `-` and `_`, at
   most 32 characters; anything else is folded to that alphabet.
 
 A line typed on the tablet's keyboard that reads `/proof`, `/hint` or `/grade` is the same
 request (`/coach` asks for the coach view; `/mock start`, `/mock grade` and `/p 1`…`/p 3` drive a
-mock exam); the Primer assembles lines from `key` messages itself.
+mock exam; `/sure 70` records her confidence before the next check; `/review` asks for a review); the Primer assembles lines from `key` messages itself.
 
 The Primer answers with one message per reading:
 
@@ -394,6 +401,16 @@ Fields:
   problems), `glance` (the glasses' quiet line), and once graded `report` (`total` of `max` 120,
   `estimate: true`, and per problem `session`, `n`, `title`, `score`, `band`, `rigor`,
   `exposition`, `findings`).
+- `metacog`: her side of the model (ADR 010): `calibration` (`curve` of bins with mean
+  `confidence`, mean `outcome` and `n`; `brier`; `gap`, positive when more sure than the grades;
+  `flags` per technique), `calibration_nudge`, `goals` (`target`, `target_score`, `topics`,
+  `weekly_hours`, `nudging`, `revisit_days`, `agreed_ms`, `history`), `goals_revisit` (the Primer
+  may offer to revisit them), `features` (per kind of watching: `on` and `label`; all off until she
+  turns them on), `review` (the next due item: `id`, `kind`, `prompt`, `r`, or null), `items`
+  (count), and, with activity review on, `insights` (`id`, `kind`, `text`, `suggestion`,
+  `confidence`, `evidence` with replay links).
+- `report` (after `report` or the dock's `my_progress`): `file`, `url` (a path on the desktop
+  router, `GET /primer/reports/<learner>/<file>`), `portfolio` (her reports so far), or `error`.
 - `proof`, `findings`, `grade` and `move` are absent from an answer to `plan`, `forget` or the
   coach dock entry, and from mock updates.
 

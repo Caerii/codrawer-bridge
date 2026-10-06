@@ -24,6 +24,7 @@ import {
 } from '../src/primer/model'
 import { mockActive, mockLine, parseMock } from '../src/primer/mock'
 import { listedMarks, markAt, markLabel, parseMarkup } from '../src/primer/marks'
+import { gapLine, parseMetacog, reportUrl } from '../src/primer/metacog'
 
 const step = (n: number, latex: string, text: string, status: string, extra: Record<string, unknown> = {}) => ({
   n,
@@ -244,4 +245,32 @@ test("the teacher's marks: parsed, listed, and found under a tap", () => {
   assert.equal(markLabel(m.marks[1]), 'Step 6 · ?')
   const r = parseReading({ t: 'primer', markup: { marks: [{ id: 'x', kind: 'check', step: 2 }] } })!
   assert.equal(r.markup?.marks[0].kind, 'check')
+})
+
+test('her side of the model: calibration, goals, consent, a review, insights, the report URL', () => {
+  const m = parseMetacog({
+    calibration: { curve: [{ confidence: 0.9, outcome: 0.2, n: 3 }], brier: 0.41, gap: 0.62, n: 3, flags: [] },
+    calibration_nudge: 'On induction you have been more sure than the grades.',
+    goals: { target: 'about 30/120', target_score: 30, topics: ['number_theory'], weekly_hours: 8, nudging: 'light', revisit_days: 7 },
+    goals_revisit: true,
+    features: { reviews: { on: true, label: 'Spaced review prompts' }, ink_signals: { on: false, label: 'Pauses' } },
+    review: { id: 'technique:induction', kind: 'technique', prompt: 'When would you reach for induction?' },
+    insights: [{ id: 'time_sink', kind: 'time_sink', text: '2 long attempts…', suggestion: 'Switch at 30 minutes.', confidence: 0.65 }],
+  })!
+  assert.equal(m.goals.weeklyHours, 8)
+  assert.equal(m.goalsRevisit, true)
+  assert.deepEqual(
+    m.features.map((f) => [f.id, f.on]),
+    [
+      ['reviews', true],
+      ['ink_signals', false],
+    ],
+  )
+  assert.equal(m.review?.id, 'technique:induction')
+  assert.equal(m.insights[0].confidence, 0.65)
+  assert.equal(gapLine(m.calibration), '+62 points (more sure than the grades) over 3 proofs')
+  assert.equal(reportUrl('ws://192.168.50.2:8577/ws/session1', '/primer/reports/nell/report-2026-10-19.pdf'), 'http://192.168.50.2:8577/primer/reports/nell/report-2026-10-19.pdf')
+  assert.equal(reportUrl('wss://x.ts.net/ws/s', '/r.pdf'), 'https://x.ts.net/r.pdf')
+  assert.equal(reportUrl('nonsense', '/r.pdf'), '')
+  assert.equal(parseMetacog(null), null)
 })

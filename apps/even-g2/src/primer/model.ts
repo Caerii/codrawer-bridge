@@ -27,6 +27,7 @@
 
 /** How a step stands: sound, a gap in rigor, wrong, or not legible enough to judge. */
 import { parseMarkup, type Markup } from './marks'
+import { parseMetacog, parseReport, type Metacog, type Report } from './metacog'
 import { parseMock, type MockView } from './mock'
 
 export type StepStatus = 'ok' | 'gap' | 'error' | 'unclear'
@@ -183,6 +184,10 @@ export interface Reading {
   mock: MockView | null
   /** The teacher's marks announced with this reading (primer/marks.ts). */
   markup: Markup | null
+  /** Calibration, goals, consent, the next review, insights (primer/metacog.ts). */
+  metacog: Metacog | null
+  /** A progress report just typeset (its URL on the desktop router). */
+  report: Report | null
 }
 
 // ── Reading a message defensively ─────────────────────────────────────────────────────────────
@@ -338,6 +343,8 @@ export function parseReading(m: unknown): Reading | null {
     coach: parseCoach(o.coach),
     mock: parseMock(o.mock),
     markup: parseMarkup(o.markup),
+    metacog: parseMetacog(o.metacog),
+    report: parseReport(o.report),
   }
 }
 
@@ -369,6 +376,8 @@ export function acceptReading(r: Reading): Reading {
         coach: r.coach ?? prev.coach,
         mock: r.mock ?? prev.mock,
         markup: r.markup ?? (r.proof ? null : prev.markup),
+        metacog: r.metacog ?? prev.metacog,
+        report: r.report ?? prev.report,
       }
     : r
   primer.latest = merged
@@ -459,7 +468,7 @@ export function activeLearner(): string {
 
 // ── Requests ──────────────────────────────────────────────────────────────────────────────────
 
-export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off' | 'mock_start' | 'mock_problem' | 'mock_grade' | 'mock_stop' | 'mock_status' | 'grade' | 'clear_marks'
+export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off' | 'mock_start' | 'mock_problem' | 'mock_grade' | 'mock_stop' | 'mock_status' | 'grade' | 'clear_marks' | 'features' | 'goals_set' | 'dispute' | 'insight' | 'review' | 'review_answer' | 'report' | 'self_explanation'
 
 /** A `primer_request` for the active learner (or `learner`), stamped `ts` (Unix ms). */
 export function primerRequest(what: RequestWhat, learner = activeLearner(), ts = Date.now(), extra: Record<string, unknown> = {}) {

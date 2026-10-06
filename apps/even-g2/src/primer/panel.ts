@@ -12,8 +12,10 @@
  *             fallback when agent ink is off), which problem is being written, and the report
  *   Coach     the practice coach: whether it is watching (and the switch), its last nudge, the
  *             next problems and the weak spots it found, each with the reason it gives
- *   Learner   the learner's name (who the requests are for), mastery, misconceptions seen, what is
- *             due for review, and deleting the learner's file on the desktop
+ *   Learner   the learner's name (who the requests are for), her goals (hers to set), what she lets
+ *             the Primer watch (a switch per feature), calibration, insights to confirm or dismiss,
+ *             mastery (each estimate can be called wrong), misconceptions seen, reviews due, her
+ *             progress report, and deleting the learner's file on the desktop
  *
  * Teacher's marks: when the Primer marks a proof up (Grade), its red-pen marks are drawn on the
  * page as agent ink; the Proof tab lists them, and tapping one (in the list, or on the page while
@@ -33,6 +35,7 @@
  */
 import { link } from '../link'
 import { listedMarks, markAt, markLabel, TEACHER, type Mark } from './marks'
+import { gapLine, reportUrl } from './metacog'
 import { mockLine } from './mock'
 import { stage } from '../phone/screen'
 import { shareOrDownload, stampedName } from '../phone/share'
@@ -65,6 +68,8 @@ let notice = ''
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 /** The inline confirm for deleting the learner file is open. */
 let confirmForget = false
+/** How sure she is before asking for a reading, 0..100 (calibration; null until she moves it). */
+let confidence: number | null = null
 /** The teacher's mark whose explanation is open, or ''. */
 let openMark = ''
 /** The teacher's marks are shown on the page. */
@@ -135,6 +140,7 @@ function ask(what: RequestWhat) {
     mock_start: 'Starting a mock exam…',
     grade: 'Asked the Primer to mark up the page…',
     clear_marks: 'Taking the marks back…',
+    report: 'Asked for your progress report…',
     mock_grade: 'Asked the Primer to grade the mock now…',
     mock_stop: 'Stopping the mock…',
   }
@@ -223,7 +229,31 @@ function renderProof(r: Reading | null): HTMLElement[] {
   }
 
   const actions = h('div', 'pactions')
-  actions.append(button('Read my proof', () => ask('proof'), 'go'))
+  const sure = h('label', 'psure')
+  sure.append(h('span', 'pfine', confidence === null ? 'How sure are you? (optional)' : `I'm ${confidence}% sure`))
+  const slider = h('input')
+  slider.type = 'range'
+  slider.min = '0'
+  slider.max = '100'
+  slider.step = '5'
+  slider.value = String(confidence ?? 50)
+  slider.oninput = () => {
+    confidence = Number(slider.value)
+    ;(sure.firstChild as HTMLElement).textContent = `I'm ${confidence}% sure`
+  }
+  sure.append(slider)
+  out.push(sure)
+  actions.append(
+    button(
+      'Read my proof',
+      () => {
+        const sent = link.send(primerRequest('proof', undefined, undefined, confidence === null ? {} : { confidence: confidence / 100 }))
+        confidence = null
+        say(sent ? 'Asked the Primer to read the page…' : 'Not connected to a router')
+      },
+      'go',
+    ),
+  )
   actions.append(button('Mark it up', () => ask('grade')))
   actions.append(button('Hint', () => ask('hint')))
   const tex = button('Download .tex', () => void downloadTex())
@@ -414,9 +444,118 @@ function renderCoach(r: Reading | null): HTMLElement[] {
     for (const w of c.weak) ul.append(h('li', '', `${w.label}${w.why ? ` (${w.why})` : ''}`))
     out.push(ul)
   }
+  const rv = r?.metacog?.review
+  if (rv) {
+    out.push(h('div', 'plabel', 'A review is due'))
+    const card = h('div', 'pmockprob')
+    card.append(h('div', 'ptext', rv.prompt))
+    const row = h('div', 'pactions')
+    ;(
+      [
+        ['Again', 1],
+        ['Hard', 2],
+        ['Good', 3],
+        ['Easy', 4],
+      ] as const
+    ).forEach(([label, grade]) => row.append(button(label, () => send('review_answer', { id: rv.id, grade }))))
+    card.append(row)
+    out.push(card)
+  }
   const facts = [`${c.attempts} attempt${c.attempts === 1 ? '' : 's'} logged`]
   if (c.lastReading) facts.push(`last reading: ${c.lastReading}`)
   out.push(h('p', 'pfine', facts.join(' · ')))
+  return out
+}
+
+/** Send a request with extra fields, and say so. */
+function send(what: RequestWhat, extra: Record<string, unknown>) {
+  const ok = link.send(primerRequest(what, undefined, undefined, extra))
+  say(ok ? 'Sent' : 'Not connected to a router')
+}
+
+/** Goals (hers to set), consent per feature, calibration, insights, and her report. */
+function renderGoalsAndConsent(r: Reading | null): HTMLElement[] {
+  const out: HTMLElement[] = []
+  const m = r?.metacog
+  if (!m) return out
+  // Goals
+  out.push(h('div', 'plabel', m.goalsRevisit ? 'Your goals (want to revisit them?)' : 'Your goals'))
+  const form = h('div', 'pgoals')
+  const target = h('input')
+  target.placeholder = 'Your goal, in your words'
+  target.value = m.goals.target
+  const hours = h('input')
+  hours.type = 'number'
+  hours.min = '0'
+  hours.placeholder = 'hours a week'
+  hours.value = m.goals.weeklyHours === null ? '' : String(m.goals.weeklyHours)
+  const nudging = h('select')
+  for (const n of ['off', 'light', 'normal']) {
+    const o = h('option', '', `nudges: ${n}`)
+    o.value = n
+    o.selected = m.goals.nudging === n
+    nudging.append(o)
+  }
+  form.append(target, hours, nudging, button('Save goals', () => send('goals_set', { goals: { target: target.value, weekly_hours: hours.value === '' ? null : Number(hours.value), nudging: nudging.value } }), 'go'))
+  out.push(form)
+  // Consent, per feature
+  out.push(h('div', 'plabel', 'What the Primer may watch'))
+  const ul = h('ul', 'pfeatures')
+  for (const f of m.features) {
+    const li = h('li')
+    const box = h('input')
+    box.type = 'checkbox'
+    box.checked = f.on
+    box.onchange = () => send('features', { features: { [f.id]: box.checked } })
+    const lab = h('label')
+    lab.append(box, document.createTextNode(` ${f.label}`))
+    li.append(lab)
+    ul.append(li)
+  }
+  out.push(ul)
+  // Calibration
+  if (m.calibration.n) {
+    out.push(h('div', 'plabel', 'Calibration: how sure you were, against the grade'))
+    const bars = h('ul', 'pbars')
+    for (const b of m.calibration.curve) {
+      const li = h('li')
+      li.append(h('span', 'pbarlabel', `${Math.round(b.confidence * 100)}% sure`))
+      const bar = h('span', 'pbar')
+      const fill = h('span', 'pfill')
+      fill.style.width = `${Math.round(b.outcome * 100)}%`
+      bar.append(fill)
+      li.append(bar, h('span', 'pfine', `graded ${Math.round(b.outcome * 100)}% · ${b.n}`))
+      bars.append(li)
+    }
+    out.push(bars)
+    const line = gapLine(m.calibration)
+    if (line) out.push(h('p', 'pfine', line))
+    if (m.calibrationNudge) out.push(h('p', 'ptext', m.calibrationNudge))
+  }
+  // Insights
+  if (m.insights.length) {
+    out.push(h('div', 'plabel', 'Things you might not see from inside'))
+    for (const i of m.insights) {
+      const box = h('div', 'pmockprob')
+      box.append(h('div', 'ptext', i.text), h('div', 'pfine', `${i.suggestion} · ${Math.round(i.confidence * 100)}% sure`))
+      const row = h('div', 'pactions')
+      row.append(button('Yes, that’s me', () => send('insight', { id: i.id, verdict: 'confirmed' })), button('Not right', () => send('insight', { id: i.id, verdict: 'dismissed' })))
+      box.append(row)
+      out.push(box)
+    }
+  }
+  // The progress report
+  const rep = r?.report
+  const row = h('div', 'pactions')
+  row.append(button('My progress report', () => ask('report')))
+  if (rep?.url) {
+    const a = h('a', 'plink', 'Open the latest report (PDF)')
+    a.href = reportUrl(link.address, rep.url)
+    a.target = '_blank'
+    a.rel = 'noopener'
+    row.append(a)
+  } else if (rep?.error) row.append(h('span', 'pfine', 'The report could not be typeset on the desktop.'))
+  out.push(row)
   return out
 }
 
@@ -438,6 +577,8 @@ function renderLearner(r: Reading | null): HTMLElement[] {
   out.push(who)
   out.push(h('p', 'pfine', 'Your learner file lives on the desktop, is yours to read and delete, and is sent nowhere except the model call that reads a turn.'))
 
+  out.push(...renderGoalsAndConsent(r))
+
   const l = r?.learnerSummary
   if (!l || (!l.mastery.length && !l.summary && !l.misconceptions.length)) {
     out.push(emptyState('Nothing recorded yet.'))
@@ -455,6 +596,9 @@ function renderLearner(r: Reading | null): HTMLElement[] {
         bar.append(fill)
         li.append(bar)
         li.append(h('span', 'pfine', `${Math.round(m.p * 100)}%`))
+        const wrong = button('That’s wrong', () => send('dispute', { target: `mastery:${m.concept}`, claim: m.p >= 0.5 ? 'not_known' : 'known' }), 'danger-link')
+        wrong.title = m.p >= 0.5 ? 'I don’t know this as well as that' : 'I know this better than that'
+        li.append(wrong)
         ul.append(li)
       }
       out.push(ul)

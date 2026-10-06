@@ -145,6 +145,14 @@
       #primer .pmark { padding: 6px 8px; margin: 4px 0; border-left: 3px solid #d03030; border-radius: 0 8px 8px 0; cursor: pointer; }
       #primer .pmark.open { background: color-mix(in srgb, #d03030 8%, transparent); }
       #primer .pmarkhead { color: #d03030; font-size: 13px; font-weight: 600; }
+      #primer .psure { display: flex; gap: 10px; align-items: center; margin: 10px 0 2px; }
+      #primer .psure input { flex: 1; }
+      #primer .pgoals { display: grid; grid-template-columns: 1fr 7em; gap: 6px; margin: 6px 0; }
+      #primer .pgoals input, #primer .pgoals select { min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--chip); background: transparent; color: inherit; font: inherit; }
+      #primer .pgoals input:first-child { grid-column: 1 / -1; }
+      #primer .pfeatures { list-style: none; padding: 0; margin: 4px 0; font-size: 14px; }
+      #primer .pfeatures li { margin: 4px 0; }
+      #primer .plink { align-self: center; color: var(--accent); }
       #primer .psteps { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
       #primer .pstep { padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; outline: none; }
       #primer .pstep:hover, #primer .pstep:focus-visible { background: var(--chip); }
