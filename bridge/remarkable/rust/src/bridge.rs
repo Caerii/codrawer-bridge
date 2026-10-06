@@ -71,7 +71,18 @@ pub fn pen_config(cfg: &Config) -> pen::Config {
         flush_every: Duration::from_secs(1) / cfg.batch_hz.clamp(1, u32::MAX as i64) as u32,
         max_batch: cfg.max_batch_points.max(0) as usize,
         hover_every: hover_every(cfg.hover_hz),
+        tool: tool_of(&cfg.tool_file),
     }
+}
+
+/// Follows xochitl's selected tool in `path` ([`crate::toolhint`]), or `None` for "off" or "".
+/// The file exists only while the codrawer-layer extension runs inside xochitl.
+pub fn tool_of(path: &str) -> Option<pen::Tool> {
+    if path.is_empty() || path == "off" {
+        return None;
+    }
+    let mut f = crate::toolhint::File::new(path);
+    Some(pen::Tool::new(move || f.tool().to_string()))
 }
 
 /// The cursor pacing for `hover_hz` messages per second; zero (off) when `hz <= 0`.

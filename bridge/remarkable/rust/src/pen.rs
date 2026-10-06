@@ -7,8 +7,12 @@
 //! pen "down", so hovering drew ink). Messages go to the emit callback; when it refuses one (the
 //! outbox is full because the link is down), the rest of that stroke is skipped as a whole rather
 //! than event by event, so receivers never see a stroke with holes or a merged one.
+//!
+//! The evdev keys tell the eraser end from the tip, but not the tool picked in xochitl's toolbar:
+//! that comes from [`Config::tool`] ([`crate::toolhint`]), when xochitl reports it.
 
 use std::fmt::Write as _;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::util::push_rounded;
@@ -74,6 +78,33 @@ pub struct Config {
     /// Paces `cursor` messages while the pen hovers in range without touching (a pointer for
     /// viewers to follow); zero disables them.
     pub hover_every: Duration,
+    /// If set, reports the tool xochitl's toolbar has selected for the tip ("eraser", "pen", …,
+    /// or "" when unknown; [`crate::toolhint`]). It is asked at each pen-down with the tip and on
+    /// hover samples. "eraser" makes a tip stroke an eraser stroke, the same as the eraser end.
+    pub tool: Option<Tool>,
+}
+
+/// A shared source of the toolbar's tool word (Go: `func() string`). The pen machine is its only
+/// caller, so the lock is never contended; it is there so that [`Config`] stays `Clone`.
+#[derive(Clone)]
+pub struct Tool(Arc<Mutex<dyn FnMut() -> String + Send>>);
+
+impl Tool {
+    pub fn new(f: impl FnMut() -> String + Send + 'static) -> Self {
+        Tool(Arc::new(Mutex::new(f)))
+    }
+
+    /// The tool word now ("" when unknown).
+    pub fn get(&self) -> String {
+        let mut f = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+}
+
+impl std::fmt::Debug for Tool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Tool(..)")
+    }
 }
 
 /// A moment on both clocks: monotonic for batching, wall for ids and fallback timestamps
@@ -272,9 +303,16 @@ impl Machine {
         push_rounded(&mut msg, x, 4);
         msg.push_str(r#","y":"#);
         push_rounded(&mut msg, y, 4);
-        msg.push_str(if self.tool_rubber { r#","tool":"eraser""# } else { r#","tool":"pen""# });
+        let eraser = self.tool_rubber || self.toolbar_eraser();
+        msg.push_str(if eraser { r#","tool":"eraser""# } else { r#","tool":"pen""# });
         let _ = write!(msg, r#","ts":{ts_ms}}}"#);
         let _ = (self.emit)(msg);
+    }
+
+    /// Whether xochitl's toolbar has the Eraser selected, so that the tip erases. Unknown (no
+    /// `tool`, or it returns "") is false: the stroke stays ink, as before.
+    fn toolbar_eraser(&self) -> bool {
+        self.cfg.tool.as_ref().is_some_and(|t| t.get() == "eraser")
     }
 
     /// Consumes one event and emits whatever messages it completes.
@@ -329,10 +367,16 @@ impl Machine {
             self.batch.clear();
             self.batch_n = 0;
             self.last_flush = None; // the first point goes out at once
-            self.brush = if self.tool_rubber { "eraser".into() } else { self.cfg.brush.clone() };
+            // the eraser end wins; otherwise xochitl's toolbar Eraser makes the tip erase too
+            let toolbar = !self.tool_rubber && self.toolbar_eraser();
+            self.brush = if self.tool_rubber || toolbar { "eraser".into() } else { self.cfg.brush.clone() };
             self.id = format!("u_{:x}", now.unix_nanos);
             let mut msg = format!(r#"{{"t":"stroke_begin","id":"{}","layer":"user","brush":"#, self.id);
             msg.push_str(&json_string(&self.brush));
+            if toolbar {
+                // receivers treat it as any eraser (brush); `tool` says it is xochitl's toolbar Eraser
+                msg.push_str(r#","tool":"eraser""#);
+            }
             if !self.cfg.color.is_empty() {
                 msg.push_str(r#","color":"#);
                 msg.push_str(&json_string(&self.cfg.color));
@@ -589,7 +633,96 @@ mod tests {
         assert!(last["t"] == "cursor" && last["gone"] == true, "want gone, got {last}");
     }
 
+    #[test]
+    fn toolbar_eraser_makes_tip_strokes_erasers() {
+        let mut r = new_rig();
+        let tool = Arc::new(Mutex::new("eraser".to_string()));
+        let t = tool.clone();
+        r.m.cfg.tool = Some(Tool::new(move || t.lock().unwrap().clone()));
+        r.ev(EV_KEY, BTN_TOOL_PEN, 1);
+        r.point(1000, 1000);
+        let out = r.out();
+        assert!(out[0]["t"] == "stroke_begin" && out[0]["brush"] == "eraser" && out[0]["tool"] == "eraser", "toolbar eraser: {}", out[0]);
+        r.up();
+        // back to a pen in the toolbar: ink again
+        *tool.lock().unwrap() = "pen".into();
+        let n = r.out().len();
+        r.advance(50);
+        r.point(2000, 2000);
+        let out = r.out();
+        assert!(out[n]["brush"] == "pen" && out[n].get("tool").is_none(), "toolbar pen: {}", out[n]);
+    }
+
+    #[test]
+    fn unknown_tool_keeps_ink() {
+        for tool in ["", "erase_area", "highlighter"] {
+            let mut r = new_rig();
+            r.m.cfg.tool = Some(Tool::new(move || tool.to_string()));
+            r.point(1000, 1000);
+            let out = r.out();
+            assert!(out[0]["brush"] == "pen" && out[0].get("tool").is_none(), "tool {tool:?}: {}", out[0]);
+        }
+    }
+
+    #[test]
+    fn rubber_end_stays_eraser_whatever_the_toolbar() {
+        let mut r = new_rig();
+        r.m.cfg.tool = Some(Tool::new(|| "pen".to_string()));
+        r.ev(EV_KEY, BTN_TOOL_RUBBER, 1);
+        r.point(1000, 1000);
+        let out = r.out();
+        assert!(out[0]["brush"] == "eraser" && out[0].get("tool").is_none(), "eraser end: {}", out[0]);
+    }
+
+    #[test]
+    fn hover_shows_toolbar_eraser() {
+        let mut r = new_rig();
+        r.m.cfg.tool = Some(Tool::new(|| "eraser".to_string()));
+        r.ev(EV_KEY, BTN_TOOL_PEN, 1);
+        r.ev(EV_ABS, ABS_X, 1000);
+        r.ev(EV_ABS, ABS_Y, 1000);
+        r.syn();
+        let out = r.out();
+        assert!(out.len() == 1 && out[0]["t"] == "cursor" && out[0]["tool"] == "eraser", "hover: {out:?}");
+    }
+
     // Beyond the Go tests.
+
+    /// The exact bytes of a toolbar-eraser hover and stroke, as Go's encoder writes them (checked
+    /// against a Go build of package pen fed the same trace, 2026-10-05).
+    #[test]
+    fn toolbar_eraser_bytes_match_go() {
+        let mut r = new_rig();
+        let raw = Arc::new(Mutex::new(Vec::<String>::new()));
+        let rw = raw.clone();
+        r.m.emit = Box::new(move |b| {
+            rw.lock().unwrap().push(b);
+            true
+        });
+        r.m.cfg.color = "#00ff88".into();
+        r.m.cfg.tool = Some(Tool::new(|| "eraser".to_string()));
+        r.ev(EV_KEY, BTN_TOOL_PEN, 1);
+        r.ev(EV_ABS, ABS_X, 2500);
+        r.ev(EV_ABS, ABS_Y, 5000);
+        r.syn();
+        r.advance(40);
+        r.point(1234, 5678);
+        r.advance(20);
+        r.point(1300, 5700);
+        r.up();
+        let (ts, id) = (r.ts, format!("u_{:x}", 1_790_000_000_000i64 * 1_000_000 + 40_000_000));
+        let t0 = ts - 60;
+        assert_eq!(
+            raw.lock().unwrap().clone(),
+            [
+                format!(r#"{{"t":"cursor","who":"pen","x":0.25,"y":0.5,"tool":"eraser","ts":{t0}}}"#),
+                format!(r##"{{"t":"stroke_begin","id":"{id}","layer":"user","brush":"eraser","tool":"eraser","color":"#00ff88","ts":{}}}"##, t0 + 40),
+                format!(r#"{{"t":"stroke_pts","id":"{id}","pts":[[0.1234,0.5678,0.5,{}]]}}"#, t0 + 40),
+                format!(r#"{{"t":"stroke_pts","id":"{id}","pts":[[0.13,0.57,0.5,{ts}]]}}"#),
+                format!(r#"{{"t":"stroke_end","id":"{id}","ts":{ts}}}"#),
+            ]
+        );
+    }
 
     #[test]
     fn hover_details() {

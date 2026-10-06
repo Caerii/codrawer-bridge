@@ -53,27 +53,25 @@ external client attached:
 Speed has not been benchmarked yet. Both binaries relayed the same stroke stream with the same
 messages.
 
-## Swap it into the boot service
+## How it ships
 
-`bridge/remarkable/boot/codrawer-bridge.service` runs `ExecStart=/home/root/codrawer_bridge_native`
-with `EnvironmentFile=/home/root/codrawer/bridge.env`. Every variable in `bridge.env` means the same
-thing to this binary: the flags and env vars are the same set as Go's `main.go` (checked by the
-`same_flags_as_go` and `same_env_vars_as_go` tests, which read `../native/main.go`), plus
-`ROUTER_TOKEN` and the `CODRAWER_OS*` host info that `serve.go` reads. To try it:
+Every release built by `scripts/dev/deploy-tablet.sh` carries both engines: it cross-builds this
+crate (`cargo build --release --target aarch64-unknown-linux-musl`) next to the Go binary unless
+`CODRAWER_SKIP_RUST=1` or `cargo` is missing; a failed Rust build only warns, and the release goes
+out with Go alone. On the tablet, `boot/run-bridge.sh` starts the engine named by `ENGINE=go|rust`
+in `/home/root/codrawer/bridge.env` (Go when unset, or when the chosen binary is missing), and
+`boot.sh doctor` prints `engine=<name> (rust binary present|absent)`. Every variable in
+`bridge.env` means the same thing to both binaries: the flags and env vars are the same set as
+Go's `config.go` (checked by the `same_flags_as_go` and `same_env_vars_as_go` tests, which read
+`../native/config.go`), plus `ROUTER_TOKEN` and the `CODRAWER_OS*` host info that `serve.go`
+reads. To switch:
 
 ```bash
-scp target/aarch64-unknown-linux-musl/release/codrawer_bridge_rs root@<tablet>:/home/root/codrawer_bridge_rs
-ssh root@<tablet> 'chmod +x /home/root/codrawer_bridge_rs'
-# either point ExecStart at it (systemctl edit codrawer-bridge →
-#   [Service]
-#   ExecStart=
-#   ExecStart=/home/root/codrawer_bridge_rs )
-# or swap the file behind the existing path, keeping the Go binary as .go to roll back:
-ssh root@<tablet> 'cd /home/root && mv codrawer_bridge_native codrawer_bridge_native.go && \
-  cp codrawer_bridge_rs codrawer_bridge_native && systemctl restart codrawer-bridge'
+ssh root@<tablet> "sed -i 's/^ENGINE=.*/ENGINE=rust/' /home/root/codrawer/bridge.env && systemctl restart codrawer-bridge"
 ```
 
-Roll back by restoring `codrawer_bridge_native.go` (or by removing the drop-in) and restarting.
+`scripts/dev/engine-bench.sh` runs each engine in turn on the tablet and compares memory, CPU and
+battery drain, then restores the engine that was active.
 
 ## What is ported
 
@@ -92,7 +90,7 @@ Everything in `../native`:
   buffer; only a partial event is carried over.
 - **device_select.go:** `-list-devices` and the activity probe used by auto-detect (poll, then
   score). The `/proc/bus/input/devices` parser marks `I: Bus=0006` devices as virtual (uinput). `pickInputDevicePath` is not ported because the Go code never calls it.
-- **pen/pen.go → `src/pen.rs`:** the portable stroke state machine (`pen::Machine`) with all five
+- **pen/pen.go → `src/pen.rs`:** the portable stroke state machine (`pen::Machine`) with all ten
   Go tests. Touch modes auto/btn/pressure/distance/tool, the eraser brush from BTN_TOOL_RUBBER at
   pen-down, and the sub-pixel jitter filter. The first point of a stroke flushes at once, then
   points batch by time window or by size. JSON is hand-encoded, with 4/4/3-decimal points and Go's
@@ -102,7 +100,19 @@ Everything in `../native`:
   BTN_TOOL_RUBBER is in range and the pen is not touching, `{"t":"cursor","who":"pen","x","y",
   "tool":"pen"|"eraser","ts"}` goes out at most every `hover_every` (1 s / `-hover-hz`) and only
   after a move of 0.002 or more, then one `{"t":"cursor","who":"pen","gone":true}` when the pen
-  leaves range. A refused cursor is dropped and never marks a stroke lost. Byte-identical to Go.
+  leaves range. A refused cursor is dropped and never marks a stroke lost. Following the
+  toolbar: `pen::Config::tool` (Go's `Config.Tool`) is asked at each pen-down with the tip and on
+  hover samples; while it says `eraser`, a tip stroke goes out with `"brush":"eraser","tool":"eraser"`
+  and the hover cursor with `"tool":"eraser"`. The eraser end stays `"brush":"eraser"` with no
+  `tool`, whatever the toolbar says; any other answer keeps ink. Byte-identical to Go (a Go build
+  of package pen and `toolbar_eraser_bytes_match_go` gave the same bytes for a toolbar-eraser hover
+  and stroke, 2026-10-05).
+- **toolhint/toolhint.go → `src/toolhint.rs`:** follows `/run/codrawer/tool`, where the
+  codrawer-layer XOVI extension writes `<tool> <thickness>` (first word, lower case; `none` and
+  `unknown` mean unknown). The line is trusted only while the file's mtime is within 3 s of the
+  clock, the file is stat'ed at most every 100 ms and re-read only when its mtime or size changed.
+  `-tool-file` / `TOOL_FILE` (default `/run/codrawer/tool`, `off` disables) wires it into the pen
+  machine (`bridge::tool_of`, Go's `toolOf`). No file or a stale one: the bridge behaves as before.
 - **bridge.go:** the pen reader thread reopens the device on error. On SYN_DROPPED it discards
   events up to the next SYN_REPORT, then emits the device state (EVIOCGKEY keys, EVIOCGABS values
   and a SYN_REPORT). It uses a reused 64-event read buffer, and `DUMP_EVENTS` prints happen here,
@@ -191,8 +201,8 @@ Everything in `../native`:
   fixtures' `.gitattributes` turns off line-ending conversion, so their hashes survive a Windows
   checkout.
 
-Tests: all fifteen Go router tests are ported to `tests/router.rs`, all six `pen_test.go` tests to
-`src/pen.rs`, all three `release_test.go` tests (the four tamper cases included) to
+Tests: all fifteen Go router tests are ported to `tests/router.rs`, all ten `pen_test.go` tests to
+`src/pen.rs`, all four `toolhint_test.go` tests to `src/toolhint.rs`, all three `release_test.go` tests (the four tamper cases included) to
 `src/release.rs`, every `rmlines_test.go` test to `src/rmlines/` (`FuzzParse` as a seeded sweep of
 2,600 truncations, bit flips and junk tails per run) and all three `pagewatch_test.go` tests to
 `src/pagewatch/`. The rmlines and pagewatch tests read the Go package's fixtures in place
@@ -276,6 +286,10 @@ Tests: all fifteen Go router tests are ported to `tests/router.rs`, all six `pen
   and the JSON are the same.
 
 ## What is not verified
+
+- **The tool-follow pass** (Go b4ffe46 toolhint) was checked by `cargo test` and
+  `clippy --all-targets -D warnings` on Windows and for aarch64-musl, the aarch64 release build,
+  and the byte comparison above. The extension's file on a real tablet has only fed the Go engine.
 
 - **The page watcher pass** (Go 8f932d5 rmlines, 75da58c page watcher, 4ccd516 router) was
   checked by `cargo test` on Windows, `clippy --all-targets -D warnings` on the host and the

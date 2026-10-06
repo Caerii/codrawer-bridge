@@ -48,6 +48,10 @@ pub struct Config {
     pub page_watch: String,
     pub xochitl_dir: String,
     pub page_poll_ms: i64,
+    /// Where the codrawer-layer XOVI extension reports xochitl's selected tool ([`crate::toolhint`]),
+    /// so that the toolbar Eraser used with the tip streams as an eraser. "off" disables it; an
+    /// absent or stale file changes nothing.
+    pub tool_file: String,
     /// `-page-dump`: print the open page's `page` message and exit (no env var, as in Go).
     pub page_dump: bool,
 }
@@ -82,6 +86,7 @@ impl Config {
             page_watch: getenv_default("PAGE_WATCH", "auto"),
             xochitl_dir: getenv_default("XOCHITL_DIR", crate::pagewatch::DEFAULT_DIR),
             page_poll_ms: getenv_int_default("PAGE_POLL_MS", 1000),
+            tool_file: getenv_default("TOOL_FILE", crate::toolhint::DEFAULT_PATH),
             page_dump: false,
         }
     }
@@ -126,6 +131,7 @@ const FLAGS: &[FlagDef] = &[
     FlagDef { name: "page-watch", usage: "Send xochitl's saved page as `page` snapshots: auto (only on an OS boot.sh lists as tested), on, off" },
     FlagDef { name: "xochitl-dir", usage: "xochitl's data directory (read-only)" },
     FlagDef { name: "page-poll-ms", usage: "How often the page watcher checks xochitl's files (ms)" },
+    FlagDef { name: "tool-file", usage: "xochitl's selected tool, written by the codrawer-layer XOVI extension (toolbar Eraser → eraser strokes); off disables" },
     FlagDef { name: "page-dump", usage: "Print the `page` message for the open document and page, then exit (read-only)" },
 ];
 
@@ -157,6 +163,7 @@ fn slot<'a>(cfg: &'a mut Config, name: &str) -> Option<Slot<'a>> {
         "page-watch" => Slot::Str(&mut cfg.page_watch),
         "xochitl-dir" => Slot::Str(&mut cfg.xochitl_dir),
         "page-poll-ms" => Slot::Int(&mut cfg.page_poll_ms),
+        "tool-file" => Slot::Str(&mut cfg.tool_file),
         "page-dump" => Slot::Bool(&mut cfg.page_dump),
         _ => return None,
     })
