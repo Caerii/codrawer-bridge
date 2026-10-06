@@ -2,16 +2,7 @@
 // Run: bridge/remarkable/xovi/codrawer-layer/test.sh
 #include "auto_rules.h"
 
-#include <cstdio>
-
-static int failures = 0;
-#define CHECK(x)                                                                 \
-    do {                                                                         \
-        if (!(x)) {                                                              \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);             \
-            ++failures;                                                          \
-        }                                                                        \
-    } while (0)
+#include "check.h"
 
 int main() {
     using namespace autorules;
@@ -41,7 +32,5 @@ int main() {
     CHECK(evalCond(c, "codrawer: test") && !evalCond(c, "Test"));
     CHECK(!parseCond("nonsense").ok);
     CHECK(!evalCond(parseCond("a < b"), "c"));  // strings only compare for equality
-    if (failures) return 1;
-    std::printf("auto_rules: all tests passed\n");
-    return 0;
+    return finish("auto_rules");
 }

@@ -299,7 +299,7 @@ XOVI selection (verified, not installed):
   is used, so `rebuild_hashtable` is not needed. `start` tmpfs-mounts the drop-in, and a reboot
   removes it.
 
-Static findings that change the plan for Probe 1 (from the 6.0.105 binary, `bridge/remarkable/xovi/codrawer-layer/main.cpp`):
+Static findings that change the plan for Probe 1 (from the 6.0.105 binary, `bridge/remarkable/xovi/codrawer-layer/main.cpp` at the time, since split into `src/`):
 - **Route 1 (feed points through the pen pipeline) has no meta-callable entry.** I checked the
   meta-strings of the pipeline classes:
   - `ScenePenInputHandler` exposes only `setSelectionActive`, `queryIntermediateState` and
@@ -367,7 +367,7 @@ notebook "Test" (page `ae4d6014-…`), with the notebook backed up first (scp, n
    refused before touching the scene: the gadget's `tool` read 9 before and after we wrote 17 at
    +4. The default constructor's 9 at +0 is the **tool**, and +4 is the **colour** (Black = 0 by
    default; ArgbCode = 9 makes +8 the colour). The point list at +16 read back exactly (120
-   points), and the bounding rect is computed from the points. Corrected in `main.cpp`; `linetest`
+   points), and the bounding rect is computed from the points. Corrected in the extension (now `src/line_layout.h`); `linetest`
    then read back `tool 9 -> 17, pointCount 120, boundingRect (-564,281 428x98)`.
 2. **Layer slots act asynchronously.** `addLayer()` returned with `layerCount` unchanged; the new
    layer appeared (and was selected) moments later, after the scene's own job ran. The first
@@ -394,7 +394,7 @@ notebook "Test" (page `ae4d6014-…`), with the notebook backed up first (scp, n
    - with the mapping removed, the same X on a page at zoom 0.75, offset `[810, 0]`, was saved at
      x 0.625–0.675, y 0.311–0.349 (its circle 0.610–0.690 × 0.300–0.360): exactly on target.
    The user confirmed the mark on screen and that one undo removes it. The earlier shift came
-   from the replaced synchronous path; the view offset is now only logged (`main.cpp`,
+   from the replaced synchronous path; the view offset is now only logged (`src/ink.h`,
    "Placement").
 
 Verdict: **GO for route 2**, no function called by address, no hook. Integration (agent ink

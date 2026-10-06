@@ -4,7 +4,7 @@
 // live SelectionContextualMenu; nothing of xochitl's is changed. guibor's smart_remarkable puts a
 // real ArkControls.ContextualMenu.Button there with a QMD patch; this is the run-time version.
 // It rolls out inert first (`inert=1`: a tap is only logged), then active, when a tap sends
-// `dock_action` id `ask_selection` with the lasso's bounds (main.cpp, "Actions").
+// `dock_action` id `ask_selection` with the lasso's bounds (src/inject.h, "Actions").
 //
 // Plain QtQuick only, so it cannot fail on a removed theme token. Sizes are scene px; it takes the
 // menu's height and sits after the stock buttons when the menu is a row.

@@ -1,6 +1,6 @@
 // The codrawer dock: one toolbar button that opens a small, non-modal list of actions.
 //
-// Instantiated at run time by codrawer-layer (main.cpp, "Injected UI") inside xochitl's own
+// Instantiated at run time by codrawer-layer (src/inject.h) inside xochitl's own
 // QQmlEngine and parented into xochitl's toolbar; nothing of xochitl's is changed. The extension
 // sets `entries` (from /run/codrawer/dock.json, or its built-in list), `status` and `page`, and
 // listens to `action(id)` and `opened()`. Selecting an entry emits `action(id)`; the extension
