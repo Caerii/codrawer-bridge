@@ -56,6 +56,8 @@ EMBED_DIM = 384
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 CHUNK_CHARS = 900
 RRF_K = 60
+RERANK_MODEL = "BAAI/bge-reranker-base"
+RERANK_N = 30
 
 # =============================================================================================
 # Math normalisation
@@ -81,7 +83,7 @@ MATH_TOKENS: dict[str, str] = {
     "|": "mathmid", "\\mid": "mathmid", "ℕ": "mathbbN", "\\mathbb{N}": "mathbbN",
     "ℤ": "mathbbZ", "\\mathbb{Z}": "mathbbZ", "ℚ": "mathbbQ", "\\mathbb{Q}": "mathbbQ",
     "ℝ": "mathbbR", "\\mathbb{R}": "mathbbR", "ℂ": "mathbbC", "\\mathbb{C}": "mathbbC",
-    "P(": "mathpowerset (",
+    "P(": "mathpowerset (", "square root": "mathsqrt", "empty set": "mathemptyset",
 }
 _MATH_RE = re.compile(
     "|".join(re.escape(k) for k in sorted(MATH_TOKENS, key=len, reverse=True))
@@ -94,6 +96,46 @@ _DELIM_FIX = str.maketrans({"©": "{", "ª": "}", "¡": "(", "¢": ")", "ﬁ": "
 def clean(text: str) -> str:
     """Extraction repair: ligatures and the TeX big-delimiter glyphs back to ASCII."""
     return text.translate(_DELIM_FIX)
+
+
+#: Glyphs that TeX math fonts put in ASCII slots, so text extraction reports the slot's letter:
+#: (font name prefix, extracted char) → the real symbol. Measured on Book of Proof (Fourier
+#: fonts): the radical sign extracts as "p" (213 times; "√2" became "p 2" and the classic
+#: irrationality proof was unfindable) and the empty set as ";". Computer Modern's CMSY has the
+#: same radical slot. A per-book table, checked by a probe like bench.py's, is the general form;
+#: pages whose math still does not survive go to the vision path (§1.3 of the investigation).
+MATH_FONT_GLYPHS: dict[tuple[str, str], str] = {
+    ("Fourier-Math-Symbols", "p"): "√", ("Fourier-Math-Symbols", ";"): "∅",
+    ("CMSY", "p"): "√", ("CMSY", ";"): "∅", ("CMEX", "p"): "√", ("CMEX", "q"): "√",
+}
+
+
+def page_blocks(page) -> list[tuple[float, float, float, float, str]]:
+    """
+    A page's text blocks as (x0, y0, x1, y1, text), in reading order, with math-font glyphs
+    repaired (MATH_FONT_GLYPHS) and TeX delimiters and ligatures cleaned. Image blocks are dropped.
+    """
+    out = []
+    for b in page.get_text("rawdict")["blocks"]:
+        if b.get("type", 0) != 0:
+            continue
+        lines = []
+        for ln in b.get("lines", []):
+            parts = []
+            for sp in ln["spans"]:
+                font = sp["font"]
+                for ch in sp["chars"]:
+                    c = ch["c"]
+                    for (prefix, slot), real in MATH_FONT_GLYPHS.items():
+                        if c == slot and font.startswith(prefix):
+                            c = real
+                            break
+                    parts.append(c)
+            lines.append("".join(parts))
+        text = clean("\n".join(lines)) + "\n"
+        if text.strip():
+            out.append((*b["bbox"], text))
+    return out
 
 
 def math_normalise(text: str) -> str:
@@ -163,9 +205,16 @@ class Timings:
         return now
 
 
-def _embedder():
+def _embedder(gpu: bool = False):
+    """The embedding model. `gpu` uses onnxruntime-gpu's CUDA provider (fastembed-gpu): measured
+    1.8 ms per chunk on an RTX 3080 against 200+ ms on a loaded 16-thread CPU (bench.py)."""
     from fastembed import TextEmbedding
 
+    if gpu:
+        import onnxruntime as ort
+
+        ort.preload_dlls()  # the CUDA/cuDNN wheels' DLLs, so no system CUDA install is needed
+        return TextEmbedding(EMBED_MODEL, providers=["CUDAExecutionProvider"])
     return TextEmbedding(EMBED_MODEL)
 
 
@@ -173,7 +222,7 @@ def _f32(vec) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
-def ingest(pdf: Path, db: str | Path, embed: bool = True) -> Timings:
+def ingest(pdf: Path, db: str | Path, embed: bool = True, gpu: bool = False) -> Timings:
     """
     Index one PDF. Idempotent by content hash: a PDF whose sha256 is already indexed is skipped,
     which is how incremental sync avoids re-ingesting a book whose file did not change.
@@ -229,20 +278,17 @@ def ingest(pdf: Path, db: str | Path, embed: bool = True) -> Timings:
     # Pages, units and chunks.
     chunks: list[tuple[int, str]] = []
     n_units = 0
+    unit_id: int | None = None
+    unit_section: int | None = None
     for idx in range(doc.page_count):
         page = doc[idx]
         label = page.get_label() or str(idx + 1)
-        blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
-        text = clean("".join(b[4] for b in blocks))
+        blocks = page_blocks(page)
+        text = "".join(b[4] for b in blocks)
         con.execute("insert into page values(?,?,?,?)", (sid, idx, label, len(text)))
         sec_id, sec_title = section_for(idx)
-        unit_id = None
-        for m in UNIT_RE.finditer(text):
-            unit_id = con.execute(
-                "insert into unit(source_id,kind,number,page_idx,section_id) values(?,?,?,?,?)",
-                (sid, m.group(1).split()[0].lower(), m.group(2), idx, sec_id),
-            ).lastrowid
-            n_units += 1
+        if sec_id != unit_section:  # a unit never outlives its section
+            unit_id, unit_section = None, sec_id
         buf, box, ord_ = "", None, 0
 
         def flush() -> None:
@@ -261,9 +307,18 @@ def ingest(pdf: Path, db: str | Path, embed: bool = True) -> Timings:
             buf, box = "", None
 
         for b in blocks:
-            bt = clean(b[4])
-            if len(buf) + len(bt) > CHUNK_CHARS and buf:
-                flush()
+            bt = b[4]
+            m = UNIT_RE.search(bt)
+            if (len(buf) + len(bt) > CHUNK_CHARS or m) and buf:
+                flush()  # a unit heading starts a new chunk, so the chunk cites that unit
+            if m:
+                # The unit runs until the next heading or the end of its section: an
+                # approximation (prose after an example's end is credited to the example).
+                unit_id = con.execute(
+                    "insert into unit(source_id,kind,number,page_idx,section_id) values(?,?,?,?,?)",
+                    (sid, m.group(1).split()[0].lower(), m.group(2), idx, sec_id),
+                ).lastrowid
+                n_units += 1
             buf += bt
             r = [round(v, 1) for v in b[:4]]
             box = r if box is None else [min(box[0], r[0]), min(box[1], r[1]), max(box[2], r[2]), max(box[3], r[3])]
@@ -273,7 +328,7 @@ def ingest(pdf: Path, db: str | Path, embed: bool = True) -> Timings:
     t = tm.mark("extract_fts", t)
 
     if embed:
-        model = _embedder()
+        model = _embedder(gpu)
         t = tm.mark("embed_load", t)
         vecs = model.embed([c[1] for c in chunks], batch_size=64)
         for (cid, _), v in zip(chunks, vecs, strict=True):
@@ -323,9 +378,19 @@ def fts_query(q: str) -> str:
 class Searcher:
     """Holds the connection and the embedding model warm, as the desktop service would."""
 
-    def __init__(self, db: str | Path, embed: bool = True):
+    def __init__(self, db: str | Path, embed: bool = True, gpu: bool = False):
         self.con = connect(db)
-        self.model = _embedder() if embed else None
+        self.gpu = gpu
+        self.model = _embedder(gpu) if embed else None
+        self._ce = None
+
+    def _reranker(self):
+        if self._ce is None:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+            kw = {"providers": ["CUDAExecutionProvider"]} if self.gpu else {}
+            self._ce = TextCrossEncoder(RERANK_MODEL, **kw)
+        return self._ce
 
     def fts(self, q: str, k: int = 30) -> list[int]:
         rows = self.con.execute(
@@ -345,8 +410,10 @@ class Searcher:
         return [(r[0], r[1]) for r in rows]
 
     def search(self, q: str, k: int = 5, mode: str = "hybrid") -> list[Hit]:
-        f = self.fts(q) if mode in ("hybrid", "fts") else []
-        v = self.vec(q) if mode in ("hybrid", "vec") else []
+        """`fts`, `vec`, `hybrid` (RRF of both) or `rerank` (hybrid's top 30 re-scored by a
+        cross-encoder that reads query and passage together)."""
+        f = self.fts(q) if mode in ("hybrid", "fts", "rerank") else []
+        v = self.vec(q) if mode in ("hybrid", "vec", "rerank") else []
         score: dict[int, float] = {}
         frank = {cid: i for i, cid in enumerate(f)}
         vrank = {cid: i for i, (cid, _) in enumerate(v)}
@@ -355,7 +422,12 @@ class Searcher:
             score[cid] = score.get(cid, 0) + 1 / (RRF_K + r + 1)
         for cid, r in vrank.items():
             score[cid] = score.get(cid, 0) + 1 / (RRF_K + r + 1)
-        top = sorted(score, key=score.get, reverse=True)[:k]
+        top = sorted(score, key=score.get, reverse=True)[: (RERANK_N if mode == "rerank" else k)]
+        if mode == "rerank" and top:
+            texts = [self.con.execute("select text from chunk where id=?", (c,)).fetchone()[0] for c in top]
+            ce = list(self._reranker().rerank(q, texts))
+            score = {c: float(x) for c, x in zip(top, ce, strict=True)}
+            top = sorted(top, key=score.get, reverse=True)[:k]
         hits = []
         for cid in top:
             row = self.con.execute(
@@ -411,13 +483,14 @@ def main() -> None:
     a1.add_argument("pdf", type=Path)
     a1.add_argument("--db", default="library.sqlite")
     a1.add_argument("--no-embed", action="store_true")
+    a1.add_argument("--gpu", action="store_true")
     a2 = sub.add_parser("search")
     a2.add_argument("query")
     a2.add_argument("--db", default="library.sqlite")
-    a2.add_argument("--mode", default="hybrid", choices=["hybrid", "fts", "vec"])
+    a2.add_argument("--mode", default="hybrid", choices=["hybrid", "fts", "vec", "rerank"])
     a = ap.parse_args()
     if a.cmd == "ingest":
-        tm = ingest(a.pdf, a.db, embed=not a.no_embed)
+        tm = ingest(a.pdf, a.db, embed=not a.no_embed, gpu=a.gpu)
         print(json.dumps({"stages_s": tm.stages, "counts": tm.counts}, indent=1))
     else:
         s = Searcher(a.db, embed=a.mode != "fts")
