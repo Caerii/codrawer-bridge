@@ -177,3 +177,18 @@ export function lengthInside(pts: Pt[], r: Rect, step = 0.5): number {
   for (let i = 1; i < rs.length; i++) if (contains(r, rs[i - 1]) && contains(r, rs[i])) L += dist(rs[i - 1], rs[i])
   return L
 }
+
+/**
+ * Convex hull (Andrew's monotone chain), counter-clockwise on a y-up plane. A drawn circle often
+ * stops short of its start or overshoots it; its hull is the region the user meant to enclose,
+ * where the raw polygon would be cut by the chord across the gap.
+ */
+export function hull(pts: Pt[]): Pt[] {
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1])
+  if (p.length < 3) return p
+  const cross = (o: Pt, a: Pt, b: Pt) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+  const lower: Pt[] = [], upper: Pt[] = []
+  for (const q of p) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop(); lower.push(q) }
+  for (const q of p.reverse()) { while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop(); upper.push(q) }
+  return lower.slice(0, -1).concat(upper.slice(0, -1))
+}

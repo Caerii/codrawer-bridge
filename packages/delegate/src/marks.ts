@@ -30,7 +30,7 @@
 
 import {
   type Pt, type Rect, bounds, contains, corners, dist, enclosed, height, inflate, lengthInside, overlap, pathLength,
-  resample, turning, width, area, center, distToRect,
+  resample, turning, width, area, center, distToRect, hull, inPolygon,
 } from './geometry'
 import type { CardLayout } from './card'
 
@@ -78,7 +78,7 @@ export interface Shape {
   to?: Pt
   /** whether an arrow has a drawn head (direction confirmed, not inferred from drawing order) */
   head?: boolean
-  /** for `tick`: the vertex; for `loop`: the polygon */
+  /** for `tick`: the vertex; for `loop`: the region it encloses (its convex hull) */
   vertex?: Pt
   polygon?: Pt[]
   why: string
@@ -143,7 +143,7 @@ export function shapeOf(g: Gesture): Shape {
     const m = ms[0]
     const first = m.rs[0], last = m.rs[m.rs.length - 1]
     if (Math.abs(m.turn) > 1.5 * Math.PI && m.L > 1.9 * m.D && m.chord < 0.45 * m.D)
-      return { kind: 'loop', polygon: m.rs, why: `turning ${(m.turn / Math.PI).toFixed(2)}π, gap ${m.chord.toFixed(1)} mm of ${m.D.toFixed(1)}` }
+      return { kind: 'loop', polygon: hull(m.rs), why: `turning ${(m.turn / Math.PI).toFixed(2)}π, gap ${m.chord.toFixed(1)} mm of ${m.D.toFixed(1)}` }
     if (isLine(m)) return { kind: 'line', from: first, to: last, why: `straightness ${m.straight.toFixed(2)}` }
     const v = asTick(m)
     if (v) return { kind: 'tick', vertex: v, why: 'one vertex, short leg down, long leg up' }
@@ -164,9 +164,11 @@ export function shapeOf(g: Gesture): Shape {
   const rest = order.slice(1).map((i) => ms[i])
   if (shaft.L > 15 && shaft.straight > 0.75 && rest.length <= 2 && rest.every((m) => m.D < Math.min(12, 0.4 * shaft.chord))) {
     const a = shaft.rs[0], b = shaft.rs[shaft.rs.length - 1]
-    const near = (p: Pt) => rest.every((m) => Math.min(...m.rs.map((q) => dist(p, q))) < 3)
-    if (near(b)) return { kind: 'arrow', from: a, to: b, head: true, why: 'shaft and head strokes' }
-    if (near(a)) return { kind: 'arrow', from: b, to: a, head: true, why: 'shaft and head strokes (drawn tip first)' }
+    // the head sits on the shaft's last (or first) fifth: shafts overshoot the head, heads fall short
+    const k = Math.max(2, Math.floor(shaft.rs.length / 5))
+    const near = (end: Pt[]) => rest.every((m) => Math.min(...m.rs.flatMap((q) => end.map((p) => dist(p, q)))) < 3)
+    if (near(shaft.rs.slice(-k))) return { kind: 'arrow', from: a, to: b, head: true, why: 'shaft and head strokes' }
+    if (near(shaft.rs.slice(0, k))) return { kind: 'arrow', from: b, to: a, head: true, why: 'shaft and head strokes (drawn tip first)' }
   }
   return { kind: 'writing', why: `${ms.length} strokes, no answer shape` }
 }
@@ -203,13 +205,21 @@ export function interpret(g: Gesture, cards: CardOnPage[]): Meaning {
 
   switch (shape.kind) {
     case 'loop': {
-      const hits: { task: string; option: string; f: number }[] = []
-      for (const c of cards) for (const ch of c.layout.choices) {
-        const f = enclosed(ch.label, shape.polygon!)
-        if (f >= 0.5) hits.push({ task: c.task, option: ch.id, f })
-      }
-      if (hits.length === 1) return { kind: 'choose', task: hits[0].task, option: hits[0].option, via: 'circle', confidence: Math.min(1, hits[0].f), why: `${shape.why}; encloses ${(hits[0].f * 100).toFixed(0)}% of the label` }
-      if (hits.length > 1) return { kind: 'ambiguous', task: hits[0].task, candidates: hits.map((h) => h.option), why: 'the loop encloses more than one option' }
+      // Which option row holds the loop's area? Hand-drawn circles drift, undershoot and stop
+      // short, so the label is often only partly inside; the row holding most of the enclosed
+      // area is the steadier signal, provided the loop still covers a real part of the label.
+      const poly = shape.polygon!
+      const shares: { task: string; option: string; share: number; label: number }[] = []
+      const total = areaIn(poly, g.bbox)
+      if (total > 0) for (const c of cards) for (const ch of c.layout.choices)
+        shares.push({ task: c.task, option: ch.id, share: areaIn(poly, ch.row) / total, label: enclosed(ch.label, poly) })
+      shares.sort((a, b) => b.share - a.share)
+      const [top, second] = shares
+      const real = (x?: { share: number; label: number }) => !!x && x.share >= 0.3 && x.label >= 0.25
+      if (real(top) && real(second))
+        return { kind: 'ambiguous', task: top.task, candidates: [top.option, second.option], why: `the loop spans two options (${pct(top.share)} / ${pct(second.share)} of its area)` }
+      if (top && top.share >= 0.45 && top.label >= 0.25)
+        return { kind: 'choose', task: top.task, option: top.option, via: 'circle', confidence: top.share, why: `${shape.why}; ${pct(top.share)} of the loop on the option's row, ${pct(top.label)} of the label inside` }
       break
     }
     case 'tick': {
@@ -237,8 +247,9 @@ export function interpret(g: Gesture, cards: CardOnPage[]): Meaning {
       // a strike through the title or header, an ✗ or a scribble over the card cancels the task
       for (const c of cards) {
         const top = { x0: c.layout.header.x0, y0: c.layout.header.y0, x1: c.layout.title.x1, y1: c.layout.title.y1 }
-        const inside = g.strokes.reduce((L, s) => L + lengthInside(s.pts, top), 0)
-        if (horizontal && inside >= 0.5 * width(top)) return { kind: 'cancel', task: c.task, confidence: 0.85, why: `${shape.why}; struck through the title` }
+        // strikes drift: measure inside a band 3 mm taller than the title on each side
+        const inside = g.strokes.reduce((L, s) => L + lengthInside(s.pts, inflate(top, 3)), 0)
+        if (horizontal && inside >= 0.4 * width(top)) return { kind: 'cancel', task: c.task, confidence: 0.85, why: `${shape.why}; struck through the title` }
         if (shape.kind !== 'line' && contains(c.layout.rect, center(g.bbox))) return { kind: 'cancel', task: c.task, confidence: 0.8, why: `${shape.kind} over the card` }
       }
       if (shape.kind === 'line') return chainOrPoint(shape.from!, shape.to!, false, cards, cardAt, shape.why)
@@ -273,6 +284,16 @@ function chainOrPoint(from: Pt, to: Pt, head: boolean, cards: CardOnPage[], card
   if (a && b && a !== b) return { kind: 'chain', from: a.task, to: b.task, confidence: head ? 0.9 : 0.6, why: `${why}; from one card to another` }
   if (a && !b && head) return { kind: 'point', task: a.task, at: to, confidence: 0.7, why: `${why}; from the card to ink on the page` }
   return { kind: 'none', why: `${why}; does not join cards` }
+}
+
+const pct = (f: number) => `${Math.round(f * 100)}%`
+
+/** Area (mm²) of polygon `poly` inside rectangle `r`, sampled on a 0.5 mm grid. */
+function areaIn(poly: Pt[], r: Rect): number {
+  const step = 0.5
+  let k = 0
+  for (let x = r.x0 + step / 2; x < r.x1; x += step) for (let y = r.y0 + step / 2; y < r.y1; y += step) if (inPolygon([x, y], poly)) k++
+  return k * step * step
 }
 
 /** Whether a choice region exists on a layout (helper for tests and the broker). */

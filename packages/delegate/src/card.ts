@@ -43,7 +43,8 @@ export const CARD = {
   rule: 1,
   header: 9,
   line: 6,
-  choice: 8,
+  /** a choice row; generous so a drifting circle stays on its row (marks.ts, tuned on hand's personas) */
+  choice: 11,
   box: 5,
   consent: 13,
   write: 16,
@@ -166,9 +167,9 @@ export function layoutCard(c: CardContent, at: Pt): CardLayout {
     const b = rect(tx, y + (CARD.choice - CARD.box) / 2, tx + CARD.box, y + (CARD.choice + CARD.box) / 2)
     const labelX = b.x1 + 3
     const labelW = Math.min(x1 - pad - labelX, ch.label.length * 4.3 * s + 2)
-    const label = rect(labelX - 1, y + 0.8, labelX + labelW, y + CARD.choice - 0.8)
+    const label = rect(labelX - 1, y + (CARD.choice - 6) / 2, labelX + labelW, y + (CARD.choice + 6) / 2)
     paths.push(box(b))
-    text.push({ text: ch.label, at: [labelX, y + CARD.choice - 2], scale: s, role: 'choice' })
+    text.push({ text: ch.label, at: [labelX, y + (CARD.choice + 6) / 2 - 1.2], scale: s, role: 'choice' })
     choices.push({ id: ch.id, row, label, box: b })
     y += CARD.choice
   }
