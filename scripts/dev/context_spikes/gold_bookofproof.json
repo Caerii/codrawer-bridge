@@ -1,0 +1,31 @@
+{
+  "source": "Richard Hammack, Book of Proof, 3rd edition (CC BY-NC-ND 4.0), https://richardhammack.github.io/BookOfProof/Main.pdf. Not redistributed: download it locally. Gold answers name the outline section (and where useful the unit) a correct citation must fall in; no book text is stored here.",
+  "questions": [
+    {"q": "What is the power set of a set and how many elements does it have?", "gold_sections": ["Power Sets"]},
+    {"q": "State the pigeonhole principle", "gold_sections": ["The Division and Pigeonhole Principles", "The Pigeonhole Principle Revisited"]},
+    {"q": "How do I prove an if-then statement by proving its contrapositive?", "gold_sections": ["Contrapositive Proof"]},
+    {"q": "Show that the square root of 2 is irrational", "gold_sections": ["Proving Statements with Contradiction"]},
+    {"q": "When should I use strong induction instead of ordinary induction?", "gold_sections": ["Proof by Strong Induction"]},
+    {"q": "Every integer greater than 1 factors uniquely into primes", "gold_sections": ["The Fundamental Theorem of Arithmetic"]},
+    {"q": "inclusion-exclusion formula for the size of a union of three sets", "gold_sections": ["The Inclusion-Exclusion Principle"]},
+    {"q": "definition of an equivalence relation: reflexive, symmetric, transitive", "gold_sections": ["Equivalence Relations", "Properties of Relations"]},
+    {"q": "What does it mean for a function to be injective or surjective?", "gold_sections": ["Injective and Surjective Functions"]},
+    {"q": "If there are injections A to B and B to A then |A| = |B|", "gold_sections": ["The Cantor-Bernstein-Schröder Theorem"]},
+    {"q": "binomial theorem and Pascal's triangle", "gold_sections": ["Pascal's Triangle and the Binomial Theorem"]},
+    {"q": "How do you negate a statement with quantifiers like for all and there exists?", "gold_sections": ["Negating Statements", "Quantifiers"]},
+    {"q": "a \\equiv b \\pmod{n} congruence of integers", "gold_sections": ["Congruence of Integers", "The Integers Modulo n"]},
+    {"q": "number of non-negative integer solutions of w+x+y+z=20 stars and bars", "gold_sections": ["Counting Multisets"]},
+    {"q": "Is the set of real numbers countable? Cantor diagonal argument", "gold_sections": ["Countable and Uncountable Sets"]},
+    {"q": "epsilon-delta definition of a limit", "gold_sections": ["Definition of a Limit"]},
+    {"q": "How do I prove that A \\subseteq B for two sets?", "gold_sections": ["How to Prove AB"]},
+    {"q": "proof by smallest counterexample", "gold_sections": ["Proof by Smallest Counterexample"]},
+    {"q": "disprove a universal statement with a counterexample", "gold_sections": ["Counterexamples"]},
+    {"q": "existence and uniqueness proofs", "gold_sections": ["Existence Proofs; Existence and Uniqueness Proofs"]},
+    {"q": "AM-GM inequality for n positive reals", "gold_sections": [], "out_of_corpus": true},
+    {"q": "eigenvalues of a real symmetric matrix are real", "gold_sections": [], "out_of_corpus": true},
+    {"q": "Stokes' theorem for a surface integral", "gold_sections": [], "out_of_corpus": true},
+    {"q": "Fermat's little theorem a^p congruent to a mod p", "gold_sections": [], "out_of_corpus": true},
+    {"q": "Riemann zeta function and the Riemann hypothesis", "gold_sections": [], "out_of_corpus": true},
+    {"q": "Cauchy-Schwarz inequality", "gold_sections": [], "out_of_corpus": true}
+  ]
+}

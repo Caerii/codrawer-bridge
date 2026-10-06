@@ -1,0 +1,70 @@
+{
+ "llm": "codrawer-spike-gemma3-4b-16k",
+ "embedder": "nomic-embed-text",
+ "setup_s": 0.0,
+ "episodes": [
+  {
+   "name": "reading",
+   "s": 96.5,
+   "calls": {
+    "completions": 2,
+    "embeddings": 4
+   },
+   "tokens": {
+    "prompt": 2571,
+    "completion": 770
+   },
+   "entities": [],
+   "facts": [],
+   "error": "RuntimeError: Binder exception: Table RelatesToNode_ doesn't have an index with name edge_name_and_fact."
+  },
+  {
+   "name": "primer",
+   "s": 20.3,
+   "calls": {
+    "completions": 2,
+    "embeddings": 7
+   },
+   "tokens": {
+    "prompt": 2543,
+    "completion": 769
+   },
+   "entities": [],
+   "facts": [],
+   "error": "RuntimeError: Binder exception: Table RelatesToNode_ doesn't have an index with name edge_name_and_fact."
+  },
+  {
+   "name": "attempt",
+   "s": 34.0,
+   "calls": {
+    "completions": 2,
+    "embeddings": 5
+   },
+   "tokens": {
+    "prompt": 2546,
+    "completion": 554
+   },
+   "entities": [],
+   "facts": [],
+   "error": "RuntimeError: Binder exception: Table RelatesToNode_ doesn't have an index with name edge_name_and_fact."
+  },
+  {
+   "name": "note",
+   "s": 6.4,
+   "calls": {
+    "completions": 2,
+    "embeddings": 7
+   },
+   "tokens": {
+    "prompt": 2453,
+    "completion": 262
+   },
+   "entities": [],
+   "facts": [],
+   "error": "RuntimeError: Binder exception: Table RelatesToNode_ doesn't have an index with name edge_name_and_fact."
+  }
+ ],
+ "search": {
+  "error": "RuntimeError: Binder exception: Table RelatesToNode_ doesn't have an index with name edge_name_and_fact."
+ }
+}

@@ -1,0 +1,7 @@
+# Downloaded corpora and built indexes stay local (books are private; indexes are large).
+*.pdf
+*.epub
+*.sqlite
+*.sqlite-*
+corpus/
+results/*.db

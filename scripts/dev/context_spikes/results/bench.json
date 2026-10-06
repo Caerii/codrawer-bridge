@@ -1,0 +1,331 @@
+{
+ "pdf_mb": 1.84,
+ "ingest_s": {
+  "open": 0.432,
+  "extract_fts": 6.74,
+  "embed_load": 3.001,
+  "embed": 2.852
+ },
+ "counts": {
+  "pages": 380,
+  "sections": 107,
+  "units": 301,
+  "chunks": 1243
+ },
+ "db_mb": 4.87,
+ "embedding": "bge-small-en-v1.5 GPU (CUDA)",
+ "latency_ms": {
+  "fts": {
+   "p50": 5.01,
+   "p95": 7.89,
+   "n": 130
+  },
+  "vec": {
+   "p50": 14.76,
+   "p95": 22.14,
+   "n": 130
+  },
+  "hybrid": {
+   "p50": 17.17,
+   "p95": 24.86,
+   "n": 130
+  },
+  "rerank": {
+   "p50": 213.84,
+   "p95": 265.69,
+   "n": 130
+  },
+  "complete": {
+   "p50": 1.0,
+   "p95": 1.5,
+   "n": 35
+  }
+ },
+ "quality": {
+  "fts": {
+   "hit@1": 0.65,
+   "hit@5": 0.85,
+   "precision@5": 0.59,
+   "mrr": 0.75,
+   "n": 20
+  },
+  "vec": {
+   "hit@1": 0.8,
+   "hit@5": 0.95,
+   "precision@5": 0.72,
+   "mrr": 0.867,
+   "n": 20
+  },
+  "hybrid": {
+   "hit@1": 0.65,
+   "hit@5": 1.0,
+   "precision@5": 0.72,
+   "mrr": 0.796,
+   "n": 20
+  },
+  "rerank": {
+   "hit@1": 0.75,
+   "hit@5": 0.9,
+   "precision@5": 0.57,
+   "mrr": 0.812,
+   "n": 20
+  }
+ },
+ "abstention": {
+  "best_vec_distance_in_corpus": [
+   0.4658,
+   0.4745,
+   0.4909,
+   0.4994,
+   0.5093,
+   0.5246,
+   0.5284,
+   0.5441,
+   0.5493,
+   0.5505,
+   0.5838,
+   0.5918,
+   0.5923,
+   0.5984,
+   0.6027,
+   0.626,
+   0.6465,
+   0.6778,
+   0.6964,
+   0.7096
+  ],
+  "best_vec_distance_out_of_corpus": [
+   0.7083,
+   0.7304,
+   0.7404,
+   0.7911,
+   0.7953,
+   0.8341
+  ],
+  "threshold_fit_here": 0.6964,
+  "answered_in_corpus": "19/20",
+  "abstained_out_of_corpus": "6/6"
+ },
+ "rerank_per_question": [
+  {
+   "q": "What is the power set of a set and how many elements does it have?",
+   "ok@5": [
+    true,
+    false,
+    false,
+    false,
+    true
+   ],
+   "top": "bookofproof, Power Sets, Definition 1.4, p. 15"
+  },
+  {
+   "q": "State the pigeonhole principle",
+   "ok@5": [
+    false,
+    true,
+    true,
+    true,
+    false
+   ],
+   "top": "bookofproof, Solutions, Fact 3.8, p. 352"
+  },
+  {
+   "q": "How do I prove an if-then statement by proving its contrapositive?",
+   "ok@5": [
+    true,
+    false,
+    true,
+    false,
+    true
+   ],
+   "top": "bookofproof, Contrapositive Proof, p. 129"
+  },
+  {
+   "q": "Show that the square root of 2 is irrational",
+   "ok@5": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "top": "bookofproof, Constructive Versus Non-Constructive Proofs, p. 154"
+  },
+  {
+   "q": "When should I use strong induction instead of ordinary induction?",
+   "ok@5": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "top": "bookofproof, Proof by Strong Induction, p. 187"
+  },
+  {
+   "q": "Every integer greater than 1 factors uniquely into primes",
+   "ok@5": [
+    true,
+    true,
+    true,
+    false,
+    true
+   ],
+   "top": "bookofproof, The Fundamental Theorem of Arithmetic, p. 192"
+  },
+  {
+   "q": "inclusion-exclusion formula for the size of a union of three sets",
+   "ok@5": [
+    true,
+    true,
+    false,
+    false,
+    false
+   ],
+   "top": "bookofproof, The Inclusion-Exclusion Principle, Fact 3.6, p. 93"
+  },
+  {
+   "q": "definition of an equivalence relation: reflexive, symmetric, transitive",
+   "ok@5": [
+    true,
+    true,
+    true,
+    false,
+    false
+   ],
+   "top": "bookofproof, Equivalence Relations, p. 210"
+  },
+  {
+   "q": "What does it mean for a function to be injective or surjective?",
+   "ok@5": [
+    true,
+    true,
+    true,
+    true,
+    false
+   ],
+   "top": "bookofproof, Injective and Surjective Functions, Definition 12.4, p. 229"
+  },
+  {
+   "q": "If there are injections A to B and B to A then |A| = |B|",
+   "ok@5": [
+    false,
+    false,
+    false,
+    true,
+    true
+   ],
+   "top": "bookofproof, Comparing Cardinalities, Definition 14.4, p. 281"
+  },
+  {
+   "q": "binomial theorem and Pascal's triangle",
+   "ok@5": [
+    true,
+    true,
+    false,
+    true,
+    false
+   ],
+   "top": "bookofproof, Pascal's Triangle and the Binomial Theorem, p. 91"
+  },
+  {
+   "q": "How do you negate a statement with quantifiers like for all and there exists?",
+   "ok@5": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "top": "bookofproof, Negating Statements, Example 2.13, p. 61"
+  },
+  {
+   "q": "a \\equiv b \\pmod{n} congruence of integers",
+   "ok@5": [
+    true,
+    true,
+    false,
+    true,
+    true
+   ],
+   "top": "bookofproof, Congruence of Integers, Example 5.1, p. 132"
+  },
+  {
+   "q": "number of non-negative integer solutions of w+x+y+z=20 stars and bars",
+   "ok@5": [
+    true,
+    true,
+    false,
+    true,
+    true
+   ],
+   "top": "bookofproof, Counting Multisets, Example 3.20, p. 100"
+  },
+  {
+   "q": "Is the set of real numbers countable? Cantor diagonal argument",
+   "ok@5": [
+    true,
+    false,
+    false,
+    false,
+    false
+   ],
+   "top": "bookofproof, Countable and Uncountable Sets, Theorem 14.4, p. 277"
+  },
+  {
+   "q": "epsilon-delta definition of a limit",
+   "ok@5": [
+    true,
+    true,
+    true,
+    true,
+    false
+   ],
+   "top": "bookofproof, Definition of a Limit, Definition 13.1, p. 247"
+  },
+  {
+   "q": "How do I prove that A \\subseteq B for two sets?",
+   "ok@5": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "top": "bookofproof, Examples: Perfect Numbers, Exercises 8, p. 171"
+  },
+  {
+   "q": "proof by smallest counterexample",
+   "ok@5": [
+    true,
+    false,
+    true,
+    false,
+    false
+   ],
+   "top": "bookofproof, Proof by Smallest Counterexample, p. 191"
+  },
+  {
+   "q": "disprove a universal statement with a counterexample",
+   "ok@5": [
+    false,
+    true,
+    true,
+    false,
+    true
+   ],
+   "top": "bookofproof, Disproving Existence Statements, Example 9.2, p. 176"
+  },
+  {
+   "q": "existence and uniqueness proofs",
+   "ok@5": [
+    true,
+    true,
+    true,
+    false,
+    false
+   ],
+   "top": "bookofproof, Existence Proofs; Existence and Uniqueness Proofs, Proposition 7.1, p. 153"
+  }
+ ]
+}
