@@ -1,7 +1,7 @@
 # codrawer-layer (XOVI probe)
 
-> **Status (2026-10-03): built, not yet run on the device. Probe 0 and Probe 1 have not been
-> executed.** The tablet went to sleep (off Wi-Fi) before XOVI was installed, so nothing is installed
+> **Status (2026-10-05): built, not yet run on the device. Probe 0, Probe 1 and the erase probe
+> (`watch`, `save`; `docs/investigations/native-erase.md`) have not been executed.** The tablet went to sleep (off Wi-Fi) before XOVI was installed, so nothing is installed
 > on it. The command table below describes what the extension does once it is installed.
 
 A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
@@ -56,6 +56,11 @@ that page is the one on screen.
 | `pencolor page=<uuid> argb=<hex>` | Writes `penHandler.lineArgbCode`, reads it back, restores the old value. |
 | `layers page=<uuid>` | Logs the page's layers, current layer and undo state. |
 | `stroke page=<uuid> [argb=<hex>]` | Probe 1: creates (or reuses) the layer `codrawer: test`, selects it, commits one hard-coded 120-point fineliner wave in the given ARGB colour (default `ff1f6fe0`), renders it to tiles, repaints, and selects the user's layer again. |
+| `watch page=<uuid> [full=1]` | Erase probe (`docs/investigations/native-erase.md`): connects a logging receiver to the pen handler's `strokeCompleted(Line)` (decoded; eraser paths, or every path with `full=1`, are written to `/tmp/codrawer-layer/line-<ms>.txt`), `gestureStarted/Ended`, and every signal of the page's SceneController, DocumentWorker (except `tileReady`), QmlDocumentWrapper and DocumentLockManager. Hooks no function; rate-limited to 20 lines per signal per second. Read-only. |
+| `unwatch` | Disconnects everything `watch` connected. |
+| `pending page=<uuid>` | Logs whether the document has unsaved lines and the worker's queue (read-only). |
+| `save page=<uuid> via=deferred\|modified\|abouttosleep\|sleepcycle` | Asks xochitl to store the page's pending lines now through one of its own meta-methods (see `main.cpp` `cmdSave`); with `watch` on, `worker.linesStored` shows whether and when it did. Try the routes in that order; `sleepcycle` last. |
+| `dumpscene page=<uuid>` | Calls xochitl's debug slot `SceneController::dumpScene()`; output, if any, goes to xochitl's journal. |
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'

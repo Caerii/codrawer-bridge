@@ -69,6 +69,31 @@
 // - The pen's `lineArgbCode` is only written by `pencolor`, which reads it back and restores the
 //   previous value in the same job.
 //
+// # Watching erasures (the erase probe, `docs/investigations/native-erase.md`)
+//
+// The page's true state reaches codrawer only when xochitl saves the `.rm` (seconds to a minute
+// after the user pauses), so an erase shows late everywhere but on the tablet. xochitl's QML
+// commits an erase in `DocumentView.onStrokeCompleted`: when the pen lifts, a stroke whose
+// `isEraserTool` is true goes to `SceneController::eraseWithLine(Line)` (the scene job splits the
+// lines it covers), and the `Line` it passes carries the eraser's exact path and thickness. Saves
+// are xochitl's own `StoreLines` jobs on the `DocumentWorker`, which reports them with
+// `linesStored(page, pageId, size)`.
+//
+// `watch` connects a logging receiver to those signals, without hooking any function: the pen
+// handler's `strokeCompleted(Line)` (decoded: tool, eraser or not, thickness, point count, bounds,
+// and for erasers the whole path, written to a file), every signal of the page's SceneController
+// (`documentContentChanged`, `updated`, `undoAvailableChanged`, …), of its DocumentWorker
+// (`contentsUpdated`, `linesStored`, `hasPendingChanged`, `jobQueueSizeChanged`, …) and of the
+// document's `QmlDocumentWrapper` and `DocumentLockManager` if they are found. The receiver is a
+// QObject whose `qt_metacall` takes the connected signals as extra methods (the way Qt's own
+// QSignalSpy works); it runs in the emitting thread, only formats values it knows, and is
+// rate-limited per signal. `unwatch` disconnects it.
+//
+// `save` asks xochitl to store pending lines now, through one of a short list of xochitl's own
+// meta-methods named explicitly (`via=`), and logs the worker's state before and after; with
+// `watch` on, `linesStored` shows whether it worked and how long the store took. `pending` logs
+// that state alone. None of these change page content.
+//
 // Build: `build.sh` (aarch64, Qt 6 headers). Install and use: `README.md`.
 
 #include <QtCore/QCoreApplication>
@@ -76,6 +101,8 @@
 #include <QtCore/QMetaMethod>
 #include <QtCore/QMetaProperty>
 #include <QtCore/QMetaType>
+#include <QtCore/QMutex>
+#include <QtCore/QPointer>
 #include <QtCore/QRectF>
 #include <QtCore/QSequentialIterable>
 #include <QtCore/QSet>
@@ -705,6 +732,357 @@ void cmdLayers(const QStringList &w) {
     dumpValues(p.controller, "controller", {"pageId", "layerCount", "currentLayer", "undoAvailable", "redoAvailable"});
 }
 
+// ---------------------------------------------------------------------------------------------
+// Watching (erase probe). See "Watching erasures" at the top of the file.
+
+qint64 nowMs() {
+    timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return qint64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Every QObject reachable from the windows' item trees and the application object, once each.
+// QML puts non-visual objects (a DocumentLockManager, a QmlDocumentWrapper) under the item that
+// declares them, so `findChildren` from each window's content item reaches them.
+QList<QObject *> findObjectsOfClass(const char *cls) {
+    QList<QObject *> out;
+    QSet<QObject *> seen;
+    auto consider = [&](QObject *o) {
+        if (!o || seen.contains(o)) return;
+        seen.insert(o);
+        for (const QMetaObject *m = o->metaObject(); m; m = m->superClass()) {
+            if (qstrcmp(m->className(), cls) == 0) {
+                out << o;
+                return;
+            }
+        }
+    };
+    const auto windows = QGuiApplication::allWindows();
+    for (QWindow *w : windows) {
+        auto *qw = qobject_cast<QQuickWindow *>(w);
+        if (!qw) continue;
+        consider(qw->contentItem());
+        const auto kids = qw->contentItem()->findChildren<QObject *>();
+        for (QObject *k : kids) consider(k);
+    }
+    if (QObject *app = QCoreApplication::instance()) {
+        const auto kids = app->findChildren<QObject *>();
+        for (QObject *k : kids) consider(k);
+    }
+    return out;
+}
+
+// A `Line` passed by a signal (strokeCompleted), read in place: its gadget properties, its
+// thickness (+40, a double) and its points (the QList<RmPoint> at +16), the layout `buildLine`
+// checks. The points are read only when the gadget's own `pointCount` agrees with the list.
+// Eraser paths, and every path with `full`, are written whole to a file for calibration
+// (x y in scene px, width in quarter px, pressure 0..255): the exact input to eraseWithLine.
+QString describeLine(const void *line, bool full) {
+    const QMetaType lt = QMetaType::fromName("Line");
+    if (!lt.isValid() || lt.sizeOf() != kLineSize) return QStringLiteral("<Line: unexpected type>");
+    const int tool = readGadget(lt, line, "tool").toInt();
+    const int count = readGadget(lt, line, "pointCount").toInt();
+    const bool eraser = readGadget(lt, line, "isEraserTool").toBool();
+    const QRectF br = readGadget(lt, line, "boundingRect").toRectF();
+    double thickness = 0;
+    std::memcpy(&thickness, static_cast<const unsigned char *>(line) + kOffThickness, 8);
+    QString s = QStringLiteral("Line{tool=%1 eraser=%2 thickness=%3 points=%4 bounds=%5")
+                    .arg(tool).arg(eraser).arg(thickness).arg(count).arg(show(br));
+    const auto *pts = reinterpret_cast<const QList<RmPoint> *>(static_cast<const unsigned char *>(line) + kOffPoints);
+    if (pts->size() != count) return s + QStringLiteral(" list=%1 (disagrees; points not read)}").arg(pts->size());
+    if (count > 0) {
+        const RmPoint &a = pts->first();
+        const RmPoint &b = pts->last();
+        s += QStringLiteral(" first=(%1,%2 w%3 p%4) last=(%5,%6 w%7 p%8)")
+                 .arg(a.x).arg(a.y).arg(a.width).arg(a.pressure).arg(b.x).arg(b.y).arg(b.width).arg(b.pressure);
+    }
+    if ((eraser || full) && count > 0) {
+        const QString path = QStringLiteral("%1/line-%2.txt").arg(QString::fromLatin1(kDir)).arg(nowMs());
+        if (FILE *f = std::fopen(path.toUtf8().constData(), "w")) {
+            std::fprintf(f, "# tool %d eraser %d thickness %g points %d\n", tool, int(eraser), thickness, count);
+            for (const RmPoint &p : *pts) std::fprintf(f, "%.2f %.2f %u %u\n", p.x, p.y, unsigned(p.width), unsigned(p.pressure));
+            std::fclose(f);
+            s += QStringLiteral(" path=%1").arg(path);
+        }
+    }
+    return s + QLatin1Char('}');
+}
+
+// One signal argument for the log. Only types we can format without side effects are read;
+// everything else is named.
+QString showArg(const QMetaType &t, void *p, bool full) {
+    if (!p) return QStringLiteral("<null>");
+    if (qstrcmp(t.name(), "Line") == 0) return describeLine(p, full);
+    if (t.flags() & QMetaType::PointerToQObject) {
+        QObject *o = *static_cast<QObject **>(p);
+        return o ? QStringLiteral("%1(%2)").arg(QString::fromLatin1(o->metaObject()->className())).arg(quintptr(o), 0, 16)
+                 : QStringLiteral("null");
+    }
+    if (t.flags() & QMetaType::IsEnumeration) {
+        qint64 v = 0;
+        std::memcpy(&v, p, std::min<qsizetype>(t.sizeOf(), 8));
+        return QStringLiteral("%1(%2)").arg(QString::fromLatin1(t.name())).arg(v);
+    }
+    switch (t.id()) {
+    case QMetaType::Bool: case QMetaType::Int: case QMetaType::UInt: case QMetaType::LongLong:
+    case QMetaType::ULongLong: case QMetaType::Double: case QMetaType::Float: case QMetaType::QString:
+    case QMetaType::QRectF: case QMetaType::QRect: case QMetaType::QPointF: case QMetaType::QSizeF:
+        return show(QVariant(t, p));
+    default:
+        return QStringLiteral("<%1>").arg(QString::fromLatin1(t.name()));
+    }
+}
+
+// The logging receiver. Each hooked signal is one extra method of this object: QObject's own
+// methods come first, then hook 0, 1, … (QMetaObject::connect by index, as QSignalSpy does).
+// `qt_metacall` runs in whichever thread emitted the signal (DocumentWorker signals come from
+// its thread), so the hook table is guarded and the formatting reads only the arguments.
+class Spy : public QObject {
+public:
+    struct Hook {
+        QPointer<QObject> sender;
+        int signalIndex = -1;
+        QMetaMethod signal;
+        QByteArray label;
+        bool full = false;
+        qint64 windowMs = 0;  // rate limit: at most kPerSecond lines per signal per second
+        int inWindow = 0;
+        int suppressed = 0;
+    };
+    static constexpr int kPerSecond = 20;
+
+    bool hook(QObject *sender, const QMetaMethod &sig, const QByteArray &label, bool full = false) {
+        QMutexLocker lock(&mutex_);
+        const int slot = QObject::staticMetaObject.methodCount() + int(hooks_.size());
+        Hook h;
+        h.sender = sender;
+        h.signalIndex = sig.methodIndex();
+        h.signal = sig;
+        h.label = label;
+        h.full = full;
+        hooks_.append(h);
+        if (!QMetaObject::connect(sender, sig.methodIndex(), this, slot, Qt::DirectConnection)) {
+            hooks_.removeLast();
+            return false;
+        }
+        return true;
+    }
+
+    int unhookAll() {
+        QMutexLocker lock(&mutex_);
+        const int base = QObject::staticMetaObject.methodCount();
+        int n = 0;
+        for (int i = 0; i < hooks_.size(); ++i) {
+            if (hooks_[i].sender && QMetaObject::disconnect(hooks_[i].sender, hooks_[i].signalIndex, this, base + i)) ++n;
+        }
+        hooks_.clear();
+        return n;
+    }
+
+    int count() {
+        QMutexLocker lock(&mutex_);
+        return int(hooks_.size());
+    }
+
+    int qt_metacall(QMetaObject::Call call, int id, void **a) override {
+        id = QObject::qt_metacall(call, id, a);
+        if (id < 0 || call != QMetaObject::InvokeMetaMethod) return id;
+        fire(id, a);
+        return -1;
+    }
+
+private:
+    void fire(int id, void **a) {
+        QString text;
+        {
+            QMutexLocker lock(&mutex_);
+            if (id >= hooks_.size()) return;
+            Hook &h = hooks_[id];
+            const qint64 now = nowMs();
+            if (now - h.windowMs >= 1000) {
+                if (h.suppressed) text = QStringLiteral("(%1 more %2 in the last second) ").arg(h.suppressed).arg(QString::fromLatin1(h.signal.name()));
+                h.windowMs = now;
+                h.inWindow = 0;
+                h.suppressed = 0;
+            }
+            if (++h.inWindow > kPerSecond) {
+                ++h.suppressed;
+                return;
+            }
+            QStringList args;
+            for (int i = 0; i < h.signal.parameterCount(); ++i) {
+                args << QStringLiteral("%1=%2").arg(QString::fromLatin1(h.signal.parameterNames().value(i)),
+                                                     showArg(h.signal.parameterMetaType(i), a[i + 1], h.full));
+            }
+            text += QStringLiteral("signal %1.%2(%3)").arg(QString::fromLatin1(h.label), QString::fromLatin1(h.signal.name()), args.join(QStringLiteral(", ")));
+        }
+        logLine(text);
+    }
+
+    QMutex mutex_;
+    QList<Hook> hooks_;
+};
+
+// Created on first use by a command, so on the GUI thread; lives as long as xochitl.
+Spy *spy() {
+    static Spy *s = new Spy;
+    return s;
+}
+
+// Hooks every signal `o`'s own classes declare (stopping at Qt's base classes), except `skip`.
+int hookAllSignals(QObject *o, const char *label, std::initializer_list<const char *> skip = {}) {
+    if (!o) return 0;
+    int n = 0;
+    for (const QMetaObject *m = o->metaObject(); m; m = m->superClass()) {
+        const QByteArray cls = m->className();
+        if (cls == "QObject" || cls == "QQuickItem" || cls == "QQuickPaintedItem") break;
+        for (int i = m->methodOffset(); i < m->methodCount(); ++i) {
+            const QMetaMethod mm = m->method(i);
+            if (mm.methodType() != QMetaMethod::Signal) continue;
+            bool skipped = false;
+            for (const char *s : skip) skipped = skipped || mm.name() == s;
+            if (skipped) {
+                logLine(QStringLiteral("   skip %1.%2 (noisy)").arg(QString::fromLatin1(label), QString::fromLatin1(mm.methodSignature())));
+                continue;
+            }
+            if (spy()->hook(o, mm, label)) {
+                ++n;
+                logLine(QStringLiteral("   hook %1.%2").arg(QString::fromLatin1(label), QString::fromLatin1(mm.methodSignature())));
+            }
+        }
+    }
+    return n;
+}
+
+int hookSignal(QObject *o, const char *label, const char *name, bool full = false) {
+    if (!o) return 0;
+    const QMetaObject *mo = o->metaObject();
+    for (int i = 0; i < mo->methodCount(); ++i) {
+        const QMetaMethod mm = mo->method(i);
+        if (mm.methodType() == QMetaMethod::Signal && mm.name() == name && spy()->hook(o, mm, label, full)) {
+            logLine(QStringLiteral("   hook %1.%2").arg(QString::fromLatin1(label), QString::fromLatin1(mm.methodSignature())));
+            return 1;
+        }
+    }
+    logLine(QStringLiteral("   %1 has no signal %2").arg(QString::fromLatin1(label), QString::fromLatin1(name)));
+    return 0;
+}
+
+// The open page's DocumentWorker (SceneController.worker), document wrapper and lock manager.
+struct DocObjects {
+    QObject *worker = nullptr;
+    QObject *wrapper = nullptr;
+    QObject *locks = nullptr;
+};
+
+DocObjects docObjects(const OpenPage &p) {
+    DocObjects d;
+    if (p.controller && p.controller->metaObject()->indexOfProperty("worker") >= 0) {
+        d.worker = p.controller->property("worker").value<QObject *>();
+    }
+    if (p.view->metaObject()->indexOfProperty("document") >= 0) {
+        d.wrapper = p.view->property("document").value<QObject *>();
+        if (d.wrapper && qstrcmp(d.wrapper->metaObject()->className(), "QmlDocumentWrapper") != 0) d.wrapper = nullptr;
+    }
+    if (!d.wrapper) {
+        const auto ws = findObjectsOfClass("QmlDocumentWrapper");
+        if (ws.size() == 1) d.wrapper = ws.first();
+        else logLine(QStringLiteral("   %1 QmlDocumentWrapper object(s); not choosing").arg(ws.size()));
+    }
+    const auto ls = findObjectsOfClass("DocumentLockManager");
+    for (QObject *l : ls) {
+        // the lock manager of this document: its `document` is our wrapper
+        if (l->metaObject()->indexOfProperty("document") >= 0 && l->property("document").value<QObject *>() == d.wrapper) d.locks = l;
+    }
+    if (!d.locks && ls.size() == 1) d.locks = ls.first();
+    return d;
+}
+
+void logDocState(const OpenPage &p, const DocObjects &d, const char *when) {
+    logLine(QStringLiteral("state %1: worker=%2 wrapper=%3 locks=%4").arg(QString::fromLatin1(when))
+                .arg(d.worker ? QString::fromLatin1(d.worker->metaObject()->className()) : QStringLiteral("none"))
+                .arg(d.wrapper ? QString::fromLatin1(d.wrapper->metaObject()->className()) : QStringLiteral("none"))
+                .arg(d.locks ? QString::fromLatin1(d.locks->metaObject()->className()) : QStringLiteral("none")));
+    dumpValues(p.controller, "controller", {"undoAvailable", "working", "updating", "pendingEdit"});
+    dumpValues(d.worker, "worker", {"hasPending", "hasPendingChanges", "jobQueueSize", "pageCount"});
+    dumpValues(d.wrapper, "document", {"hasPendingStoreLines", "hasContentsOnAnyPage", "pageCount"});
+}
+
+// watch page=<uuid> [full=1]: hook the signals that report a stroke, an erase and a save.
+void cmdWatch(const QStringList &w) {
+    OpenPage p;
+    if (!findOpenPage(arg(w, "page"), p)) return;
+    if (spy()->count()) {
+        logLine(QStringLiteral("watch: already watching %1 signals; unwatch first").arg(spy()->count()));
+        return;
+    }
+    const bool full = arg(w, "full") == QLatin1String("1");
+    const DocObjects d = docObjects(p);
+    int n = 0;
+    n += hookSignal(p.pen, "pen", "strokeCompleted", full);
+    n += hookSignal(p.pen, "pen", "gestureStarted");
+    n += hookSignal(p.pen, "pen", "gestureEnded");
+    n += hookAllSignals(p.controller, "scene");
+    // tileReady carries a QImage per rendered tile: frequent, and says nothing about content
+    n += hookAllSignals(d.worker, "worker", {"tileReady"});
+    n += hookAllSignals(d.wrapper, "document");
+    n += hookAllSignals(d.locks, "locks");
+    logDocState(p, d, "at watch");
+    logLine(QStringLiteral("watch: %1 signals hooked on page %2").arg(n).arg(p.pageId));
+}
+
+void cmdUnwatch() {
+    logLine(QStringLiteral("unwatch: %1 signals disconnected").arg(spy()->unhookAll()));
+}
+
+void cmdPending(const QStringList &w) {
+    OpenPage p;
+    if (!findOpenPage(arg(w, "page"), p)) return;
+    logDocState(p, docObjects(p), "now");
+}
+
+// save page=<uuid> via=<route>: ask xochitl to store the page's pending lines now. Each route is
+// a meta-method of xochitl's own document objects (names from the 6.0.105 binary's meta-strings,
+// `native-erase.md`); which of them stores lines, and at what cost, is what this measures. With
+// `watch` on, the worker's `linesStored(page, pageId, size)` marks success.
+//   deferred     DocumentWorker::startDeferredRequestTimers()
+//   modified     DocumentWorker::onModifiedPageId(<the page's id>)
+//   abouttosleep emit DocumentWorker::aboutToSleep()   (what the worker hears before a suspend)
+//   sleepcycle   DocumentLockManager::setSleepState(true) then (false)   (last resort)
+void cmdSave(const QStringList &w) {
+    OpenPage p;
+    if (!findOpenPage(arg(w, "page"), p)) return;
+    const DocObjects d = docObjects(p);
+    const QString via = arg(w, "via");
+    logDocState(p, d, "before save");
+    const qint64 t0 = nowMs();
+    bool ok = false;
+    if (via == QLatin1String("deferred") && d.worker) {
+        ok = invoke(d.worker, "startDeferredRequestTimers", {});
+    } else if (via == QLatin1String("modified") && d.worker) {
+        ok = invoke(d.worker, "onModifiedPageId", {p.pageId});
+    } else if (via == QLatin1String("abouttosleep") && d.worker) {
+        ok = invoke(d.worker, "aboutToSleep", {});  // invoking a signal by index emits it
+    } else if (via == QLatin1String("sleepcycle") && d.locks) {
+        ok = invoke(d.locks, "setSleepState", {true}) && invoke(d.locks, "setSleepState", {false});
+    } else {
+        logLine(QStringLiteral("save: via must be deferred|modified|abouttosleep|sleepcycle and its object must exist (got \"%1\")").arg(via));
+        return;
+    }
+    logLine(QStringLiteral("save: via %1 invoked=%2 in %3 ms (watch for worker.linesStored)").arg(via).arg(ok).arg(nowMs() - t0));
+    logDocState(p, d, "after save");
+}
+
+// dumpscene page=<uuid>: SceneController::dumpScene(), a debug slot in xochitl. Where its output
+// goes (journal, stderr) is unknown; read-only by its name. Only on request.
+void cmdDumpScene(const QStringList &w) {
+    OpenPage p;
+    if (!findOpenPage(arg(w, "page"), p)) return;
+    const qint64 t0 = nowMs();
+    const bool ok = invoke(p.controller, "dumpScene", {});
+    logLine(QStringLiteral("dumpscene: invoked=%1 in %2 ms (see journalctl -u xochitl)").arg(ok).arg(nowMs() - t0));
+}
+
 void runCommand(const QString &text) {
     for (const QString &rawLine : text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
         const QStringList w = rawLine.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -716,6 +1094,11 @@ void runCommand(const QString &text) {
         else if (c == QLatin1String("pencolor")) cmdPenColor(w);
         else if (c == QLatin1String("stroke")) cmdStroke(w);
         else if (c == QLatin1String("layers")) cmdLayers(w);
+        else if (c == QLatin1String("watch")) cmdWatch(w);
+        else if (c == QLatin1String("unwatch")) cmdUnwatch();
+        else if (c == QLatin1String("pending")) cmdPending(w);
+        else if (c == QLatin1String("save")) cmdSave(w);
+        else if (c == QLatin1String("dumpscene")) cmdDumpScene(w);
         else logLine(QStringLiteral("unknown command %1").arg(c));
         logLine(QStringLiteral("< done %1").arg(c));
     }
