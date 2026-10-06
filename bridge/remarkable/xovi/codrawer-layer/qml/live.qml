@@ -20,7 +20,8 @@
 //
 // While an agent considers a selection, a small piece of ink-thought plays beside it, in an
 // e-paper Animation region of about 120 x 120 px (1-bit fast waveform, 10 frames a second, only
-// that small region changing each frame). Three styles:
+// that small region changing each frame), at the top left of the spot the answer will take (or
+// beside a small selection). Three styles:
 //
 //   pen    (default) a nib idly doodling: it traces a slow curve made of incommensurate sines, so
 //          it never repeats, and its trail is a comet of ink that thins and is erased at the tail
@@ -229,13 +230,18 @@ Item {
     // ---------------------------------------------------------------------------------------
     // Thinking: the API.
 
-    // Start beside the selection (x, y, w, h in view px). style: pen | drop | glyph.
+    // Start at the spot the answer will take (x, y, w, h in view px: agent_status's bbox, the
+    // reserved answer block, or the selection when agent ink is off). style: pen | drop | glyph.
     function thinkStart(x, y, w, h, style) {
         const now = clock();
         const sz = thinkSize;
-        // to the right of the selection when there is room, else to its left; level with its top
-        let cx = x + w + sz / 2 + 24;
-        if (cx + sz / 2 > root.width) cx = x - sz / 2 - 24;
+        // in the block's top left corner when it is big enough, where the answer begins; else
+        // beside it, to the right when there is room, level with its top
+        let cx = x + sz / 2;
+        if (w < sz) {
+            cx = x + w + sz / 2 + 24;
+            if (cx + sz / 2 > root.width) cx = x - sz / 2 - 24;
+        }
         cx = Math.max(sz / 2, Math.min(root.width - sz / 2, cx));
         const cy = Math.max(sz / 2, Math.min(root.height - sz / 2, y + sz / 2));
         if (think) repaint(think.rect);
