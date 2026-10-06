@@ -113,6 +113,11 @@ export class MarkEngine {
     }
   }
 
+  /** Ink that is context only, never recognised: the saved page, ink from before watching began. */
+  see(s: PageStroke) {
+    this.ink.set(s.id, s)
+  }
+
   /** Strokes taken back or erased: they are no longer context, targets or pending marks. */
   remove(ids: string[]) {
     for (const id of ids) this.ink.delete(id)

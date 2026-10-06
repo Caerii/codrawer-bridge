@@ -13,9 +13,15 @@ importers:
       '@evenrealities/even_hub_sdk':
         specifier: ^0.0.16
         version: 0.0.16
+      delegate:
+        specifier: workspace:*
+        version: link:../../packages/delegate
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      marks:
+        specifier: workspace:*
+        version: link:../../packages/marks
       yjs:
         specifier: ^13.6.33
         version: 13.6.33

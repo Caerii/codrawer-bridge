@@ -19,6 +19,11 @@ T_TERM = "term"  # server -> clients: {kind: text|note|permission|question|statu
 # document (ADR 001/005): a participant shares its edited text with the session
 T_DOC = "doc"  # client -> server -> broadcast: {text, cursor:{line,col}, reason}
 
+# personal marks (packages/marks, ADR 013): relayed like a key; the recogniser host is a client
+MARK_TYPES = frozenset(
+    {"mark_seen", "mark_ask", "mark_define", "mark_invoke", "mark_feedback", "mark_query", "marks"}
+)
+
 # server -> clients (AI layer)
 T_AI_INTENT = "ai_intent"
 T_AI_SAY = "ai_say"

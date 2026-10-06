@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from PIL import Image, ImageDraw
 
 from codrawer_bridge.protocol.constants import (
+    MARK_TYPES,
     T_CLEAR,
     T_CURSOR,
     T_DOC,
@@ -693,6 +694,13 @@ async def ws(session_id: str, ws: WebSocket):
                         _spawn(link.prompt(text, attachment))
                     else:
                         _spawn(link.answer(text))
+                continue
+
+            if t in MARK_TYPES:
+                # Personal marks (docs/protocol.md, "Personal marks"): the recogniser host (a
+                # phone, for now) and the surfaces that answer it talk through the session;
+                # the router only relays.
+                await broadcast_raw(session, raw, exclude=ws)
                 continue
 
             if t == "page":

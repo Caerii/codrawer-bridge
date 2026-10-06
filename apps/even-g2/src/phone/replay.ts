@@ -161,6 +161,22 @@ export function replayThisPage() {
   open(tl)
 }
 
+/**
+ * "Replay from here" (a personal mark meaning `replay_from`, packages/marks): replay this page from
+ * just before the earliest of `ids` (the ink the mark sat beside) was drawn, and play it.
+ */
+export function replayFrom(ids: string[]) {
+  const tl = fromStore(store.all())
+  if (!tl.strokes.length) return
+  open(tl)
+  const want = new Set(ids)
+  const starts = tl.strokes.filter((s) => want.has(s.id) && s.at.length).map((s) => s.at[0])
+  if (!starts.length || !rp) return
+  seekTime(Math.max(0, Math.min(...starts) - 800))
+  if (!rp.playing) play()
+  el.caption().textContent = 'Replay from your mark'
+}
+
 /** "Replay a recording…": pick a `.jsonl` and replay it. */
 export function pickRecording() {
   const input = el.file()
