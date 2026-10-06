@@ -445,12 +445,49 @@ pub fn next_backoff(d: Duration) -> Duration {
 pub type Fallback = Box<dyn Fn(String) + Send>;
 
 pub struct Link {
+    /// Forward ai strokes now (NATIVE_AGENT_INK, then the dock's toggle).
+    agent_on: std::sync::atomic::AtomicBool,
+    /// Nudges the writer to send the status line again.
+    status_tx: tokio::sync::mpsc::Sender<()>,
     text_ok: std::sync::atomic::AtomicBool,
     text_tx: tokio::sync::mpsc::Sender<String>,
     fallback: std::sync::Mutex<Option<Fallback>>,
 }
 
+/// Keeps the dock's agent ink choice across restarts ("1" or "0"); it then overrides
+/// NATIVE_AGENT_INK (Go: `agentInkStateFile`).
+pub const AGENT_INK_STATE_FILE: &str = "/home/root/codrawer/state/native_agent_ink";
+
+/// The dock's last choice in `path` if one was kept, else `env`.
+pub fn initial_agent_ink(path: &str, env: bool) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s.trim() == "1",
+        Err(_) => env,
+    }
+}
+
+/// What the dock shows for "codrawer status" (Go: `statusLine`).
+pub fn status_line(engine: &str, agent_on: bool) -> String {
+    format!("status codrawer {engine} bridge: connected, agent ink {}", if agent_on { "on" } else { "off" })
+}
+
 impl Link {
+    /// Flips native agent ink, keeps the choice in `state_file`, asks for a new status line.
+    pub fn toggle_agent_ink(&self, state_file: &str) -> bool {
+        use std::sync::atomic::Ordering;
+        let on = !self.agent_on.load(Ordering::SeqCst);
+        self.agent_on.store(on, Ordering::SeqCst);
+        if let Err(e) = std::fs::write(state_file, if on { "1\n" } else { "0\n" }) {
+            println!("[ink] could not keep the agent ink choice: {e}");
+        }
+        let _ = self.status_tx.try_send(());
+        on
+    }
+
+    pub fn agent_on(&self) -> bool {
+        self.agent_on.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Queues `s` for the focused text box; false when the extension cannot take it now.
     pub fn insert_text(&self, s: &str) -> bool {
         self.text_ok.load(std::sync::atomic::Ordering::SeqCst)
@@ -522,29 +559,28 @@ pub fn start(
     let (act_tx, act_rx) = mpsc::channel::<String>(64);
     let (msg_tx, msg_rx) = mpsc::channel::<String>(1024);
     let (text_tx, text_rx) = mpsc::channel::<String>(256);
+    let (status_tx, status_rx) = mpsc::channel::<()>(1);
+    let on = initial_agent_ink(AGENT_INK_STATE_FILE, cfg.native_agent_ink);
     let link = std::sync::Arc::new(Link {
+        agent_on: on.into(),
+        status_tx,
         text_ok: false.into(),
         text_tx,
         fallback: std::sync::Mutex::new(None),
     });
-    let hook: Option<crate::ws_client::OnMessage> = if cfg.native_agent_ink {
-        Some(std::sync::Arc::new(move |data: &str| {
-            if data.contains("\"stroke_") {
-                let _ = msg_tx.try_send(data.to_string()); // far behind: dropped, never blocks the reader
-            }
-        }))
-    } else {
-        drop(msg_tx);
-        None
-    };
-    println!(
-        "[ink] socket {path}, native agent ink {}",
-        cfg.native_agent_ink
-    );
+    let l = link.clone();
+    let hook: Option<crate::ws_client::OnMessage> = Some(std::sync::Arc::new(move |data: &str| {
+        // only stroke messages, and only while agent ink is on; the forwarder checks the layer
+        if l.agent_on() && data.contains("\"stroke_") {
+            let _ = msg_tx.try_send(data.to_string()); // far behind: dropped, never blocks the reader
+        }
+    }));
+    println!("[ink] socket {path}, native agent ink {on}");
     tokio::spawn(forever(
         path,
         msg_rx,
         text_rx,
+        status_rx,
         act_tx,
         link.clone(),
         pages,
@@ -565,11 +601,14 @@ fn current_page(pages: &Option<crate::page_watch::PageFeed>) -> Page {
         .unwrap_or_default()
 }
 
+/// One receiver per source the socket writer serves; they are the loop's inputs, not settings.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 async fn forever(
     path: String,
     mut msgs: tokio::sync::mpsc::Receiver<String>,
     mut texts: tokio::sync::mpsc::Receiver<String>,
+    mut status: tokio::sync::mpsc::Receiver<()>,
     actions: tokio::sync::mpsc::Sender<String>,
     link: std::sync::Arc<Link>,
     pages: Option<crate::page_watch::PageFeed>,
@@ -601,6 +640,11 @@ async fn forever(
         logged = false;
         let (rd, mut wr) = conn.into_split();
         let mut lines = BufReader::new(rd).lines();
+        let first = status_line("rust", link.agent_on()) + "\n";
+        if !matches!(tokio::time::timeout(Duration::from_secs(2), wr.write_all(first.as_bytes())).await, Ok(Ok(()))) {
+            println!("[ink] write failed");
+            continue;
+        }
         loop {
             let out: Option<String> = tokio::select! {
                 line = lines.next_line() => match line {
@@ -623,6 +667,9 @@ async fn forever(
                                 match dock_action(&l, &current_page(&pages), now_ms as i64) {
                                     Some(out) => {
                                         println!("[ink] action {out}");
+                                        if l.contains("\"id\":\"agent_ink\"") {
+                                            println!("[ink] native agent ink now {} (dock)", link.toggle_agent_ink(AGENT_INK_STATE_FILE));
+                                        }
                                         if actions.try_send(out).is_err() {
                                             println!("[ink] action dropped: router link backed up");
                                         }
@@ -640,6 +687,7 @@ async fn forever(
                     }
                     _ => break,
                 },
+                _ = status.recv() => Some(status_line("rust", link.agent_on())),
                 t = texts.recv() => match t {
                     Some(text) => {
                         seq += 1;
@@ -651,6 +699,7 @@ async fn forever(
                     None => None,
                 },
                 m = msgs.recv(), if msgs_open => match m {
+                    Some(_) if !link.agent_on() => None, // switched off while it waited
                     Some(m) => {
                         let (line, why) = fwd.handle(&m, &current_page(&pages), Instant::now());
                         if let Some(why) = why {
@@ -914,6 +963,22 @@ mod tests {
             TextReply::Answer("t3", false)
         );
         assert_eq!(text_reply("ok a1 1"), TextReply::Other);
+    }
+
+    #[test]
+    fn agent_ink_choice_and_status() {
+        let dir = std::env::temp_dir().join(format!("codrawer-agentink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("native_agent_ink").to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&f);
+        assert!(!initial_agent_ink(&f, false) && initial_agent_ink(&f, true), "no file: the env decides");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (text_tx, _text_rx) = tokio::sync::mpsc::channel(1);
+        let link = Link { agent_on: false.into(), status_tx: tx, text_ok: false.into(), text_tx, fallback: std::sync::Mutex::new(None) };
+        assert!(link.toggle_agent_ink(&f));
+        assert!(rx.try_recv().is_ok(), "a new status line was asked for");
+        assert!(initial_agent_ink(&f, false), "the choice was kept");
+        assert_eq!(status_line("go", true), "status codrawer go bridge: connected, agent ink on");
     }
 
     #[test]

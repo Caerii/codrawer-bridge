@@ -65,6 +65,13 @@
 # for 10 s, it runs xovi's `stock` at once and writes XOVI_DISABLED (reason and time). After 60 s
 # stable it writes `running` and removes the pending marker.
 #
+# Two more checks follow a healthy watch (from the smart_remarkable study, 2026-10-06): the
+# extension itself must be mapped into xochitl (xovi.so alone can load and skip it; then the
+# status says so), and xochitl's journal since the start must hold no error from our injected QML
+# (exthome/codrawer-layer/*.qml:<line>). Such an error does not stop XOVI: it writes
+# XOVI_NO_INJECT, and the extension then makes no injection while ink and text go on.
+# `xovi on` clears it.
+#
 # State, all under /home/root/codrawer: XOVI_DISABLED (kill switch; first line is the reason),
 # state/xovi_pending (an attempt in progress), state/xovi_status (the last verdict, one line).
 set -u
@@ -73,12 +80,13 @@ REL=$(cd "$(dirname "$0")" && pwd)
 STATE=$ROOT/state
 KILL=$ROOT/XOVI_DISABLED
 PENDING=$STATE/xovi_pending
+NOINJECT=$ROOT/XOVI_NO_INJECT
 STATUS=$STATE/xovi_status
 X=${CODRAWER_XOVI_HOME:-/home/root/xovi} # xovi's own directory (its scripts hard-code this path)
 PAYLOAD="xovi.so start stock codrawer-layer.so"
 # The extension's own files (its injected QML and which injections to make), when the release has
 # them; they go to the extension's home, exthome/codrawer-layer (main.cpp, "Injected UI").
-EXTRAS="dock.qml inject.conf"
+EXTRAS="dock.qml selection-ask.qml inject.conf"
 DROPIN=/etc/systemd/system/xochitl.service.d
 PROC=${CODRAWER_TEST_PROC:-/proc} # tests point this at a fake /proc
 # Guard timing, in seconds: the stability wait before starting, the watch after, the poll step,
@@ -103,6 +111,20 @@ running() {
   grep -q " $DROPIN " "$PROC/mounts" 2> /dev/null || return 1
   pid=$(xochitl MainPID)
   [ -n "$pid" ] && [ "$pid" != 0 ] && grep -q "$X/xovi.so" "$PROC/$pid/maps" 2> /dev/null
+}
+
+# ext_mapped: the live xochitl has the codrawer-layer extension mapped.
+ext_mapped() {
+  pid=$(xochitl MainPID)
+  [ -n "$pid" ] && grep -q "$X/extensions.d/codrawer-layer.so" "$PROC/$pid/maps" 2> /dev/null
+}
+
+# qml_errors <since, epoch s>: the first journal line from xochitl since then that is an error in
+# our injected QML, if any.
+qml_errors() {
+  command -v journalctl > /dev/null || return 0
+  journalctl -u xochitl.service --since "@$1" -o cat --no-pager 2> /dev/null |
+    grep -m 1 -E 'exthome/codrawer-layer/[^ :]*\.qml:[0-9]+'
 }
 
 payload_ok() { for f in $PAYLOAD; do [ -f "$REL/xovi/$f" ] || return 1; done; }
@@ -240,6 +262,7 @@ boot() {
   systemctl reset-failed xochitl.service 2> /dev/null || true
   n0=$(xochitl NRestarts)
   n0=${n0:-0}
+  t0=$(date +%s)
   echo "OS $(os_version), release $(sed -n '1s/^version //p' "$REL/MANIFEST" 2> /dev/null), $(now)" > "$PENDING"
   trap on_term TERM INT
   say "starting ($(now))"
@@ -251,7 +274,16 @@ boot() {
   elif guard "$n0" "$p1"; then
     trap - TERM INT
     rm -f "$PENDING"
-    say "running (healthy 60 s after start, $(now))"
+    bad=$(qml_errors "$t0")
+    if [ -n "$bad" ]; then
+      echo "QML error from an injection: $bad ($(now))" > "$NOINJECT"
+      log "injections off (XOVI_NO_INJECT): $bad"
+    fi
+    if ext_mapped; then
+      say "running (healthy 60 s after start, $(now))"
+    else
+      say "running (healthy 60 s after start, but codrawer-layer.so is not mapped; $(now))"
+    fi
     { echo codrawer-xovi-guard > /sys/power/wake_unlock; } 2> /dev/null || true
     return 0
   fi
@@ -268,6 +300,8 @@ status() {
     ext=""
     payload_ok && ! cmp -s "$REL/xovi/codrawer-layer.so" "$X/extensions.d/codrawer-layer.so" &&
       ext=", extension differs from the release (takes effect next boot)"
+    ext_mapped || ext="$ext, codrawer-layer.so not mapped"
+    [ -e "$NOINJECT" ] && ext="$ext, injections off ($(head -n 1 "$NOINJECT"))"
     echo "xovi=running$ext"
   elif [ -e "$KILL" ]; then
     echo "xovi=disabled ($(head -n 1 "$KILL"))"
@@ -295,7 +329,7 @@ off() {
 }
 
 on() {
-  rm -f "$KILL" "$PENDING"
+  rm -f "$KILL" "$PENDING" "$NOINJECT"
   say "enabled by the user; starting under the gates"
   systemctl --no-block restart codrawer-xovi.service
 }

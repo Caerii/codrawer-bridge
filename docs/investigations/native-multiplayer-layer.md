@@ -382,11 +382,20 @@ notebook "Test" (page `ae4d6014-…`), with the notebook backed up first (scp, n
    xochitl saved the `.rm` 5 s later; `-page-dump` showed the user's 56 calligraphy strokes on
    their layer, unchanged, and **one fineliner stroke `#d03030ff` with 120 points on a new layer**.
    The user tapped undo once: the wave disappeared and their writing stayed.
-4. **Placement: `addDrawingLine` takes the pen's frame, not page coordinates.** The wave given at
-   x −560…−140, y 285…375 was saved at x +12…+432, y −12…+78: shifted by the view's pan (the
-   user's page was scrolled). xochitl maps a pen stroke through the view transform when it
-   commits it, so ink meant for page coordinates is first mapped with the tile manager's own
-   `sceneToViewTransform` (`main.cpp`, "Placement"). Not yet verified on the device.
+4. **Placement: `addDrawingLine` takes page coordinates, unmapped** (verified on the device
+   2026-10-06; the first reading of this probe was wrong). Probe 1's first, synchronous commit
+   saved its wave shifted (x +12…+432, y −12…+78 for an input at x −560…−140, y 285…375), and the
+   extension then mapped every point through the tile manager's `sceneToViewTransform`. An
+   automated test (agent strokes sent through the router, the saved `.rm` read back) showed that
+   mapping was the error:
+   - on a page scrolled to view offset `[810, −196]`, an X aimed at (0.650, 0.330) was saved at
+     (1.150, 0.239): off by exactly that offset, beyond the page's right edge;
+   - an unmapped probe wave at x −564…−136, y 281…379 was saved at x −560…−140, y 285…375;
+   - with the mapping removed, the same X on a page at zoom 0.75, offset `[810, 0]`, was saved at
+     x 0.625–0.675, y 0.311–0.349 (its circle 0.610–0.690 × 0.300–0.360): exactly on target.
+   The user confirmed the mark on screen and that one undo removes it. The earlier shift came
+   from the replaced synchronous path; the view offset is now only logged (`main.cpp`,
+   "Placement").
 
 Verdict: **GO for route 2**, no function called by address, no hook. Integration (agent ink
 socket, bridge forwarding with `NATIVE_AGENT_INK`, page snapshots labelling the agent layer `ai`)

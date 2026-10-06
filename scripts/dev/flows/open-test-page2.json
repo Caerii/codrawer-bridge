@@ -1,0 +1,7 @@
+[
+  {"name": "not locked", "cmd": "state", "expect": {"ok": true, "state.locked": false}},
+  {"name": "open the test notebook", "cmd": "open", "title": "codrawer: test",
+   "after": {"cmd": "wait_for", "cond": "doc.title == codrawer: test", "timeout_ms": 8000}, "shot": true},
+  {"name": "go to page 2", "cmd": "goto", "page": 1,
+   "after": {"cmd": "wait_for", "cond": "page.index == 1", "timeout_ms": 5000}, "shot": true}
+]

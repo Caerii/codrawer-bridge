@@ -101,8 +101,9 @@ object per line:
   "strokes":[{"tool","argb","thickness","pts":[[x,y,pressure,width_px],…]}]}` in page units
   (x centred). The extension refuses any page but the visible one, any tool that is not ink, more
   than 64 strokes or 4000 points, and out-of-range points; it commits into the layer
-  `codrawer: agent`, after mapping page coordinates through the tile manager's
-  `sceneToViewTransform` (Probe 1 found that `addDrawingLine` takes the pen's frame). It waits
+  `codrawer: agent` in page coordinates, unmapped (`addDrawingLine` takes page coordinates:
+  verified on the device 2026-10-06 at pan and zoom; native-multiplayer-layer.md, Probe 1
+  item 4). It waits
   while the user's pen is down. Answer: `ok <id> <n>` or `err <id> <why>`.
 - **Text**: `{"op":"text_insert","id","text"}` puts text into the focused text item of the visible
   page, as an input method's commit (Return between lines); `{"op":"text_read","id"}` answers
@@ -146,3 +147,36 @@ Ink is `eraser=0` (tool 13 SharpPencilv2, 21 Calligraphy).
 
 The test layer and stroke are ordinary page content: undo them in xochitl, or delete the layer
 from the layers panel.
+
+## Measured on the device (2026-10-06)
+
+- **Idle cost of tool following.** xochitl over 60 s with hands off, the event-driven build
+  (signals plus a 2 s heartbeat): 7 ticks of CPU (utime+stime at 100 Hz, about 0.1 %) and 82
+  voluntary context switches. The 100 ms polling build measured 613 and 1589 ticks in two noisy
+  runs (another deploy in one, possibly the user's pen in the other), so the comparison is
+  indicative, not exact.
+- **The dock.** `tree match=name:toolbarLayout depth=1` showed the left toolbar as a GridLayout
+  of 112 × 112 ToolLoaders (`editingToolLoader_redoButton` at y 876). Injected after redo at run
+  time (no restart), the dock took the next cell (0,988 112×112) and the spacer below shrank by
+  112. The user tapped every entry: each `dock_action` reached the bridge's log, and
+  `ask_selection` carried the lasso's rect (`areaSelected(0, QRectF(-480.8,2982.8 209.9x331.9))`
+  on a scrolled page).
+
+## More socket lines
+
+- bridge → extension: `status <text>` (shown under "codrawer status"; the bridge sends it on
+  connect and when the dock's "Agent ink on/off" toggles native agent ink, a choice the bridge
+  keeps in `/home/root/codrawer/state/native_agent_ink`).
+- `text_insert` tries route A first: `SceneController.replaceText` on the page's focused root
+  text document, verified by `rootDocumentLength` (`ok … via=replace len a->b`, or `unverified`).
+  The focused item's input method (route B) is the fallback. `textprobe page=<uuid>` logs the
+  text API's state and the signatures of the text and image members (read-only).
+
+## Injection options and gates
+
+`inject.conf` lines may add `when=selection` (made right after a lasso, when the selection menu
+exists, instead of by the 2 s tick) and `inert=1` (taps are logged, never sent: a new button's
+first rollout). `qml/selection-ask.qml` ("Ask agent") is shipped but not yet listed: the first
+lasso after load logs the selection menu's tree, which decides its line. After each guarded start
+xovi.sh checks that `codrawer-layer.so` is mapped and that xochitl's journal holds no error from
+our QML; such an error writes `XOVI_NO_INJECT` (no injections; ink and text go on).
