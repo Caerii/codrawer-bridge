@@ -91,6 +91,24 @@ outside closes it and does nothing else):
   a `localhost` router makes a link that works on this computer only.
 - **Tablet address…** asks for the router address again (the same prompt as the first run) and
   reconnects to it at once.
+- **Export timelapse…** opens a row of options (length 10 / 20 / 40 s; paper or dark, the current
+  theme preselected) and *Record* replays the page stroke by stroke into a 1080×1440 video (720×960
+  on devices reporting ≤ 2 GB of memory) that ends on a 1.5 s hold of the finished page, with a
+  small "codrawer" wordmark in the corner. Strokes come in the order they were drawn, each at its
+  own relative pen speed (from the points' timestamps, evenly when there are none); long pauses
+  compress; the tablet's saved page, which has no times, is drawn first in file order. The frames
+  are the stage's own rendering (peers keep their colours). It records in real time ("Recording…
+  42%", with Cancel), as H.264 MP4 where the browser can (Safari, iOS WebViews, Chrome 126+) else
+  WebM, then downloads it, or on a phone offers *Share video* (the share sheet needs a fresh tap).
+  Disabled, with the reason as its tooltip, where MediaRecorder or `canvas.captureStream` is missing.
+- **Record session** keeps every message to and from the router (not the router's `ping`) with
+  its time, while a red dot shows in the toolbar; bounded at 50,000 messages or 32 M characters,
+  past which the oldest are dropped (the count shows in the item's tooltip). Switching it on again
+  starts afresh.
+- **Export recording (.jsonl)** saves what was recorded in the replay tools' format, one
+  `{"ts": <Unix ms>, "dir": "in"|"out", "msg": {...}}` per line, so a session replays into any router:
+  `uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://<router>/ws/<session>
+  --in <file>.jsonl --only-t-prefix stroke_ --max-gap-ms 400` (or `scripts/dev/replay_to.py`).
 - **Glasses diagnostics** and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
@@ -154,7 +172,8 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `session.ts` | ink, `page`, `clear`, `cursor`, `ai_*` → the store, the phone stage and dirty flags |
 | `actions.ts` | the app's verbs (follow/fit, emphasis, zoom, AI layer, new drawing, layout switches) |
 | `loop.ts` | the render loop |
-| `strokes.ts` | stroke store, rasterizer, loupe camera, PNG/Gray encoders |
+| `strokes.ts` | stroke store (with each live point's time), rasterizer, loupe camera, PNG/Gray encoders |
+| `timelapse.ts`, `recording.ts` | pure: timelapse pacing (stroke order, time mapping) and the recorder format pick; the session recording's bounded log and JSONL |
 | `glasses/layout.ts` | container sets for the canvas / text / edit layouts, menu ids |
 | `glasses/page.ts` | create / rebuild / retry the page, layout switches, `?probe=1`, stale-copy release |
 | `glasses/input.ts` | touchpad, ring and menu events → actions |
@@ -170,11 +189,12 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `phone/toolbar.ts`, `phone/views.ts`, `phone/mirror.ts` | connection chip, theme, Glasses panel; Follow/Fit/Page and the loupe box; mirroring the ring |
 | `phone/draw.ts`, `phone/camera.ts`, `phone/notices.ts` | drawing as a participant; camera backdrop; tablet notices and the pairing prompt |
 | `phone/menu.ts`, `phone/invite.ts`, `phone/palette.ts` | the toolbar's "⋯" menu; invite links; participant colours |
+| `phone/timelapse.ts`, `phone/recorder.ts`, `phone/share.ts` | timelapse frames and MediaRecorder, its menu row; the session recorder's link tap and toolbar dot; share sheet or download |
 | `phone/awake.ts`, `phone/devlog.ts`, `phone/panel.ts` | screen wake lock; dev console → `.codrawer/logs/phone.log`; Glasses panel status |
 
 Tests (`pnpm test`) cover the pure modules without the SDK: the store, collab, the scheduler, text
-pacing, reconnect policy, loupe geometry, view mirroring, the HUD text helpers, invite links and
-the palette.
+pacing, reconnect policy, loupe geometry, view mirroring, the HUD text helpers, invite links,
+the palette, timelapse pacing and the session recording's JSONL.
 
 ## What the SDK actually does (learned in the simulator)
 

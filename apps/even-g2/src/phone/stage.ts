@@ -17,8 +17,9 @@
  *   a soft dark halo so it reads over any scene. Drawing over the world.
  * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
  *   is then the background (paper or video), one blit, and the strokes still being drawn.
- * - Export: pagePng() draws the whole page at its own resolution the same way, for the phone
- *   menu's "Download page as PNG".
+ * - Export: paintPage() draws strokes onto a canvas that holds exactly the page, the same way:
+ *   pagePng() uses it for the phone menu's "Download page as PNG", phone/timelapse.ts for every
+ *   frame of "Export timelapse".
  */
 import type { Stroke, StrokeStore } from '../strokes'
 import { ERASER_TOOLS, WASH_TOOLS } from '../strokes'
@@ -34,7 +35,8 @@ export function parseRgba(c: string | undefined): [number, number, number, numbe
 export type Theme = 'paper' | 'dark'
 export type View = 'page' | 'focus' | 'follow'
 
-const THEMES: Record<Theme, { page: string; surround: string; ink: string; ai: string; edge: string; pointer: string }> = {
+/** Each theme's colours: the page, around it, default ink, AI ink, the page edge, the pen pointer. */
+export const THEMES: Record<Theme, { page: string; surround: string; ink: string; ai: string; edge: string; pointer: string }> = {
   // the reMarkable's warm off-white page and near-black ink
   paper: { page: '#f6f4ee', surround: '#e4e1d8', ink: '#1d1d1b', ai: '#3a6ea5', edge: 'rgba(0,0,0,0.10)', pointer: 'rgba(214,72,40,0.55)' },
   dark: { page: '#101410', surround: '#060806', ink: '#7ee787', ai: '#6aa9ff', edge: 'rgba(126,231,135,0.18)', pointer: 'rgba(255,190,90,0.6)' },
@@ -468,17 +470,7 @@ export class Stage {
     const ink = document.createElement('canvas')
     ink.width = w
     ink.height = h
-    const backdrop = this.backdrop
-    this.backdrop = null
-    this.exportSize = { w, h }
-    try {
-      const cam = { cx: this.pageAspect / 2, cy: 0.5, h: 1 } // exactly the page
-      const ictx = ink.getContext('2d')!
-      for (const s of this.store.all()) this.paintStroke(ictx, s, cam)
-    } finally {
-      this.backdrop = backdrop
-      this.exportSize = null
-    }
+    this.paintPage(ink.getContext('2d')!, this.store.all(), this.theme)
     const out = document.createElement('canvas')
     out.width = w
     out.height = h
@@ -487,6 +479,33 @@ export class Stage {
     ctx.fillRect(0, 0, w, h)
     ctx.drawImage(ink, 0, 0)
     return new Promise((resolve) => out.toBlob(resolve, 'image/png'))
+  }
+
+  /** The page's width / height (Paper Pro 1620/2160). */
+  get aspect(): number {
+    return this.pageAspect
+  }
+
+  /**
+   * Paint `strokes` (whole or partial copies of the store's) onto a transparent ink layer that
+   * holds exactly the page (its canvas at the page aspect), as the stage paints them on `theme`:
+   * the same widths, colours, washes and erasers, without the camera backdrop. pagePng() and the
+   * timelapse export (phone/timelapse.ts) draw through this, so exports look like the stage.
+   */
+  paintPage(ctx: CanvasRenderingContext2D, strokes: Iterable<Stroke>, theme: Theme = this.theme) {
+    const backdrop = this.backdrop
+    const was = this.theme
+    this.backdrop = null
+    this.theme = theme
+    this.exportSize = { w: ctx.canvas.width, h: ctx.canvas.height }
+    try {
+      const cam = { cx: this.pageAspect / 2, cy: 0.5, h: 1 } // exactly the page
+      for (const s of strokes) this.paintStroke(ctx, s, cam)
+    } finally {
+      this.backdrop = backdrop
+      this.theme = was
+      this.exportSize = null
+    }
   }
 
   /** True once after a handle drag (lets the page's tap handler ignore the drag's click). */

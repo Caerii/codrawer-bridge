@@ -15,7 +15,7 @@ export interface Stroke {
   id: string
   layer: Layer
   brush: string
-  /** [x, y, p] (t dropped); strokes from the tablet's saved page carry [x, y, p, w] */
+  /** [x, y, p] (t kept apart, in `times`); strokes from the tablet's saved page carry [x, y, p, w] */
   pts: number[][]
   done: boolean
   endedAt: number
@@ -23,6 +23,14 @@ export interface Stroke {
   box: [number, number, number, number]
   /** stroke_begin's ts (ms, the tablet's clock), for rebasing on a page snapshot */
   ts?: number
+  /** Unix ms on this device's clock when the stroke began here (live strokes; for timelapses) */
+  startedAt?: number
+  /**
+   * When each point was drawn, Unix ms, parallel to `pts` (live strokes; for timelapses): the
+   * point's own `t` where the sender stamped one (the sender's clock), else when it arrived here.
+   * Saved-page strokes have none: the .rm file keeps no times.
+   */
+  times?: number[]
   /** from the tablet's saved page (`page` message): exact tool, colour and size */
   fromPage?: boolean
   /** ADR 008 tool name (fineliner, ballpoint, …, highlighter, shader, eraser, erase_area) */
@@ -101,11 +109,13 @@ export class StrokeStore {
       old.done = false
       old.box = [1, 1, 0, 0]
       old.ts = ts
+      old.startedAt = Date.now()
+      old.times = []
       old.color = peer?.color ?? old.color
       old.author = peer?.author ?? old.author
       return
     }
-    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts, color: peer?.color, author: peer?.author })
+    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts, startedAt: Date.now(), times: [], color: peer?.color, author: peer?.author })
     this.order.push(id)
   }
 
@@ -177,11 +187,15 @@ export class StrokeStore {
       s = this.strokes.get(id)!
     }
     const b = s.box
+    const now = Date.now()
+    const times = (s.times ??= [])
     for (const p of pts) {
       if (!Array.isArray(p) || p.length < 2) continue
       const x = p[0]
       const y = p[1]
       s.pts.push([x, y, p.length >= 3 ? p[2] : 0.6])
+      // a sender's t is Unix ms (docs/protocol.md); anything else is not a time we can use
+      times.push(p.length >= 4 && typeof p[3] === 'number' && p[3] > 1e12 ? p[3] : now)
       this.nPoints++
       if (x < b[0]) b[0] = x
       if (y < b[1]) b[1] = y
