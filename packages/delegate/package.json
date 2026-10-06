@@ -1,0 +1,23 @@
+{
+  "name": "delegate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Delegation on paper (ADR 012): task cards laid out around the user's ink, and the semantic marks (circle, tick, strike, arrow, initials) that answer them",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "sequence": "tsx scripts/sequence.ts && uv run --with pillow python scripts/render_sequence.py"
+  },
+  "dependencies": {
+    "hand": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0"
+  }
+}
