@@ -269,3 +269,91 @@ xochitl scene  →  layer "codrawer: <name>",  addDrawingLine(Line)
   save-restore) we reuse.
 - Scratch (not committed): `…/scratchpad/xovi-research/` (xochitl binary, extracted QML, symbol and
   metatype dumps; inkling, xovi, rm-xovi-extensions clones).
+
+## Probe 0 / Probe 1: progress (2026-10-03)
+
+**Status: not yet run on the device.** The tablet was reachable at first. It then dropped off
+Wi-Fi, even though a kernel wake lock was held, before XOVI was installed. It was still
+unreachable some 30 minutes later. **Nothing was installed on the tablet.** No notebook was
+modified. This section records what was done and what was learned off-device.
+
+Done on the device (read-only):
+- Open document: **"Jerki"** (`523ba935-7a27-4fec-88a3-ae768aa1f596`). Open page index 1,
+  id `d07db0a2-a9e2-4ef4-a304-df88316512ce`. Its `.rm` is 424 B, and
+  `codrawer_bridge_native -page-dump` showed `"strokes":[]` (a fresh, empty page). The whole
+  document folder plus its `.content`/`.metadata`/`.local`/thumbnails was copied off with a
+  SHA256SUMS file. The copy is in the session scratchpad, not committed.
+- The `xochitl.service` unit has `WatchdogSec=60`, `StartLimitBurst=4` in 600 s and
+  `OnFailure=emergency.target`. A crash loop therefore ends in emergency mode. All work in the
+  extension is a short GUI-thread job.
+- glibc 2.43, libstdc++ 6.0.36, Qt 6.10.3 (Core, Gui, Qml, Quick, …). There is no
+  `/etc/systemd/system/xochitl.service.d`, so XOVI's tmpfs drop-in would not shadow anything.
+
+XOVI selection (verified, not installed):
+- The xovi.so is **v0.3.3**, sha256 `d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446`.
+  It is byte-identical in the asivery/xovi release and in the rm-xovi-extensions bundles
+  `v19-23052026` and `pre-v20-08092026`. Its `start` script has sha256 `bf15dfd6…829dc`.
+  Both hashes are the ones guibor/smart_remarkable pinned for 3.29.0.148.
+- Plan: a minimal tethered install under `/home/root/xovi`, containing only `xovi.so`,
+  `start`/`stock` and `codrawer-layer.so`. qt-resource-rebuilder stays out, because no `.qmd`
+  is used, so `rebuild_hashtable` is not needed. `start` tmpfs-mounts the drop-in, and a reboot
+  removes it.
+
+Static findings that change the plan for Probe 1 (from the 6.0.105 binary, `bridge/remarkable/xovi/codrawer-layer/main.cpp`):
+- **Route 1 (feed points through the pen pipeline) has no meta-callable entry.** I checked the
+  meta-strings of the pipeline classes:
+  - `ScenePenInputHandler` exposes only `setSelectionActive`, `queryIntermediateState` and
+    `setShapeDetection`, plus its tool/colour properties and signals.
+  - `PenInputHandler` exposes `lockMainThread`/`unlockMainThread`, `setTransform` and
+    `timeSincePenUp`.
+  - `PenInput` exposes `updateInRange` and `setFilterEvents`.
+  - `Digitizer` exposes `setStrokeRegion` and `setPenClose`.
+  - `PenInputSurfaceManager` exposes `registerInput` and `registerExclusion`.
+
+  Points reach the pipeline through C++ virtual calls from `PenInputThread`/`DigitizerRM1xx::run`,
+  which reads evdev. Route 1 would therefore need unexported virtuals called by vtable slot, or a
+  XOVI hook on libc `read` on the blocking digitizer thread. Both are what XOVI and inkling warn
+  against. Probe 0's `dump` will confirm this on the live build.
+- **Route 2 does not need a constructor called by address. A `Line` can be built from its data
+  layout.** This layout comes from static disassembly of the default constructor, move
+  constructor, `operator==` and destructor (all reached through its `QMetaTypeInterface`). The
+  probe re-checks it at run time.
+
+  | offset | content |
+  | --- | --- |
+  | 0 | colour (default 9 = ArgbCode) |
+  | 4 | tool |
+  | 8 | ARGB (default `0xff000000`) |
+  | 16 | `QList<Point>` (d, ptr, size) |
+  | 40 | thickness (double, default 1.0) |
+  | 48 | starting length (float) |
+  | 56 | bounding rect (QRectF) |
+  | 88 | total size |
+
+  A `Point` is 14 packed bytes, `f32 x, f32 y, u16 speed, u16 width, u8 direction, u8 pressure`,
+  which is exactly the `.rm` v6 point record. The destructor frees the list through
+  `QArrayData::deallocate(d, 14, …)`.
+
+  The probe builds the value as follows:
+  1. Create the `Line` with `QMetaType::fromName("Line")`, so xochitl's own default constructor
+     runs.
+  2. Check the default bytes against the table above.
+  3. Move a Qt-allocated `QList` into offset 16 and fill in the scalar fields.
+  4. Read the value back through the gadget's `tool`, `pointCount`, `boundingRect` and
+     `lineLength()`. If any check fails, it commits nothing.
+- The gadget has no `color`/`argb` property, only `tool`, `pointCount`, `isHighlighter`,
+  `isSelectionTool`, `isEraserTool`, `hasExportedColor`, `boundingRect` and `lineLength()`.
+  Colour and ARGB are verified through the raw layout.
+- Clipboard paste is not a route. The clipboard holds native `QList<std::shared_ptr<SceneItem>>`,
+  not serialized data.
+
+Next (when the tablet is awake; hold a wake lock **and** keep the screen awake):
+1. Install the minimal XOVI and run `xovi/start`.
+2. Confirm xochitl reopens "Jerki" at page `d07db0a2…`.
+3. Run `dump` (Probe 0), then `linetest`, then `pencolor page=… argb=ff1f6fe0`.
+4. Run `stroke page=d07db0a2-a9e2-4ef4-a304-df88316512ce` (Probe 1).
+5. Verify with `-page-dump`, and capture the display buffer with a read-only grabber.
+
+Open question: the wake lock alone did not keep the tablet on Wi-Fi. xochitl's own idle suspend
+probably ignores `/sys/power/wake_lock`. Check `systemd-inhibit --list` or the xochitl sleep
+setting next time.
