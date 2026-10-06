@@ -23,6 +23,7 @@ import {
   activeLearner,
 } from '../src/primer/model'
 import { mockActive, mockLine, parseMock } from '../src/primer/mock'
+import { listedMarks, markAt, markLabel, parseMarkup } from '../src/primer/marks'
 
 const step = (n: number, latex: string, text: string, status: string, extra: Record<string, unknown> = {}) => ({
   n,
@@ -218,4 +219,29 @@ test('a mock exam is parsed, and the glasses line counts down quietly', () => {
   const r = parseReading({ t: 'primer', mock: { status: 'awaiting_grading', phase: 'done', grade_after: now } })!
   assert.equal(mockLine(r.mock, now), 'Mock done · graded tomorrow morning')
   assert.deepEqual(primerRequest('mock_problem', 'nell', 1, { n: 2 }), { t: 'primer_request', what: 'mock_problem', learner: 'nell', ts: 1, n: 2 })
+})
+
+test("the teacher's marks: parsed, listed, and found under a tap", () => {
+  const m = parseMarkup({
+    layer: 'codrawer: teacher',
+    color: '#d03030',
+    marks: [
+      { id: 'mk1', kind: 'circle', step: 6, finding: 'sqrt2_no_lowest_terms', short: '', long: 'Never assumes p/q is in lowest terms. …', latex: '2 \\mid p', bbox: [0.5, 0.44, 0.83, 0.49], strokes: ['a1'] },
+      { id: 'mk2', kind: 'question', step: 6, short: '?', long: 'same', bbox: [0.83, 0.46, 0.84, 0.48], strokes: ['a2'] },
+      { id: 'mk3', kind: 'comment', step: 6, short: 'contradicts what?', long: 'same', bbox: [0.66, 0.42, 0.92, 0.44], strokes: ['a3'] },
+      { id: 'mk4', kind: 'arrow', step: 6, short: '', bbox: [0.7, 0.44, 0.71, 0.45], strokes: ['a4'] },
+      { id: 'mk5', kind: 'comment', step: 0, short: 'est.', bbox: [0.87, 0.07, 0.91, 0.08], strokes: [] },
+      { id: 'mk6', kind: 'score', step: 0, short: '2/10', long: 'Estimated…', bbox: 'bad', strokes: [] },
+    ],
+  })!
+  assert.equal(m.marks.length, 6)
+  assert.equal(m.marks[5].bbox, null)
+  assert.deepEqual(listedMarks(m).map((k) => k.id), ['mk1', 'mk2', 'mk3', 'mk6'])
+  assert.equal(markAt(m, 0.835, 0.47)?.id, 'mk2', 'the small "?" wins over the circle round it')
+  assert.equal(markAt(m, 0.6, 0.465)?.id, 'mk1')
+  assert.equal(markAt(m, 0.1, 0.9), null)
+  assert.equal(markLabel(m.marks[2]), 'Step 6 · comment · contradicts what?')
+  assert.equal(markLabel(m.marks[1]), 'Step 6 · ?')
+  const r = parseReading({ t: 'primer', markup: { marks: [{ id: 'x', kind: 'check', step: 2 }] } })!
+  assert.equal(r.markup?.marks[0].kind, 'check')
 })

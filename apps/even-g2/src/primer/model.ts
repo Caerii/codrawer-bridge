@@ -26,6 +26,7 @@
 // ── The reading ───────────────────────────────────────────────────────────────────────────────
 
 /** How a step stands: sound, a gap in rigor, wrong, or not legible enough to judge. */
+import { parseMarkup, type Markup } from './marks'
 import { parseMock, type MockView } from './mock'
 
 export type StepStatus = 'ok' | 'gap' | 'error' | 'unclear'
@@ -180,6 +181,8 @@ export interface Reading {
   coach: CoachView | null
   /** A mock exam's state (primer/mock.ts), when one exists. */
   mock: MockView | null
+  /** The teacher's marks announced with this reading (primer/marks.ts). */
+  markup: Markup | null
 }
 
 // ── Reading a message defensively ─────────────────────────────────────────────────────────────
@@ -334,6 +337,7 @@ export function parseReading(m: unknown): Reading | null {
     plan: parsePlan(o.plan),
     coach: parseCoach(o.coach),
     mock: parseMock(o.mock),
+    markup: parseMarkup(o.markup),
   }
 }
 
@@ -364,6 +368,7 @@ export function acceptReading(r: Reading): Reading {
         plan: r.plan ?? prev.plan,
         coach: r.coach ?? prev.coach,
         mock: r.mock ?? prev.mock,
+        markup: r.markup ?? (r.proof ? null : prev.markup),
       }
     : r
   primer.latest = merged
@@ -454,7 +459,7 @@ export function activeLearner(): string {
 
 // ── Requests ──────────────────────────────────────────────────────────────────────────────────
 
-export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off' | 'mock_start' | 'mock_problem' | 'mock_grade' | 'mock_stop' | 'mock_status'
+export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off' | 'mock_start' | 'mock_problem' | 'mock_grade' | 'mock_stop' | 'mock_status' | 'grade' | 'clear_marks'
 
 /** A `primer_request` for the active learner (or `learner`), stamped `ts` (Unix ms). */
 export function primerRequest(what: RequestWhat, learner = activeLearner(), ts = Date.now(), extra: Record<string, unknown> = {}) {

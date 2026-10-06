@@ -15,6 +15,11 @@
  *   Learner   the learner's name (who the requests are for), mastery, misconceptions seen, what is
  *             due for review, and deleting the learner's file on the desktop
  *
+ * Teacher's marks: when the Primer marks a proof up (Grade), its red-pen marks are drawn on the
+ * page as agent ink; the Proof tab lists them, and tapping one (in the list, or on the page while
+ * the panel is open) picks out its strokes and shows the long explanation with the step's LaTeX.
+ * "Show marks" hides or shows them as one layer; "Remove marks" takes them back for everyone.
+ *
  * Tapping a step picks out the strokes it was read from on the phone stage (Stage.highlight):
  * the step carries their `stroke_begin` ids and bounds. Tapping it again, or another reading,
  * clears it.
@@ -27,6 +32,7 @@
  * `trust: false`; nothing from the wire becomes markup.
  */
 import { link } from '../link'
+import { listedMarks, markAt, markLabel, TEACHER, type Mark } from './marks'
 import { mockLine } from './mock'
 import { stage } from '../phone/screen'
 import { shareOrDownload, stampedName } from '../phone/share'
@@ -59,6 +65,10 @@ let notice = ''
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 /** The inline confirm for deleting the learner file is open. */
 let confirmForget = false
+/** The teacher's mark whose explanation is open, or ''. */
+let openMark = ''
+/** The teacher's marks are shown on the page. */
+let marksShown = true
 
 // ── KaTeX, on first use ───────────────────────────────────────────────────────────────────────
 
@@ -123,6 +133,8 @@ function ask(what: RequestWhat) {
     coach_on: 'Asked the coach to start watching…',
     coach_off: 'Asked the coach to stop watching…',
     mock_start: 'Starting a mock exam…',
+    grade: 'Asked the Primer to mark up the page…',
+    clear_marks: 'Taking the marks back…',
     mock_grade: 'Asked the Primer to grade the mock now…',
     mock_stop: 'Stopping the mock…',
   }
@@ -207,16 +219,61 @@ function renderProof(r: Reading | null): HTMLElement[] {
     }
 
     out.push(h('div', `pcheck ${p.check.status}`, checkLine(p.check)))
+    out.push(...renderMarks(r))
   }
 
   const actions = h('div', 'pactions')
   actions.append(button('Read my proof', () => ask('proof'), 'go'))
+  actions.append(button('Mark it up', () => ask('grade')))
   actions.append(button('Hint', () => ask('hint')))
   const tex = button('Download .tex', () => void downloadTex())
   tex.disabled = !p?.tex
   actions.append(tex)
   out.push(actions)
   return out
+}
+
+/** The teacher's marks: a list; the open one shows its explanation and its step's LaTeX. */
+function renderMarks(r: Reading): HTMLElement[] {
+  const marks = listedMarks(r.markup)
+  if (!marks.length) return []
+  const box = h('div', 'pmarks')
+  box.append(h('div', 'plabel', "Teacher's marks"))
+  const ul = h('ul')
+  for (const k of marks) {
+    const li = h('li', `pmark${openMark === k.id ? ' open' : ''}`)
+    li.dataset.mark = k.id
+    li.tabIndex = 0
+    li.setAttribute('role', 'button')
+    li.append(h('span', 'pmarkhead', markLabel(k)))
+    if (openMark === k.id) {
+      if (k.long) li.append(h('div', 'ptext', k.long))
+      if (k.latex) li.append(math(k.latex, true))
+    }
+    ul.append(li)
+  }
+  box.append(ul)
+  const a = h('div', 'pactions')
+  a.append(
+    button(marksShown ? 'Hide marks' : 'Show marks', () => {
+      marksShown = !marksShown
+      stage.setAuthorHidden(TEACHER, !marksShown)
+      render()
+    }),
+  )
+  a.append(button('Remove marks', () => ask('clear_marks')))
+  box.append(a)
+  return [box]
+}
+
+/** Open a mark's explanation and pick out its strokes on the page; again to close. */
+function openMarkById(id: string) {
+  openMark = openMark === id ? '' : id
+  const k: Mark | undefined = openMark ? primer.latest?.markup?.marks.find((x) => x.id === openMark) : undefined
+  stage.highlight(k ? k.strokes : null, k?.bbox ?? null)
+  marked = 0
+  tab = 'proof'
+  render()
 }
 
 function renderPlan(r: Reading | null): HTMLElement[] {
@@ -520,8 +577,17 @@ export function setupPrimerPanel() {
     }
   ;(panel.querySelector('.pclose') as HTMLButtonElement).onclick = () => setPanelOpen(false)
   body.addEventListener('click', (e) => {
+    const mk = (e.target as HTMLElement).closest<HTMLElement>('.pmark')
+    if (mk?.dataset.mark) return openMarkById(mk.dataset.mark)
     const li = (e.target as HTMLElement).closest<HTMLElement>('.pstep')
     if (li) markStep(Number(li.dataset.step))
+  })
+  // A tap on a teacher's mark on the page, while the panel is open, explains it.
+  document.getElementById('stage')?.addEventListener('click', (e) => {
+    if (!isOpen() || !primer.latest?.markup) return
+    const [x, y] = stage.toPage(e)
+    const k = markAt(primer.latest.markup, x, y)
+    if (k) openMarkById(k.id)
   })
   body.addEventListener('keydown', (e) => {
     const li = (e.target as HTMLElement).closest<HTMLElement>('.pstep')

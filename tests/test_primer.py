@@ -786,3 +786,106 @@ def test_a_stopped_mock_is_not_graded_and_tutoring_resumes(tmp_path):
         assert sent[-1]["move"]["kind"] == "socratic"
 
     asyncio.run(go())
+
+
+# =============================================================================================
+# Teacher's markup
+# =============================================================================================
+
+
+def _assessed(name: str):
+    log = fixture_log(name)
+    doc = OfflineRecognizer().recognize(log)
+    assess.assess(doc)
+    return doc, log
+
+
+def test_marks_point_at_the_flawed_proofs_problems_without_fixing_them():
+    doc, _ = _assessed("sqrt2_flawed")
+    specs = markup.select_marks(doc)
+    kinds = {(s.kind, s.step) for s in specs}
+    assert ("caret", 1) in kinds  # where lowest terms should have been assumed
+    assert ("circle", 6) in kinds and ("question", 6) in kinds  # the "contradiction"
+    assert ("underline", 3) in kinds  # p² even ⇒ p even, unproved (minor)
+    assert {s.step for s in specs if s.kind == "check"} == {2, 4}  # the key steps that stand
+    comments = [s.short for s in specs if s.kind == "comment"]
+    assert all(len(c.split()) <= 8 for c in comments)
+    assert not any("gcd" in c or "= 1" in c for c in comments), "a pointer, never the fix"
+    score = next(s for s in specs if s.kind == "score")
+    assert score.short == "2/10" and "estimate" in score.long.lower()
+    summary = next(s for s in specs if s.kind == "summary")
+    assert summary.short.startswith("Good idea;") and summary.short.endswith("?")
+
+
+def test_a_complete_proof_gets_ticks_and_praise_and_an_unreadable_step_a_question():
+    doc, _ = _assessed("odd_sum")
+    specs = markup.select_marks(doc)
+    assert not [s for s in specs if s.kind in ("comment", "circle", "strike")]
+    assert any(s.kind == "check" for s in specs)
+    assert next(s for s in specs if s.kind == "summary").short.startswith("Complete")
+    doc.steps[2].status = "unclear"
+    doc.steps[2].confidence = 0.3
+    specs = markup.select_marks(doc)
+    assert any(s.kind == "comment" and s.short == markup.UNREADABLE and s.step == 3 for s in specs)
+
+
+def test_marks_land_on_free_paper():
+    for name in ("sqrt2_flawed", "sqrt2_correct", "odd_sum"):
+        doc, log = _assessed(name)
+        ink = [s.bbox() for s in log.ink()]
+        mk = markup.build(
+            doc, ink, markup.Renderer(), stroke_boxes={s.id: s.bbox() for s in log.ink()}
+        )
+        for m in mk.marks:
+            b = m.bbox
+            assert 0 <= b[0] <= b[2] <= 1 and 0 <= b[1] <= b[3] <= 1, (name, m)
+            if m.kind in ("comment", "question", "check", "score", "summary"):
+                assert not any(markup._hit(tuple(b), i) for i in ink), (name, m.kind, m.short)
+        texts = [m for m in mk.marks if m.kind in ("comment", "question", "score", "summary")]
+        for i, a in enumerate(texts):
+            for c in texts[i + 1 :]:
+                assert not markup._hit(tuple(a.bbox), tuple(c.bbox)), (name, a.short, c.short)
+        assert all(
+            m["layer"] == "ai"
+            and m["author"] == "primer:teacher"
+            and m["ink_layer"] == "codrawer: teacher"
+            for m in mk.messages
+            if m["t"] == "stroke_begin"
+        )
+
+
+def test_grading_from_the_agent_draws_marks_that_can_be_taken_back(tmp_path):
+    sent: list[dict] = []
+
+    async def send(m: dict) -> None:
+        sent.append(m)
+
+    agent = PrimerAgent(
+        send,
+        learner="x",
+        mode="offline",
+        store=LearnerStore(tmp_path),
+        renderer=markup.Renderer(),
+        markup_speed=0,
+    )
+
+    async def go():
+        for m in load_recording(FIXTURES / "sqrt2_flawed.jsonl"):
+            await agent.handle(m)
+        await agent.handle({"t": "dock_action", "id": "grade_page", "doc": "d", "page": "p"})
+        await agent.settle()
+        await agent.handle({"t": "primer_request", "what": "clear_marks"})
+
+    asyncio.run(go())
+    reading = next(m for m in sent if m.get("t") == "primer")
+    marks = reading["markup"]["marks"]
+    assert reading["markup"]["color"] == "#d03030" and any(m["kind"] == "caret" for m in marks)
+    ids = [
+        m["id"]
+        for m in sent
+        if m.get("t") == "stroke_begin" and m.get("author") == "primer:teacher"
+    ]
+    assert ids and sorted(ids) == sorted(i for mk in marks for i in mk["strokes"])
+    assert sent[-1]["t"] == "stroke_delete" and sorted(sent[-1]["ids"]) == sorted(ids)
+    tap = next(m for m in marks if m["kind"] == "circle")
+    assert tap["long"] and tap["latex"], "the phone gets the long explanation and the step's LaTeX"

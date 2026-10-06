@@ -28,8 +28,8 @@ from codrawer_bridge.protocol.constants import (
     T_TERM_PROMPT,
 )
 
-from .ai_worker import agentic_loop, ai_loop
 from . import primer_link
+from .ai_worker import agentic_loop, ai_loop
 from .config import get_settings
 from .rendering import render_context_patch_png_b64, render_page_png, simplify_polylines
 from .sessions import broadcast, broadcast_raw, get_session

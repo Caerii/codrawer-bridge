@@ -74,6 +74,8 @@ export class Stage {
   /** follow view: visible width as a fraction of the page width (the glasses' opts.window) */
   followWindow = 0.22
   showAi = false
+  /** agent ink by these authors is hidden (the Proof panel's "Show marks": author `primer:teacher`) */
+  hiddenAuthors = new Set<string>()
   /** the glasses loupe's view in normalized page coords [x0, y0, x1, y1]; null hides it */
   loupeRect: () => number[] | null = () => null
   /** the loupe box was resized to this width (fraction of the page width) */
@@ -190,6 +192,18 @@ export class Stage {
     ctx.restore()
   }
 
+  /** Agent ink from an author the viewer has hidden. */
+  private hides(s: Stroke): boolean {
+    return s.author !== undefined && this.hiddenAuthors.has(s.author)
+  }
+
+  /** Show or hide one author's agent ink as a layer; the page repaints. */
+  setAuthorHidden(author: string, hidden: boolean) {
+    if (hidden) this.hiddenAuthors.add(author)
+    else this.hiddenAuthors.delete(author)
+    this.invalidate()
+  }
+
   setTheme(t: Theme) {
     this.theme = t
     this.invalidate()
@@ -272,7 +286,7 @@ export class Stage {
     if (rf) [x0, y0, x1, y1] = rf
     else {
       for (const s of this.store.all()) {
-        if (s.layer === 'ai' && !this.showAi) continue
+        if (s.layer === 'ai' && (!this.showAi || this.hides(s))) continue
         if (s.pts.length === 0) continue
         x0 = Math.min(x0, s.box[0])
         y0 = Math.min(y0, s.box[1])
@@ -394,7 +408,7 @@ export class Stage {
 
   private paintStroke(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
     if (s.pts.length === 0) return
-    if (s.layer === 'ai' && !this.showAi) return
+    if (s.layer === 'ai' && (!this.showAi || this.hides(s))) return
     if (!this.history && fullyErased(s)) return
     if (s.fromPage) return this.paintPageStroke(ctx, s, cam)
     const eraser = s.brush === 'eraser'
