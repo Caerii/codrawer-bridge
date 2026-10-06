@@ -4,3 +4,6 @@
 # Scripts and units copied to the tablet must keep LF endings.
 *.sh eol=lf
 bridge/remarkable/boot/** eol=lf
+
+# Vendored XOVI: byte-exact (pinned hashes; start/stock are shell scripts that must keep LF)
+bridge/remarkable/xovi/vendor/** -text

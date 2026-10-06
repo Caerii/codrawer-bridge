@@ -37,7 +37,7 @@ from the dynamic symbol table, and xovi loaded the extension without ever callin
 
 `scripts/dev/deploy-tablet.sh` builds this extension (`build.sh`) and puts it in the release's
 `xovi/` with XOVI's `xovi.so`, `start` and `stock` (pinned by sha256, taken from
-`~/.codrawer/xovi`), all covered by the release signature. qt-resource-rebuilder is **not**
+vendored in `../vendor`), all covered by the release signature. qt-resource-rebuilder is **not**
 shipped, so no `rebuild_hashtable` is needed.
 
 On the tablet, `boot.sh start` (the boot stub) starts the bridge and then `codrawer-xovi.service`,

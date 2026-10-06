@@ -46,12 +46,13 @@ cp "$B"/units/*.service "$STAGE/units/"
 # starts it after boot under xovi.sh's gates and crash guard (docs/what-codrawer-changes.md).
 #   - xovi.so, start, stock: XOVI v0.3.3 from asivery/rm-xovi-extensions (release v19-23052026,
 #     xovi-aarch64.tar.gz, sha256 32d64d1262ddc984e3235c7d0340a398fe6d5b3efa6a979865f5977b32630d27;
-#     the pre-v20-08092026 tarball has the same three files). Not vendored in the repository: put
-#     them in $CODRAWER_XOVI_DIR (default ~/.codrawer/xovi); they are checked against the pins below.
+#     the pre-v20-08092026 tarball has the same three files), vendored in
+#     bridge/remarkable/xovi/vendor (LGPL-3.0; its README). $CODRAWER_XOVI_DIR overrides the
+#     directory; either way the files are checked against the pins below.
 #   - codrawer-layer.so: built here from bridge/remarkable/xovi/codrawer-layer (Docker).
 # All four or none: a release without the payload simply leaves the tablet stock (CODRAWER_SKIP_XOVI=1
 # skips it on purpose).
-XOVI_DIR="${CODRAWER_XOVI_DIR:-$KEYDIR/xovi}"
+XOVI_DIR="${CODRAWER_XOVI_DIR:-$ROOT/bridge/remarkable/xovi/vendor}"
 XOVI_PINS="d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446  xovi.so
 bf15dfd641deea3e4487b9182957938a3dc824c340383c9243b7f118bfe829dc  start
 e29494c9fff5ede390b06f1f5e27ca59e4f7bc81d25889822a123ccad1fd686d  stock"
