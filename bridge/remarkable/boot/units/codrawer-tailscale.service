@@ -1,0 +1,21 @@
+# Tailscale (tailscale.sh): tailscaled in userspace-networking mode, so nodes of the user's own
+# tailnet reach the tablet's listeners (the router on :8577) from anywhere. Installed into
+# /run/systemd/system by boot.sh at every boot and started with --no-block after the bridge, only
+# when /home/root/codrawer/tailscale/bin/tailscaled exists and the kill switch
+# /home/root/codrawer/TAILSCALE_DISABLED is absent (boot.sh tailscale off). Nothing depends on it.
+# Logs: journalctl -u codrawer-tailscale.
+[Unit]
+Description=codrawer: Tailscale (userspace networking) for remote access to the router
+After=network-online.target codrawer-bridge.service
+Wants=network-online.target
+RequiresMountsFor=/home/root
+ConditionPathExists=/home/root/codrawer/tailscale/bin/tailscaled
+ConditionPathExists=!/home/root/codrawer/TAILSCALE_DISABLED
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /home/root/codrawer/current/tailscale.sh run
+Restart=on-failure
+RestartSec=5

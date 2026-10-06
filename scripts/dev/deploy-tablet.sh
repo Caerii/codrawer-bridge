@@ -39,7 +39,7 @@ TOOL="$ROOT/.codrawer/codrawer-release.exe"
 (cd "$NATIVE" && go build -o "$TOOL" ./cmd/codrawer-release)
 B="$ROOT/bridge/remarkable/boot"
 cp "$B"/boot.sh "$B"/install.sh "$B"/bt-up.sh "$B"/keyboard-keeper.sh "$B"/run-bridge.sh "$B"/bridge.env.example \
-  "$B"/compat.conf "$B"/codrawer-boot.service "$B"/xovi.sh "$B"/xovi-compat.conf "$STAGE/"
+  "$B"/compat.conf "$B"/codrawer-boot.service "$B"/xovi.sh "$B"/xovi-compat.conf "$B"/tailscale.sh "$STAGE/"
 cp "$B"/units/*.service "$STAGE/units/"
 
 # The XOVI payload (xovi/ in the release, signed with the rest): boot.sh's codrawer-xovi unit

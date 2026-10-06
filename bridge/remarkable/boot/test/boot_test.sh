@@ -103,7 +103,7 @@ mkrel() { # mkrel <version> [bad|xovi]
   d=$R/releases/$1
   mkdir -p "$d/units"
   cp /work/boot/boot.sh /work/boot/install.sh /work/boot/bt-up.sh /work/boot/keyboard-keeper.sh /work/boot/run-bridge.sh \
-    /work/boot/xovi.sh /work/boot/xovi-compat.conf \
+    /work/boot/xovi.sh /work/boot/xovi-compat.conf /work/boot/tailscale.sh \
     /work/boot/bridge.env.example /work/boot/compat.conf /work/boot/codrawer-boot.service "$d/"
   cp /work/boot/units/*.service "$d/units/"
   cp /work/bridge "$d/codrawer_bridge_native"
@@ -218,7 +218,7 @@ pass "doctor"
 # down, the codrawer-xovi oneshot not yet run; then the stub's `boot.sh start`.
 boot_now() {
   xochitl_boot
-  for u in codrawer-bridge.service codrawer-bluetooth.service codrawer-xovi.service; do echo inactive > /tmp/units/$u; done
+  for u in codrawer-bridge.service codrawer-bluetooth.service codrawer-xovi.service codrawer-tailscale.service; do echo inactive > /tmp/units/$u; done
   : > /tmp/xovi.log
   sh $R/current/boot.sh start > /tmp/out 2>&1 || { cat /tmp/out; fail "boot.sh start"; }
   [ "$(cat /tmp/units/codrawer-bridge.service)" = active ] || fail "the bridge starts regardless of XOVI ($1)"
@@ -314,4 +314,75 @@ pass "boot.sh xovi off|on"
 /work/tool verify $R/releases/vx /tmp/pub > /dev/null || fail "payload is covered by the signed manifest"
 grep -q '  xovi/codrawer-layer.so$' $R/releases/vx/MANIFEST || fail "MANIFEST lists xovi/codrawer-layer.so"
 pass "payload signed"
+
+# ── Tailscale at boot (tailscale.sh) ────────────────────────────────────────────────────────
+# Stand-ins: tailscaled prints its arguments (tailscale.sh run execs it); the CLI answers like a
+# logged-in node (status --json, ip -4), or like one that needs a login with /tmp/ts-logged-out.
+TSB=$R/tailscale/bin
+ts_install() {
+  mkdir -p $TSB
+  printf '#!/bin/sh\necho TAILSCALED "$@"\n' > $TSB/tailscaled
+  cat > $TSB/tailscale <<'EOT'
+#!/bin/sh
+shift # --socket=…
+if [ -e /tmp/ts-logged-out ]; then
+  [ "$1" = status ] && printf '{\n  "BackendState": "NeedsLogin",\n  "Self": {\n    "DNSName": ""\n  }\n}\n'
+  [ "$1" = ip ] && exit 1
+  exit 0
+fi
+[ "$1" = status ] && printf '{\n  "BackendState": "Running",\n  "Self": {\n    "DNSName": "remarkable.tail0000.ts.net."\n  }\n}\n'
+[ "$1" = ip ] && echo 100.64.0.7
+exit 0
+EOT
+  chmod -x $TSB/tailscaled; chmod +x $TSB/tailscale # run (test 22) needs no exec bit; it sets both
+}
+ts_state() { cat /tmp/units/codrawer-tailscale.service 2>/dev/null || echo inactive; }
+
+# 20. not installed: never started, the bridge starts regardless (boot_now checks it)
+rm -rf $R/tailscale $R/TAILSCALE_DISABLED
+boot_now "tailscale not installed"
+[ "$(ts_state)" = inactive ] || fail "tailscale not started when not installed"
+[ -f /run/systemd/system/codrawer-tailscale.service ] || fail "tailscale unit copied into /run"
+sh $R/current/boot.sh doctor | grep -q '^tailscale=not installed$' || fail "doctor: tailscale not installed"
+pass "tailscale: not installed, skipped"
+
+# 21. installed: started after the bridge; doctor shows the address and name
+ts_install
+boot_now "tailscale installed"
+[ "$(ts_state)" = active ] || fail "tailscale started when installed"
+sh $R/current/boot.sh doctor | grep -q '^tailscale=up 100.64.0.7 remarkable.tail0000.ts.net$' ||
+  { sh $R/current/boot.sh doctor; fail "doctor: tailscale up"; }
+touch /tmp/ts-logged-out
+sh $R/current/boot.sh doctor | grep -q '^tailscale=needs login' || fail "doctor: tailscale needs login"
+rm /tmp/ts-logged-out
+pass "tailscale: installed, started"
+
+# 22. the unit's process: userspace networking, codrawer's socket and state dir (no exec bits needed)
+out=$(sh $R/current/tailscale.sh run)
+echo "$out" | grep -q "^TAILSCALED --tun=userspace-networking --statedir=$R/tailscale/state --socket=/run/codrawer/tailscaled.sock$" ||
+  fail "tailscaled flags ($out)"
+pass "tailscale: tailscaled in userspace-networking mode"
+
+# 23. a release switch never stops it (stop/activate/rollback leave the tailnet up)
+sh $R/current/boot.sh stop
+[ "$(ts_state)" = active ] || fail "boot.sh stop leaves tailscale running"
+pass "tailscale: kept across stop"
+
+# 24. kill switch: skipped at boot, and `run` refuses too; the bridge still starts
+echo test > $R/TAILSCALE_DISABLED
+boot_now "tailscale kill switch"
+[ "$(ts_state)" = inactive ] || fail "kill switch keeps tailscale stopped"
+sh $R/current/tailscale.sh run | grep -q 'disabled' || fail "run honours the kill switch"
+sh $R/current/boot.sh doctor | grep -q '^tailscale=disabled$' || fail "doctor: tailscale disabled"
+rm $R/TAILSCALE_DISABLED
+pass "tailscale: kill switch"
+
+# 25. boot.sh tailscale off / on
+boot_now "before tailscale off/on"
+sh $R/current/boot.sh tailscale off > /dev/null
+[ "$(ts_state)" = inactive ] && [ -e $R/TAILSCALE_DISABLED ] || fail "tailscale off: stopped + kill switch"
+sh $R/current/boot.sh tailscale on > /dev/null
+[ "$(ts_state)" = active ] && [ ! -e $R/TAILSCALE_DISABLED ] || fail "tailscale on: kill switch gone, started"
+pass "boot.sh tailscale off|on"
+rm -rf $R/tailscale
 echo "all boot.sh tests passed"

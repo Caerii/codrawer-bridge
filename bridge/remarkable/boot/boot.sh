@@ -10,6 +10,8 @@
 #   ack-os            forget the "OS changed" notice (after the app showed it)
 #   xovi on|off       XOVI at boot (xovi.sh): off = stock xochitl now + kill switch XOVI_DISABLED;
 #                     on = remove the kill switch and start XOVI under xovi.sh's gates
+#   tailscale on|off  Tailscale at boot (tailscale.sh): off = stop it + kill switch
+#                     TAILSCALE_DISABLED (the login is kept); on = remove the kill switch, start
 #
 # Layout (docs/investigations/durable-install.md §6.1):
 #   /home/root/codrawer/{bridge.env,release.pub,DISABLED?,state/,current,previous,releases/<ver>/}
@@ -28,12 +30,18 @@
 #   - XOVI (the codrawer-layer extension inside xochitl) is optional and never in the boot path:
 #     start brings the bridge up first, then only asks systemd, without waiting, to run the
 #     codrawer-xovi unit, whose xovi.sh has its own gates and crash guard.
+#   - Tailscale (remote access to the router over the user's own tailnet) is optional in the same
+#     way: started after the bridge, without waiting, only when its binaries are installed in
+#     /home/root/codrawer/tailscale and TAILSCALE_DISABLED is absent (tailscale.sh gate). It is
+#     never stopped or restarted by stop, activate or rollback, so a deploy over the tailnet keeps
+#     its connection.
 set -u
 ROOT=/home/root/codrawer
 REL=$(cd "$(dirname "$0")" && pwd)
 STATE=$ROOT/state
 UNITS="codrawer-bluetooth.service codrawer-bridge.service"
 XOVI_UNIT=codrawer-xovi.service # not in UNITS: stop and restart must never touch xochitl
+TS_UNIT=codrawer-tailscale.service # not in UNITS either: a release switch keeps the tailnet up
 mkdir -p "$STATE"
 
 # os_version: the reMarkable release (IMG_VERSION, e.g. 3.29.0.149), else the Codex base version.
@@ -67,7 +75,7 @@ start() {
   # files copied from Windows (scp) arrive without the executable bit; every path through start
   # (first install, activate, rollback, boot) must be able to run them
   chmod +x "$REL/codrawer_bridge_native" "$REL/codrawer_bridge_rs" "$REL"/*.sh 2> /dev/null || true
-  for u in $UNITS $XOVI_UNIT; do
+  for u in $UNITS $XOVI_UNIT $TS_UNIT; do
     [ -f "$REL/units/$u" ] && cp "$REL/units/$u" "/run/systemd/system/$u"
   done
   systemctl daemon-reload
@@ -79,6 +87,10 @@ start() {
   # XOVI after the bridge, once per boot: `start` on a oneshot that already ran is a no-op, so an
   # activate or rollback does not restart xochitl. xovi.sh decides whether XOVI runs at all.
   [ -f "$REL/units/$XOVI_UNIT" ] && systemctl --no-block start "$XOVI_UNIT"
+  # Tailscale likewise, under its gates; `start` leaves a running tailscaled alone.
+  if [ -f "$REL/units/$TS_UNIT" ] && sh "$REL/tailscale.sh" gate; then
+    systemctl --no-block start "$TS_UNIT"
+  fi
   echo "codrawer $(version_of "$REL") started (OS $os, tested=$tested)"
 }
 
@@ -121,6 +133,7 @@ doctor() {
   for u in $UNITS; do echo "${u%.service}=$(systemctl is-active "$u" 2>/dev/null)"; done
   echo "healthy=$(healthy && echo 1 || echo 0)"
   if [ -f "$ROOT/current/xovi.sh" ]; then sh "$ROOT/current/xovi.sh" status; else echo "xovi=payload missing"; fi
+  if [ -f "$ROOT/current/tailscale.sh" ]; then sh "$ROOT/current/tailscale.sh" status; else echo "tailscale=not in this release"; fi
 }
 
 # rollback [--no-check]: swap current and previous, restart, and (unless --no-check, as when
@@ -195,5 +208,11 @@ case "${1:-}" in
       *) echo "usage: boot.sh xovi on|off" >&2; exit 2 ;;
     esac
     ;;
-  *) echo "usage: boot.sh start|stop|doctor|activate <version>|rollback|ack-os|xovi on|off" >&2; exit 2 ;;
+  tailscale)
+    case "${2:-}" in
+      on | off) sh "$REL/tailscale.sh" "$2" ;;
+      *) echo "usage: boot.sh tailscale on|off" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "usage: boot.sh start|stop|doctor|activate <version>|rollback|ack-os|xovi on|off|tailscale on|off" >&2; exit 2 ;;
 esac
