@@ -19,6 +19,9 @@
 //!   were erased), and replays it before the live strokes recorded after it (see `session`).
 //! - A pen source can join with `?replay=0` (the bridge does). When a client leaves mid-stroke
 //!   its open strokes are ended for everyone.
+//! - `stroke_delete` takes strokes back: a client may delete the strokes it began, and anyone
+//!   may delete `ai`-layer ink. Deleted strokes leave the replay, so late joiners never see them
+//!   (`Session::delete_strokes`).
 //!
 //! Shared live editing: clients keep the session document as a Yjs CRDT and send
 //! `{"t":"doc_update","u":<base64>}`. The router never decodes them; it relays each one, keeps the

@@ -4,9 +4,14 @@
  * Mirrors the codrawer-bridge protocol (docs/protocol.md): points are normalized
  * [x, y, p, t?] in [0,1]; user ink and AI ink live on separate layers and the AI
  * never overwrites user ink. Rendering is client-side, as the protocol requires.
+ *
+ * The tablet's eraser (live strokes with brush `eraser`) is applied as data: each batch of its
+ * points cuts the tablet's earlier ink, the way xochitl cuts it (erase.ts), so every renderer
+ * shows the erase at once instead of when the tablet next saves the page.
  */
 
 import { zlibSync } from 'fflate'
+import { DEFAULT_ERASE_RADIUS, EraseIndex, PAGE_H, PAGE_W, emptyBox, fullyErased, type Box } from './erase'
 
 /** user: the tablet's own ink · peer: another participant (phone, web, …) · ai: agent ink */
 export type Layer = 'user' | 'ai' | 'peer'
@@ -41,6 +46,16 @@ export interface Stroke {
   size?: number
   /** participant who drew it (peer layer) */
   author?: string
+  /** drawing order (larger = later); an eraser cuts only strokes with a smaller `seq` */
+  seq?: number
+  /** stroke_end's ts (ms, the tablet's clock): a save after it holds the stroke (applyPage) */
+  endTs?: number
+  /**
+   * Points an eraser removed, parallel to `pts` (1 = gone), and how many: the tablet's erase
+   * predicted until its saved page arrives (erase.ts). Absent on strokes nothing has cut.
+   */
+  gone?: Uint8Array
+  goneCount?: number
 }
 
 /** A `page` message (docs/protocol.md): the tablet's saved page, authoritative up to `rev`. */
@@ -50,6 +65,9 @@ export interface PageMessage {
   page: string
   title?: string
   rev: number
+  /** the page size in page px (Paper Pro 1620 × 2160) */
+  w?: number
+  h?: number
   strokes: { id: string; tool?: string; color?: number; rgba?: string; size?: number; pts: number[][] }[]
 }
 
@@ -97,8 +115,25 @@ export class StrokeStore {
   lastPoint: [number, number] | null = null
   /** the tablet page the snapshot strokes belong to (null: no `page` message yet) */
   page: { doc: string; page: string; title?: string; rev: number } | null = null
+  /** the tablet eraser's radius, page px (erase.ts; `?eraser=` overrides it) */
+  eraseRadius = DEFAULT_ERASE_RADIUS
+  /** erase prediction on (`?erase=0` turns it off: erasers then show only when the page saves) */
+  predictErase = true
+  private nextSeq = 0
+  /** where the tablet's finished ink is, for the eraser; rebuilt lazily when `indexStale` */
+  private index = new EraseIndex()
+  private indexStale = true
+  private pageSize: [number, number] = [PAGE_W, PAGE_H]
+
+  /**
+   * Ids removed by a `stroke_delete`, so points still in flight for them (a stroke deleted while
+   * being drawn) do not bring them back through {@link points}' implicit begin. A new
+   * stroke_begin with the same id is a new stroke and lifts it. Bounded: the oldest are forgotten.
+   */
+  private deleted = new Set<string>()
 
   begin(id: string, layer: Layer, brush = 'pen', ts?: number, peer?: { color?: string; author?: string }) {
+    this.deleted.delete(id)
     const old = this.strokes.get(id)
     if (old) {
       // Seen before (a router replaying the page after a reconnect): restart it in place.
@@ -109,22 +144,79 @@ export class StrokeStore {
       old.done = false
       old.box = [1, 1, 0, 0]
       old.ts = ts
+      old.endTs = undefined
+      old.gone = undefined
+      old.goneCount = undefined
       old.startedAt = Date.now()
       old.times = []
       old.color = peer?.color ?? old.color
       old.author = peer?.author ?? old.author
+      this.indexStale = true // its points will change
       return
     }
-    this.strokes.set(id, { id, layer, brush, pts: [], done: false, endedAt: 0, box: [1, 1, 0, 0], ts, startedAt: Date.now(), times: [], color: peer?.color, author: peer?.author })
+    this.strokes.set(id, {
+      id,
+      layer,
+      brush,
+      pts: [],
+      done: false,
+      endedAt: 0,
+      box: [1, 1, 0, 0],
+      ts,
+      startedAt: Date.now(),
+      times: [],
+      color: peer?.color,
+      author: peer?.author,
+      seq: this.nextSeq++,
+    })
     this.order.push(id)
   }
 
   /**
+   * Whether `s` is ink the tablet's eraser can cut: the tablet's own (layer `user`), not an
+   * eraser itself, drawn before the eraser `by`.
+   */
+  private erasable(s: Stroke, by: Stroke): boolean {
+    return s.layer === 'user' && s.brush !== 'eraser' && (s.seq ?? 0) < (by.seq ?? 0)
+  }
+
+  /**
+   * Apply an eraser's points from index `from` on: each new point, joined to the one before it,
+   * cuts the ink it passes over. Returns the region whose ink changed (normalized), or null.
+   */
+  private eraseWith(eraser: Stroke, from: number): Box | null {
+    if (!this.predictErase || eraser.pts.length === 0) return null
+    if (this.indexStale) {
+      this.index.reset(this.pageSize[0], this.pageSize[1])
+      for (const id of this.order) {
+        const s = this.strokes.get(id)
+        if (s && s.done && s.layer === 'user' && s.brush !== 'eraser') this.index.add(s)
+      }
+      this.indexStale = false
+    }
+    const dirty = emptyBox()
+    const accept = (s: Stroke) => this.erasable(s, eraser)
+    const r = this.eraseRadius
+    const pts = eraser.pts
+    let removed = 0
+    for (let i = Math.max(0, from); i < pts.length; i++) {
+      const a = pts[i > 0 ? i - 1 : 0]
+      const b = pts[i]
+      removed += this.index.cutSegment(a[0], a[1], b[0], b[1], r, accept, dirty)
+    }
+    return removed > 0 ? dirty : null
+  }
+
+  /**
    * Make the tablet's saved page the base. The snapshot holds every stroke saved up to `rev`
-   * (erased ones are absent), so earlier snapshot strokes go, live user strokes go unless they
-   * began after `rev` (drawn since the save, in no file yet), and the snapshot's strokes come
-   * first, then the kept live ones. On a different page (or document) the AI layer goes too:
-   * it was drawn over the other page. Returns whether the page changed.
+   * (erased ones are absent, cut ones are in pieces), so earlier snapshot strokes go, live user
+   * strokes go unless the save cannot hold them, and the snapshot's strokes come first, then the
+   * kept live ones. xochitl commits a stroke (ink or erase) when the pen lifts, so a live stroke
+   * stays if it began after `rev`, or ended after it, or has not ended: a save taken while the pen
+   * was down does not have it. Erasers kept that way are applied again to the snapshot's strokes,
+   * so erased ink does not come back while the tablet has yet to save the erase. On a different
+   * page (or document) the AI layer goes too: it was drawn over the other page. Returns whether
+   * the page changed.
    */
   applyPage(m: PageMessage): boolean {
     const changed = !this.page || this.page.doc !== m.doc || this.page.page !== m.page
@@ -134,8 +226,10 @@ export class StrokeStore {
       const s = this.strokes.get(id)
       if (!s) continue
       // other participants' and the AI's ink is never in the tablet's file: it stays while the
-      // page stays; the tablet's own live ink stays only if it began after the save
-      const keepIt = s.layer !== 'user' ? !changed : !s.fromPage && s.ts !== undefined && s.ts > rev
+      // page stays; the tablet's own live ink stays only if the save cannot hold it
+      // (only the tablet's strokes carry its clock; one without a ts cannot be placed after a save)
+      const unsaved = s.ts !== undefined && (!s.done || s.ts > rev || (s.endTs !== undefined && s.endTs > rev))
+      const keepIt = s.layer !== 'user' ? !changed : !s.fromPage && unsaved
       if (keepIt) keep.push(id)
       else {
         this.nPoints -= s.pts.length
@@ -177,15 +271,33 @@ export class StrokeStore {
     this.order = [...new Set(fresh), ...keep]
     this.page = { doc: m.doc, page: m.page, title: m.title, rev }
     if (changed) this.lastPoint = null
+    // the snapshot's strokes come first in drawing order, the kept live ones after them
+    this.order.forEach((id, i) => (this.strokes.get(id)!.seq = i))
+    this.nextSeq = this.order.length
+    this.pageSize = [Number(m.w) > 0 ? Number(m.w) : PAGE_W, Number(m.h) > 0 ? Number(m.h) : PAGE_H]
+    this.indexStale = true
+    // erasers the save does not hold yet cut the snapshot's strokes again (and are idempotent on
+    // the kept live strokes they had already cut)
+    for (const id of keep) {
+      const s = this.strokes.get(id)!
+      if (s.layer === 'user' && s.brush === 'eraser') this.eraseWith(s, 0)
+    }
     return changed
   }
 
-  points(id: string, pts: number[][], layerHint: Layer) {
+  /**
+   * Live points for a stroke. Points of the tablet's eraser (layer `user`, brush `eraser`) cut the
+   * ink they pass over at once; the return value is then the region whose ink changed (normalized
+   * page coords), for renderers that repaint by region. Null when no ink changed.
+   */
+  points(id: string, pts: number[][], layerHint: Layer): Box | null {
     let s = this.strokes.get(id)
     if (!s) {
+      if (this.deleted.has(id)) return null // deleted mid-stroke: its late points stay deleted
       this.begin(id, layerHint)
       s = this.strokes.get(id)!
     }
+    const from = s.pts.length
     const b = s.box
     const now = Date.now()
     const times = (s.times ??= [])
@@ -203,13 +315,18 @@ export class StrokeStore {
       if (y > b[3]) b[3] = y
       if (s.layer === 'user') this.lastPoint = [x, y]
     }
+    return s.layer === 'user' && s.brush === 'eraser' && !s.done ? this.eraseWith(s, from) : null
   }
 
-  end(id: string) {
+  /** stroke_end: `ts` is the sender's (the tablet's clock, ms), kept for rebasing on a save. */
+  end(id: string, ts?: number) {
     const s = this.strokes.get(id)
     if (s) {
       s.done = true
       s.endedAt = Date.now()
+      if (typeof ts === 'number' && ts > 0) s.endTs = ts
+      // finished tablet ink becomes something a later eraser can cut
+      if (!this.indexStale && s.layer === 'user' && s.brush !== 'eraser') this.index.add(s)
     }
   }
 
@@ -218,10 +335,39 @@ export class StrokeStore {
     for (const s of this.strokes.values()) if (!s.done) this.end(s.id)
   }
 
+  /**
+   * A `stroke_delete` (docs/protocol.md): forget these strokes. Unknown ids are ignored. Returns
+   * the ids that were here, so callers redraw only when something went. Who may delete what is
+   * the router's rule (a client its own strokes, anyone the `ai` layer); a client applies what
+   * the router relays, and its own deletes before sending them.
+   */
+  remove(ids: readonly string[]): string[] {
+    const gone: string[] = []
+    for (const id of ids) {
+      if (typeof id !== 'string') continue
+      const s = this.strokes.get(id)
+      this.deleted.add(id)
+      if (this.deleted.size > MAX_STROKES) this.deleted.delete(this.deleted.values().next().value as string)
+      if (!s) continue
+      this.nPoints -= s.pts.length
+      this.strokes.delete(id)
+      gone.push(id)
+    }
+    if (gone.length) this.order = this.order.filter((id) => this.strokes.has(id))
+    return gone
+  }
+
+  /** Whether the store holds a stroke with this id. */
+  has(id: string): boolean {
+    return this.strokes.has(id)
+  }
+
   /** Drop every stroke, or only one layer's. */
   clear(layer?: Layer) {
+    this.indexStale = true
     if (!layer) {
       this.strokes.clear()
+      this.deleted.clear()
       this.order = []
       this.nPoints = 0
       this.lastPoint = null
@@ -248,7 +394,10 @@ export class StrokeStore {
       this.strokes.delete(s.id)
       dropped++
     }
-    if (dropped) this.order = this.order.slice(dropped)
+    if (dropped) {
+      this.order = this.order.slice(dropped)
+      this.indexStale = true
+    }
     return dropped > 0
   }
 
@@ -279,8 +428,12 @@ function inkBounds(strokes: Stroke[]): [number, number, number, number] | null {
   let y1 = 0
   let any = false
   for (const s of strokes) {
-    if (s.tool && ERASER_TOOLS.has(s.tool)) continue
-    for (const p of s.pts) {
+    // erasers leave no ink, and ink they removed no longer counts
+    if (s.brush === 'eraser' || (s.tool && ERASER_TOOLS.has(s.tool))) continue
+    const gone = s.goneCount ? s.gone : undefined
+    for (let i = 0; i < s.pts.length; i++) {
+      if (gone && gone[i]) continue
+      const p = s.pts[i]
       any = true
       if (p[0] < x0) x0 = p[0]
       if (p[1] < y0) y0 = p[1]
@@ -349,12 +502,18 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
   const map = makeMapper(o, store)
   const follow = o.mode === 'follow'
   const win = follow ? followWindow(o, store) : null
+  let eraser: Stroke | null = null
   for (const s of store.all()) {
-    if (s.pts.length < 2) continue
+    // Erasers leave no ink of their own: the saved page's are already applied to it, and a live
+    // one has cut the ink it passed over (erase.ts). A live one shows as its outline (below).
+    if (s.brush === 'eraser' || (s.tool && ERASER_TOOLS.has(s.tool))) {
+      if (!s.done && !s.fromPage && s.pts.length) eraser = s
+      continue
+    }
+    if (s.pts.length < 2 || fullyErased(s)) continue
     if (s.layer === 'ai' && o.showAi === false) continue
     if (win && (s.box[2] < win[0] || s.box[0] > win[2] || s.box[3] < win[1] || s.box[1] > win[3])) continue
-    // the saved page's eraser strokes leave no ink: their effect is already in the page
-    if (s.fromPage && s.tool && ERASER_TOOLS.has(s.tool)) continue
+    const gone = s.goneCount ? s.gone : undefined
     // Emphasis must survive a 1-bit render (the simulator thresholds grey to
     // full green), so the de-emphasised layer is dashed as well as dimmer.
     // Highlighter and shader washes are faint and dashed: the HUD has no translucency, and a
@@ -367,38 +526,61 @@ export function rasterize(ctx: CanvasRenderingContext2D, store: StrokeStore, o: 
     ctx.setLineDash(wash ? [1, 4] : !emphasised ? [2, 3] : s.layer === 'peer' ? [4, 2] : [])
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    if (s.brush === 'eraser' && s.layer === 'user') {
-      ctx.strokeStyle = '#000'
-    }
     // Canvas applies one lineWidth per path, so pressure needs a path per run of points with
     // the same (quantized) width. The floor keeps thin lines solid after binarization.
-    const widthOf = (p: number) => {
-      const w = follow ? 1 + 2.5 * p : 1.3 + 1.2 * p
-      return Math.round((s.brush === 'eraser' ? w * 6 : w) * 2) / 2
-    }
-    let [px, py] = map(s.pts[0][0], s.pts[0][1])
-    let width = widthOf(s.pts[0][2])
-    ctx.lineWidth = width
+    const widthOf = (p: number) => Math.round((follow ? 1 + 2.5 * p : 1.3 + 1.2 * p) * 2) / 2
+    // erased points break the line: the path resumes at the next surviving point
+    let open = false
+    let px = 0
+    let py = 0
+    let width = 0
     ctx.beginPath()
-    ctx.moveTo(px, py)
-    for (let i = 1; i < s.pts.length; i++) {
+    for (let i = 0; i < s.pts.length; i++) {
+      if (gone && gone[i]) {
+        open = false
+        continue
+      }
       const p = s.pts[i]
       const [qx, qy] = map(p[0], p[1])
       const w = widthOf(p[2])
-      if (w !== width) {
-        ctx.stroke()
-        width = w
-        ctx.lineWidth = w
-        ctx.beginPath()
-        ctx.moveTo(px, py)
+      if (!open) {
+        if (w !== width) {
+          ctx.stroke()
+          width = w
+          ctx.lineWidth = w
+          ctx.beginPath()
+        }
+        ctx.moveTo(qx, qy)
+        open = true
+      } else {
+        if (w !== width) {
+          ctx.stroke()
+          width = w
+          ctx.lineWidth = w
+          ctx.beginPath()
+          ctx.moveTo(px, py)
+        }
+        ctx.lineTo(qx, qy)
       }
-      ctx.lineTo(qx, qy)
       px = qx
       py = qy
     }
     ctx.stroke()
   }
   ctx.setLineDash([])
+  if (eraser && eraser.layer === 'user') {
+    // the tablet's eraser, as the circle it sweeps (its true radius, scaled to this view)
+    const last = eraser.pts[eraser.pts.length - 1]
+    const [cx, cy] = map(last[0], last[1])
+    const [ex] = map(last[0] + store.eraseRadius / PAGE_W, last[1])
+    ctx.strokeStyle = 'rgb(180,180,180)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 2])
+    ctx.beginPath()
+    ctx.arc(cx, cy, Math.max(2, ex - cx), 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
   if (o.marker) {
     const [ax, ay] = map(o.marker[0], o.marker[1])
     const [bx, by] = map(o.marker[2], o.marker[3])

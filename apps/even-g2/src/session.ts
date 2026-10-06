@@ -2,8 +2,9 @@
  * The session's page, kept in step with the router: ink, the tablet's saved page, the agent.
  *
  * Every client renders the page itself from strokes (docs/protocol.md): the tablet's bridge sends
- * the user's ink as `stroke_begin` / `stroke_pts` / `stroke_end`, the agent's as `ai_stroke_*`,
- * other participants' on the `peer` layer. The handlers here apply each message to the shared
+ * the user's ink as `stroke_begin` / `stroke_pts` / `stroke_end`, the agent's as `ai_stroke_*`
+ * (or stroke_* on the `ai` layer), other participants' on the `peer` layer; `stroke_delete` takes
+ * strokes back. The handlers here apply each message to the shared
  * store (state.ts), poke the phone stage, and raise the dirty flags that make the render loop
  * send the glasses what changed:
  *
@@ -53,23 +54,33 @@ export function onCursor(m: Inbound['cursor']) {
   else if (typeof m.x === 'number' && typeof m.y === 'number') stage.setPointer(m.x, m.y, m.tool === 'eraser' ? 'eraser' : 'pen')
 }
 
-/** `stroke_begin`: no frame yet; the first stroke_pts carries the first ink. */
+/**
+ * `stroke_begin`: no frame yet; the first stroke_pts carries the first ink. Agents on routers
+ * that carry no `ai_stroke_*` (the tablet's) draw with stroke_* on the `ai` layer; their ink, like
+ * a peer's, may name its colour and author.
+ */
 export function onStrokeBegin(m: Inbound['stroke_begin']) {
+  const layer = m.layer === 'peer' || m.layer === 'ai' ? m.layer : 'user'
   store.begin(
     m.id,
-    m.layer === 'peer' ? 'peer' : 'user',
+    layer,
     m.brush || 'pen',
     typeof m.ts === 'number' ? m.ts : undefined,
-    m.layer === 'peer' ? { color: typeof m.color === 'string' ? m.color : undefined, author: m.author } : undefined,
+    layer !== 'user' ? { color: typeof m.color === 'string' ? m.color : undefined, author: m.author } : undefined,
   )
   ink.active = true
   ink.lastAt = performance.now()
   stage.setPointer(null) // the ink itself shows the pen now
 }
 
-/** `stroke_pts`: live ink for the loupe now; the canvas surface follows. */
+/**
+ * `stroke_pts`: live ink for the loupe now; the canvas surface follows. The tablet's eraser cuts
+ * ink as its points arrive (strokes.ts, erase.ts): the stage repaints the region it changed, and
+ * the glasses redraw like they do for ink.
+ */
 export function onStrokePoints(m: Inbound['stroke_pts']) {
-  store.points(m.id, m.pts || [], 'user')
+  const erased = store.points(m.id, m.pts || [], 'user')
+  if (erased) stage.erased(erased)
   stage.touch()
   ink.lastAt = performance.now()
   dirty.loupe = true
@@ -78,13 +89,26 @@ export function onStrokePoints(m: Inbound['stroke_pts']) {
 
 /** `stroke_end`: the glasses canvas may be resent once the writing pauses. */
 export function onStrokeEnd(m: Inbound['stroke_end']) {
-  store.end(m.id)
+  store.end(m.id, typeof m.ts === 'number' ? m.ts : undefined)
   stage.touch()
   ink.active = false
   ink.lastAt = performance.now()
   dirty.canvas = true // the loupe already shows the last points
   dirty.flushCanvas = true
   dirty.text = true
+}
+
+/**
+ * `stroke_delete`: strokes taken back (an undo, "clear my strokes", an agent's animation frame).
+ * The router has already checked who may delete what; anything that went is redrawn everywhere.
+ */
+export function onStrokeDelete(m: Inbound['stroke_delete']) {
+  const ids = Array.isArray(m.ids) ? m.ids.filter((id): id is string => typeof id === 'string') : []
+  if (store.remove(ids).length === 0) return
+  stage.invalidate()
+  dirty.loupe = true
+  dirty.canvas = true
+  dirty.flushCanvas = true
 }
 
 /** `ai_stroke_begin`. */

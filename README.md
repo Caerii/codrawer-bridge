@@ -43,6 +43,27 @@ It is the hardware half of Superintelligent Group's fluid-interface plan
 | Rust engine at parity with Go (1.3 MB vs 6.1 MB) | Tests and CI; Go is the default on device |
 | Other participants' ink written natively into a tablet layer (XOVI) | Feasibility done, probe built, not yet run ([report](docs/investigations/native-multiplayer-layer.md)) |
 | Shared markdown editor (Yjs) on the glasses | Simulator only |
+| `stroke_delete`: undo / clear my strokes, agent animation | Tests (Go, Rust, app); simulator and browser |
+
+### Showcase (a scripted simulation)
+
+<p align="center"><img src="docs/media/showcase.gif" alt="codrawer showcase: eight scripted scenes on the glasses simulator and the phone stage" width="960"></p>
+
+A 96-second tour in eight scenes: a proof that √2 is irrational checked line by line, an integral
+worked by parts while a stick-figure mathematician cheers, rough shapes "recognized" and redrawn,
+a ball rolling down a ramp, a water molecule cleaned up, a ball bouncing on the notes of Ode to Joy,
+a flowchart walked box to box, and a finale where three people and an agent draw at once, ending on
+the app's own timelapse export. [MP4](docs/media/showcase.mp4) (1280 × 640).
+
+It is a **scripted simulation**: the pens, the agent and the recognition are
+[`scripts/dev/showcase.py`](scripts/dev/showcase.py), with no model behind them, and every agent
+moment is tagged as simulated in the video. What is real is everything rendered: the strokes are
+ordinary protocol messages sent to the Rust router, the left screen is the glasses app in the Even
+Hub simulator and the right one is a second instance of the same app in a browser. Characters move by drawing each
+pose and deleting the last one with `stroke_delete`, so the lens shows them at the glasses'
+2 to 4 image updates a second while the phone is smooth. Handwriting plays at 1.5 to 3× (badged),
+animation in real time. Stills: [proof](docs/media/showcase-proof.png),
+[music](docs/media/showcase-music.png), [together](docs/media/showcase-together.png).
 
 ## How it fits together
 

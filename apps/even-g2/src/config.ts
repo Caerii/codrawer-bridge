@@ -18,6 +18,7 @@
  * left off. (The shared document keeps its own storage: doc/document.ts.)
  */
 import type { Highlight, ViewMode } from './strokes'
+import { DEFAULT_ERASE_RADIUS } from './erase'
 import type { PageMode } from './glasses/layout'
 
 const params = new URLSearchParams(location.search)
@@ -121,6 +122,13 @@ export const LOUPE_MIN_MS = Number(cfg('frame_ms', '60')) || 60
 export const CANVAS_MIN_MS = Number(cfg('canvas_ms', '1200')) || 1200
 /** With a loupe, the canvas is resent after this long without ink, ms (`?lull_ms=`). */
 export const CANVAS_LULL_MS = Number(cfg('lull_ms', '600')) || 600
+/**
+ * Wide fit refresh floor (`?wide_ms=`). The wide view has no loupe, so its canvas is the live view:
+ * it is resent as fast as the link takes it (one ~200 ms image send at a time, ADR 006), and only
+ * the tile that changed goes (the scheduler skips a tile the lens already shows). Writing and
+ * erasing then show within a few hundred ms instead of CANVAS_MIN_MS.
+ */
+export const WIDE_CANVAS_MIN_MS = Number(cfg('wide_ms', '150')) || 150
 
 /**
  * Frame encoding (`?fmt=`). png: the browser's PNG (the documented encoded-image path; the host
@@ -178,6 +186,20 @@ export const INITIAL_WIDE_FIT = cfg('wide', '0') === '1'
 export const INITIAL_HIGHLIGHT: Highlight = (cfg('highlight', 'all') as Highlight) || 'all'
 /** Follow window width as a fraction of the page width (`?window=`). */
 export const INITIAL_WINDOW = Number(cfg('window', '0.22')) || 0.22
+/**
+ * The tablet eraser's radius in page px (`?eraser=`, 2..400): ink within it of the eraser's path
+ * is cut as the eraser moves. 28.8 is the Marker's eraser end at the tablet's default zoom,
+ * measured on a Paper Pro page (erase.ts, docs/investigations/native-erase.md). xochitl divides
+ * the eraser by the zoom, so a page erased while zoomed in needs a smaller value.
+ */
+export const ERASE_RADIUS = ((v) => (v >= 2 && v <= 400 ? v : DEFAULT_ERASE_RADIUS))(Number(cfg('eraser', String(DEFAULT_ERASE_RADIUS))))
+
+/**
+ * Erase prediction (`?erase=0` turns it off): with it, the tablet's eraser cuts ink on every
+ * client as it moves; without it, erased ink stays until the tablet saves the page.
+ */
+export const PREDICT_ERASE = cfg('erase', '1') !== '0'
+
 /** Show the AI ghost layer (`?ai=1`; toggled from the menu and remembered). */
 export const SHOW_AI = cfg('ai', '0') !== '0'
 
@@ -186,6 +208,14 @@ export const INITIAL_PAGE_MODE: PageMode = ((v) => (v === 'text' || v === 'edit'
 
 /** Phone theme (`?theme=paper|dark`; remembered on every toggle). */
 export const INITIAL_THEME: 'paper' | 'dark' = cfg('theme', 'paper') === 'dark' ? 'dark' : 'paper'
+
+/**
+ * Diagnostics (`?diag=1`): the glasses' status strip shows the metrics line (ink counts, framing,
+ * per-container round trips and sends) and the phone shows the Glasses panel. Off by default: a
+ * user sees ink and what matters (notices, "reconnecting…"), not developer numbers. Remembered;
+ * toggled from the ⋯ menu and the toolbar's glasses button.
+ */
+export const INITIAL_DIAGNOSTICS = cfg('diag', '0') === '1'
 
 /** Phone view for this load only (`?stage=page|focus|follow`); otherwise it mirrors the glasses. */
 export const STAGE_OVERRIDE = once('stage')

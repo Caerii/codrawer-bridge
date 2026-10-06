@@ -17,12 +17,17 @@
  *   a soft dark halo so it reads over any scene. Drawing over the world.
  * - Finished strokes live in an offscreen, transparent ink layer while the view is still; a frame
  *   is then the background (paper or video), one blit, and the strokes still being drawn.
+ * - Erasing: the tablet's eraser cuts the store's ink as it moves (erase.ts), and the stage
+ *   repaints only the region that changed ({@link Stage.erased}), so ink vanishes under the
+ *   eraser at the frame rate, whatever the page's size. The eraser itself shows as the circle it
+ *   sweeps, at its true radius.
  * - Export: paintPage() draws strokes onto a canvas that holds exactly the page, the same way:
  *   pagePng() uses it for the phone menu's "Download page as PNG", phone/timelapse.ts for every
  *   frame of "Export timelapse".
  */
 import type { Stroke, StrokeStore } from '../strokes'
 import { ERASER_TOOLS, WASH_TOOLS } from '../strokes'
+import { PAGE_W, fullyErased, keptRuns, type Box } from '../erase'
 
 /** "#rrggbbaa" or "#rrggbb" → [r, g, b, a] (0..255); black when missing or malformed. */
 export function parseRgba(c: string | undefined): [number, number, number, number] {
@@ -76,6 +81,10 @@ export class Stage {
   private drawing = false
   private dragging: { cx: number } | null = null
   private exportSize: { w: number; h: number } | null = null // set while pagePng() paints
+  /** painting history (a timelapse): erasers cut by compositing, as they did at the time */
+  private history = false
+  /** normalized region whose ink an eraser changed since the last frame (repainted in the cache) */
+  private erasedBox: Box | null = null
   private suppressClick = false
 
   constructor(
@@ -102,6 +111,17 @@ export class Stage {
   /** Strokes were removed or restyled (clear, prune, replay, theme): rebuild the cache. */
   invalidate() {
     this.cacheValid = false
+    this.erasedBox = null
+    this.dirty = true
+  }
+
+  /**
+   * An eraser removed ink inside `box` (normalized page coords, store.points' return): the next
+   * frame repaints that region of the finished-ink cache instead of rebuilding all of it.
+   */
+  erased(box: Box) {
+    const b = this.erasedBox
+    this.erasedBox = b ? [Math.min(b[0], box[0]), Math.min(b[1], box[1]), Math.max(b[2], box[2]), Math.max(b[3], box[3])] : [box[0], box[1], box[2], box[3]]
     this.dirty = true
   }
 
@@ -263,27 +283,38 @@ export class Stage {
         for (const p of pts) wsum += width(p)
         ctx.lineWidth = wsum / Math.max(1, pts.length)
         ctx.beginPath()
-        ctx.moveTo(X(pts[0][0]), Y(pts[0][1]))
-        for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]))
-        if (pts.length === 1) ctx.lineTo(X(pts[0][0]) + 0.01, Y(pts[0][1]))
+        for (const [a, b] of this.runs(s)) {
+          ctx.moveTo(X(pts[a][0]), Y(pts[a][1]))
+          for (let i = a + 1; i < b; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]))
+          if (b - a === 1) ctx.lineTo(X(pts[a][0]) + 0.01, Y(pts[a][1]))
+        }
         ctx.stroke()
         return
       }
-      this.paintPath(ctx, s.pts, width, X, Y)
+      for (const [a, b] of this.runs(s)) this.paintPath(ctx, a === 0 && b === s.pts.length ? s.pts : s.pts.slice(a, b), width, X, Y)
     } finally {
       ctx.restore()
     }
   }
 
+  /** The runs of a stroke's points to paint: all of them in history, else what erasers left. */
+  private runs(s: Stroke): Array<[number, number]> {
+    return this.history || !s.goneCount ? (s.pts.length ? [[0, s.pts.length]] : []) : keptRuns(s)
+  }
+
   private paintStroke(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
     if (s.pts.length === 0) return
     if (s.layer === 'ai' && !this.showAi) return
+    if (!this.history && fullyErased(s)) return
     if (s.fromPage) return this.paintPageStroke(ctx, s, cam)
+    const eraser = s.brush === 'eraser'
+    // A live eraser has already cut the ink it passed over (erase.ts): it paints nothing, except
+    // in history, where ink is painted whole and the eraser cuts it the way it did at the time.
+    if (eraser && !this.history) return
     const t = THEMES[this.theme]
     const { s: scale, X, Y } = this.xf(cam)
     // ~0.5 mm fineliner at full pressure on the 1620-px-wide page, scaled to the view
     const base = (scale * this.pageAspect) / 1620
-    const eraser = s.brush === 'eraser'
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (eraser) {
@@ -295,12 +326,14 @@ export class Stage {
       ctx.shadowColor = 'rgba(0,0,0,0.75)'
       ctx.shadowBlur = Math.max(2, base * 6)
     } else {
-      ctx.strokeStyle = ctx.fillStyle = s.layer === 'peer' && s.color ? s.color : s.layer === 'ai' ? t.ai : t.ink
+      // a participant's or an agent's own colour when it names one; else the theme's
+      ctx.strokeStyle = ctx.fillStyle = s.layer !== 'user' && s.color ? s.color : s.layer === 'ai' ? t.ai : t.ink
     }
     const pts = s.pts
-    const width = (p: number) => (eraser ? base * 24 : base * (this.backdrop ? 2 : 1.4) + base * 4.2 * p)
+    // the eraser sweeps its radius on each side of its path (page px, like `base`)
+    const width = (p: number) => (eraser ? base * 2 * this.store.eraseRadius : base * (this.backdrop ? 2 : 1.4) + base * 4.2 * p)
     try {
-      this.paintPath(ctx, pts, (pt) => width(pt[2]), X, Y)
+      for (const [a, b] of this.runs(s)) this.paintPath(ctx, a === 0 && b === pts.length ? pts : pts.slice(a, b), (pt) => width(pt[2]), X, Y)
     } finally {
       ctx.globalCompositeOperation = 'source-over'
       ctx.shadowBlur = 0
@@ -491,12 +524,15 @@ export class Stage {
    * holds exactly the page (its canvas at the page aspect), as the stage paints them on `theme`:
    * the same widths, colours, washes and erasers, without the camera backdrop. pagePng() and the
    * timelapse export (phone/timelapse.ts) draw through this, so exports look like the stage.
+   * `history` paints strokes whole and lets live erasers cut by compositing, in drawing order, so
+   * a timelapse shows ink before it was erased; otherwise strokes are painted as erasers left them.
    */
-  paintPage(ctx: CanvasRenderingContext2D, strokes: Iterable<Stroke>, theme: Theme = this.theme) {
+  paintPage(ctx: CanvasRenderingContext2D, strokes: Iterable<Stroke>, theme: Theme = this.theme, history = false) {
     const backdrop = this.backdrop
     const was = this.theme
     this.backdrop = null
     this.theme = theme
+    this.history = history
     this.exportSize = { w: ctx.canvas.width, h: ctx.canvas.height }
     try {
       const cam = { cx: this.pageAspect / 2, cy: 0.5, h: 1 } // exactly the page
@@ -504,6 +540,7 @@ export class Stage {
     } finally {
       this.backdrop = backdrop
       this.theme = was
+      this.history = false
       this.exportSize = null
     }
   }
@@ -570,15 +607,21 @@ export class Stage {
     // Finished strokes accumulate in the cache; rebuild it when the camera moved or the finished
     // list is no longer an extension of what was cached (removed, replayed, out of order).
     const extendsCache = done.length >= this.cachedDone && (this.cachedDone === 0 || done[this.cachedDone - 1]?.id === this.cachedLastId)
+    const erased = this.erasedBox
+    this.erasedBox = null
     if (!this.cacheValid || camMoved || !extendsCache) {
       const c = this.cache.getContext('2d')!
       c.clearRect(0, 0, this.cache.width, this.cache.height) // ink only; the background is per frame
       for (const s of done) this.paintStroke(c, s, cam)
       this.camAt = { ...cam }
       this.cacheValid = true
-    } else if (done.length > this.cachedDone) {
-      const c = this.cache.getContext('2d')!
-      for (const s of done.slice(this.cachedDone)) this.paintStroke(c, s, cam)
+    } else {
+      // an eraser cut cached ink: repaint just that region (strokes cached so far, in order)
+      if (erased) this.repaintRegion(done.slice(0, this.cachedDone), erased, cam)
+      if (done.length > this.cachedDone) {
+        const c = this.cache.getContext('2d')!
+        for (const s of done.slice(this.cachedDone)) this.paintStroke(c, s, cam)
+      }
     }
     this.cachedDone = done.length
     this.cachedLastId = done.length ? done[done.length - 1].id : ''
@@ -592,8 +635,55 @@ export class Stage {
       this.live.height = this.canvas.height
       for (const s of strokes) if (!s.done) this.paintStroke(l, s, cam)
       ctx.drawImage(this.live, 0, 0)
+      for (const s of strokes) if (!s.done && s.brush === 'eraser' && s.pts.length) this.paintEraser(ctx, s, cam)
     }
     this.paintGlasses(ctx)
     this.paintPointer(ctx)
+  }
+
+  /**
+   * Repaint the finished-ink cache inside `box` (normalized page coords, grown by a margin for
+   * ink width and smoothing): clear it, then paint every cached stroke that reaches into it,
+   * clipped to it. The cost follows the erased region, not the page.
+   */
+  private repaintRegion(strokes: Stroke[], box: Box, cam: Cam) {
+    const mx = 12 / PAGE_W // the widest tablet ink, ~12 page px, as a fraction of the page width
+    const my = mx * this.pageAspect // and of its height
+    const b: Box = [box[0] - mx, box[1] - my, box[2] + mx, box[3] + my]
+    const { X, Y } = this.xf(cam)
+    const x0 = Math.floor(X(b[0]))
+    const y0 = Math.floor(Y(b[1]))
+    const x1 = Math.ceil(X(b[2]))
+    const y1 = Math.ceil(Y(b[3]))
+    if (x1 <= x0 || y1 <= y0) return
+    const c = this.cache.getContext('2d')!
+    c.save()
+    try {
+      c.beginPath()
+      c.rect(x0, y0, x1 - x0, y1 - y0)
+      c.clip()
+      c.clearRect(x0, y0, x1 - x0, y1 - y0)
+      for (const s of strokes) {
+        if (s.box[2] < b[0] || s.box[0] > b[2] || s.box[3] < b[1] || s.box[1] > b[3]) continue
+        this.paintStroke(c, s, cam)
+      }
+    } finally {
+      c.restore()
+    }
+  }
+
+  /** The tablet's eraser while it is down: the circle it sweeps, at its true radius. */
+  private paintEraser(ctx: CanvasRenderingContext2D, s: Stroke, cam: Cam) {
+    const t = THEMES[this.theme]
+    const { s: scale, X, Y } = this.xf(cam)
+    const last = s.pts[s.pts.length - 1]
+    const r = (this.store.eraseRadius / PAGE_W) * this.pageAspect * scale // page px → device px
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(X(last[0]), Y(last[1]), Math.max(3, r), 0, Math.PI * 2)
+    ctx.strokeStyle = t.pointer
+    ctx.lineWidth = Math.max(1.5, r * 0.08)
+    ctx.stroke()
+    ctx.restore()
   }
 }

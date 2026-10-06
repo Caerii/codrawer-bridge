@@ -558,3 +558,58 @@ func TestPageTurnDropsOtherParticipantsStrokes(t *testing.T) {
 	}
 	expectQuiet(t, late, 300*time.Millisecond)
 }
+
+// stroke_delete: the owner's delete reaches everyone and the stroke leaves the replay, so a late
+// joiner never sees it; ai-layer ink may be taken back by anyone; unknown ids are dropped.
+func TestLateJoinerDoesNotGetDeletedStrokes(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	agent := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"stroke_begin","id":"u_1","layer":"user","ts":1}`)
+	send(t, tablet, `{"t":"stroke_pts","id":"u_1","pts":[[0.1,0.1,0.5,2]]}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_1"}`)
+	send(t, tablet, `{"t":"stroke_begin","id":"u_2","layer":"user","ts":3}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_2"}`)
+	for range 5 {
+		read(t, agent)
+	}
+	send(t, agent, `{"t":"stroke_begin","id":"ai_1","layer":"ai","ts":4}`)
+	send(t, agent, `{"t":"stroke_end","id":"ai_1"}`)
+	read(t, tablet)
+	read(t, tablet)
+
+	send(t, tablet, `{"t":"stroke_delete","ids":["u_1","ai_1","nope"],"ts":5}`)
+	if m := read(t, agent); m["t"] != "stroke_delete" || fmt.Sprint(m["ids"]) != "[u_1 ai_1]" {
+		t.Fatalf("want the accepted ids relayed, got %v", m)
+	}
+
+	late := dial(t, srv, "s1")
+	if m := read(t, late); m["t"] != "stroke_begin" || m["id"] != "u_2" {
+		t.Fatalf("want only u_2 replayed, got %v", m)
+	}
+	if m := read(t, late); m["t"] != "stroke_end" || m["id"] != "u_2" {
+		t.Fatalf("want u_2's end, got %v", m)
+	}
+	expectQuiet(t, late, 150*time.Millisecond)
+}
+
+// A participant may not delete someone else's user ink: nothing is relayed and the stroke stays
+// in the replay.
+func TestNonOwnerCannotDeleteUserInk(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	peer := dial(t, srv, "s1")
+	send(t, tablet, `{"t":"stroke_begin","id":"u_1","layer":"user","ts":1}`)
+	send(t, tablet, `{"t":"stroke_end","id":"u_1"}`)
+	read(t, peer)
+	read(t, peer)
+	send(t, peer, `{"t":"stroke_delete","ids":["u_1"],"ts":2}`)
+	send(t, peer, `{"t":"key","key":"a","char":"a"}`) // a marker: the delete was handled before it
+	if m := read(t, tablet); m["t"] != "key" {
+		t.Fatalf("a refused delete was relayed: %v", m)
+	}
+	late := dial(t, srv, "s1")
+	if m := read(t, late); m["t"] != "stroke_begin" || m["id"] != "u_1" {
+		t.Fatalf("the refused delete removed u_1 anyway: %v", m)
+	}
+}

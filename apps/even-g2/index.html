@@ -85,13 +85,15 @@
       <button id="camBtn" class="icon" type="button" aria-pressed="false" aria-label="Camera" title="Draw over the camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
       <button id="freezeBtn" class="icon" type="button" aria-pressed="false" aria-label="Freeze frame" title="Freeze the camera frame" hidden><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg></button>
       <button id="themeBtn" class="icon" type="button" aria-label="Theme" title="Paper or dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
-      <button id="debugBtn" class="icon" type="button" aria-pressed="false" aria-label="Glasses" title="Glasses previews and status"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4M3 14l1.5-6M21 14l-1.5-6"/></svg></button>
+      <button id="debugBtn" class="icon" type="button" aria-pressed="false" aria-label="Glasses" title="Diagnostics: glasses previews and metrics"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4M3 14l1.5-6M21 14l-1.5-6"/></svg></button>
       <button id="recDot" type="button" aria-label="Recording session" title="Recording session" hidden></button>
       <button id="menuBtn" class="icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="Menu" title="More"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
     </div>
     <div id="menu" role="menu" aria-label="codrawer" hidden>
       <button class="item" type="button" role="menuitem" data-act="new"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>New drawing…</button>
       <div class="confirm" id="confirmNew" hidden><p>Clear the page for everyone?</p><button type="button" class="danger" data-act="new-yes">Clear</button> <button type="button" data-act="new-no">Cancel</button></div>
+      <button class="item" type="button" role="menuitem" data-act="undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Undo my last stroke</button>
+      <button class="item" type="button" role="menuitem" data-act="clear-mine"><svg viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M14 4l6 6-8 8H8l-4-4z"/></svg>Clear my strokes<span class="note"></span></button>
       <hr />
       <div class="label" id="colorLabel">My colour</div>
       <div class="swatches" role="group" aria-labelledby="colorLabel"></div>
@@ -114,7 +116,7 @@
       <button class="item" type="button" role="menuitem" data-act="rec-export"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Export recording (.jsonl)<span class="note"></span></button>
       <hr />
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="wide"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M12 7v10"/></svg>Glasses: wide fit view</button>
-      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="diag"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4"/></svg>Glasses diagnostics</button>
+      <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="diag"><svg viewBox="0 0 24 24"><circle cx="6.5" cy="14" r="3.5"/><circle cx="17.5" cy="14" r="3.5"/><path d="M10 14h4"/></svg>Diagnostics</button>
       <button class="item" type="button" role="menuitemcheckbox" aria-checked="false" data-act="dark"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>Dark theme</button>
     </div>
     <div id="banner" hidden><span id="bannerText"></span><button id="bannerOk" type="button">OK</button></div>

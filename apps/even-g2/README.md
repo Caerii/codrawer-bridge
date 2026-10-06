@@ -71,6 +71,8 @@ WebView bridge as base64 (2x faster than the SDK's default number array even in 
 | `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors (with a loupe the canvas refreshes at `stroke_end`) |
 | `ai=1` | `0` | show the AI ghost layer |
 | `binarize=0` | `1` | keep antialiased grey (compresses worse) |
+| `eraser=<px>` | `28.8` | the tablet eraser's radius in page px: ink this close to its path is cut live, as xochitl cuts it (the Marker's eraser end at default zoom; `erase.ts`) |
+| `erase=0` | `1` | no erase prediction: erased ink stays until the tablet saves the page |
 | `bench=1` | | on-device benchmark: rebuilds the page per config and reports min/median ms in the HUD and console; `bench=0` returns |
 
 The HUD status line shows `L<ms>/<count> · C<ms>/<count>`: round trip and pushes per container.
@@ -109,12 +111,17 @@ outside closes it and does nothing else):
   `{"ts": <Unix ms>, "dir": "in"|"out", "msg": {...}}` per line, so a session replays into any router:
   `uv run python -m codrawer_bridge.tools.stroke_sim.replay_jsonl --ws ws://<router>/ws/<session>
   --in <file>.jsonl --only-t-prefix stroke_ --max-gap-ms 400` (or `scripts/dev/replay_to.py`).
-- **Glasses diagnostics** and **Dark theme** repeat the toolbar's glasses and moon buttons, which
+- **Diagnostics** (off by default: the Glasses panel here and the metrics line on the glasses) and **Dark theme** repeat the toolbar's glasses and moon buttons, which
   are hidden on phones narrower than 480 px.
 
-Follow-up, not done: *Undo my last stroke* and *Clear my strokes*. Removing a stroke for everyone
-needs a message the routers relay and drop from their page replay (e.g. `stroke_delete {"id"}`);
-done locally only, the stroke would come back on the next reconnect.
+- **Undo my last stroke** and **Clear my strokes** take back strokes drawn on this phone, for
+  everyone, with `stroke_delete` (docs/protocol.md): the routers relay it and drop the strokes
+  from their page replay, so they stay gone for late joiners. Only strokes drawn since this
+  connection's `hello` count (the routers' owner is the connection); with none, both items show
+  disabled with the reason as their tooltip. *Clear my strokes* shows how many there are.
+
+Incoming `stroke_delete` removes the strokes from the glasses and the phone stage alike, whoever
+sent it (an agent replacing an animation frame, another participant's undo).
 
 ## Input
 
@@ -173,6 +180,7 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `actions.ts` | the app's verbs (follow/fit, emphasis, zoom, AI layer, new drawing, layout switches) |
 | `loop.ts` | the render loop |
 | `strokes.ts` | stroke store (with each live point's time), rasterizer, loupe camera, PNG/Gray encoders |
+| `erase.ts` | pure: the tablet eraser's model (radius from xochitl's thickness, cut masks) and the grid that finds the ink near it |
 | `timelapse.ts`, `recording.ts` | pure: timelapse pacing (stroke order, time mapping) and the recorder format pick; the session recording's bounded log and JSONL |
 | `glasses/layout.ts` | container sets for the canvas / text / edit layouts, menu ids |
 | `glasses/page.ts` | create / rebuild / retry the page, layout switches, `?probe=1`, stale-copy release |

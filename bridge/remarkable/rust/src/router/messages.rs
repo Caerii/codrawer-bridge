@@ -40,6 +40,19 @@ pub(super) struct Envelope<'a> {
     /// `page`: the open page's id.
     #[serde(default)]
     pub(super) page: String,
+    /// `stroke_delete`: the strokes to remove.
+    #[serde(default)]
+    pub(super) ids: Vec<String>,
+}
+
+/// A `stroke_delete` re-encoded with only the ids the router accepted, when it refused or did
+/// not know some of those asked for.
+#[derive(Serialize)]
+pub(super) struct StrokeDelete<'a> {
+    pub(super) t: &'static str,
+    pub(super) ids: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) ts: Option<i64>,
 }
 
 /// `hello`, the first message on every connection.
