@@ -1,0 +1,14 @@
+{
+ "title": "√2 is irrational",
+ "goal": "\\sqrt{2} \\notin \\mathbb{Q}",
+ "technique": "contradiction",
+ "problem": "sqrt2_irrational",
+ "steps": [
+  {"n": 1, "latex": "\\sqrt{2} = \\frac{p}{q},\\quad p, q \\in \\mathbb{Z},\\ q > 0", "text": "Suppose √2 = p/q with p, q integers and q > 0.", "justification": "assumption for contradiction", "refs": [], "concepts": ["contradiction", "rationality"], "confidence": 0.95, "lines": [2]},
+  {"n": 2, "latex": "p^2 = 2q^2", "text": "Then p² = 2q², so p² is even.", "justification": "squaring", "refs": [1], "concepts": ["parity", "definitions"], "confidence": 0.94, "lines": [3]},
+  {"n": 3, "latex": "p \\text{ even},\\quad p = 2k", "text": "Since p² is even, hence p is even: p = 2k.", "justification": "", "refs": [2], "concepts": ["square_parity", "parity"], "confidence": 0.93, "lines": [4]},
+  {"n": 4, "latex": "4k^2 = 2q^2 \\implies q^2 = 2k^2", "text": "4k² = 2q², so q² = 2k² and q is even.", "justification": "substituting p = 2k", "refs": [2, 3], "concepts": ["parity", "square_parity"], "confidence": 0.9, "lines": [5]},
+  {"n": 5, "latex": "q \\text{ even}", "text": "So q is even.", "justification": "as for p", "refs": [4], "concepts": ["square_parity"], "confidence": 0.9, "lines": [5]},
+  {"n": 6, "latex": "2 \\mid p \\ \\text{and}\\ 2 \\mid q \\;\\Rightarrow\\; \\text{contradiction}", "text": "p and q are both even. Contradiction!", "justification": "", "refs": [3, 5], "concepts": ["contradiction", "irrationality"], "confidence": 0.94, "lines": [6]}
+ ]
+}
