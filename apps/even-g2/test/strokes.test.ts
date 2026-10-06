@@ -184,6 +184,20 @@ test('a rewrite of the same page drops erased strokes and keeps the AI layer', (
   assert.equal(s.pointCount, 6)
 })
 
+test('agent ink the tablet committed natively replaces the live AI strokes, not duplicates them', () => {
+  const s = new StrokeStore()
+  s.applyPage(pageMsg('p1', 2000, ['1:5']))
+  live(s, 'ai_1', 0, 'ai') // forwarded to the tablet (NATIVE_AGENT_INK) and committed there
+  s.begin('ai_2', 'ai') // still being drawn
+  const withAgent = pageMsg('p1', 4000, ['1:5', '1:305'])
+  withAgent.strokes[1] = { ...withAgent.strokes[1], layer: 'ai' } as (typeof withAgent.strokes)[number]
+  assert.equal(s.applyPage(withAgent), false)
+  assert.deepEqual(s.all().map((x) => [x.id, x.layer]), [['rm:1:5', 'user'], ['rm:1:305', 'ai'], ['ai_2', 'ai']])
+  // the next save without new agent ink keeps the snapshot's own agent strokes, not stale copies
+  assert.equal(s.applyPage(withAgent), false)
+  assert.deepEqual(s.all().map((x) => x.id), ['rm:1:5', 'rm:1:305', 'ai_2'])
+})
+
 test('a page turn clears the view, AI included, and shows the new page', () => {
   const s = new StrokeStore()
   s.applyPage(pageMsg('p1', 2000, ['1:5']))

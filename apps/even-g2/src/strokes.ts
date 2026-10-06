@@ -74,7 +74,8 @@ export interface PageMessage {
   /** the page size in page px (Paper Pro 1620 × 2160) */
   w?: number
   h?: number
-  strokes: { id: string; tool?: string; color?: number; rgba?: string; size?: number; pts: number[][] }[]
+  /** `layer`: the layer id, or "ai" for agent ink the tablet committed natively */
+  strokes: { id: string; tool?: string; color?: number; rgba?: string; size?: number; layer?: string; pts: number[][] }[]
 }
 
 /** Tools that leave no ink of their own (their effect is already in the saved page). */
@@ -223,12 +224,16 @@ export class StrokeStore {
    * stays if it began after `rev`, or ended after it, or has not ended: a save taken while the pen
    * was down does not have it. Erasers kept that way are applied again to the snapshot's strokes,
    * so erased ink does not come back while the tablet has yet to save the erase. On a different
-   * page (or document) the AI layer goes too: it was drawn over the other page. Returns whether
-   * the page changed.
+   * page (or document) the AI layer goes too: it was drawn over the other page. Strokes the
+   * snapshot labels `"layer":"ai"` are agent ink the tablet committed natively (NATIVE_AGENT_INK,
+   * the "codrawer: agent" layer): they come in as AI strokes, and once a snapshot carries any,
+   * finished live AI strokes go, since the snapshot holds them now (a stroke finished after the
+   * save shows again with the next one). Returns whether the page changed.
    */
   applyPage(m: PageMessage): boolean {
     const changed = !this.page || this.page.doc !== m.doc || this.page.page !== m.page
     const rev = Number(m.rev) || 0
+    const pageHasAi = Array.isArray(m.strokes) && m.strokes.some((r) => r && r.layer === 'ai')
     const keep: string[] = []
     for (const id of this.order) {
       const s = this.strokes.get(id)
@@ -237,7 +242,12 @@ export class StrokeStore {
       // page stays; the tablet's own live ink stays only if the save cannot hold it
       // (only the tablet's strokes carry its clock; one without a ts cannot be placed after a save)
       const unsaved = s.ts !== undefined && (!s.done || s.ts > rev || (s.endTs !== undefined && s.endTs > rev))
-      const keepIt = s.layer !== 'user' ? !changed : !s.fromPage && unsaved
+      const keepIt =
+        s.layer === 'ai' && pageHasAi
+          ? !s.fromPage && !s.done && !changed
+          : s.layer !== 'user'
+            ? !changed && !s.fromPage
+            : !s.fromPage && unsaved
       if (keepIt) keep.push(id)
       else {
         this.nPoints -= s.pts.length
@@ -250,7 +260,7 @@ export class StrokeStore {
       const id = 'rm:' + r.id // never collides with live ids
       const s: Stroke = {
         id,
-        layer: 'user',
+        layer: r.layer === 'ai' ? 'ai' : 'user',
         brush: ERASER_TOOLS.has(r.tool ?? '') ? 'eraser' : 'pen',
         pts: [],
         done: true,
