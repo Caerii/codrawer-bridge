@@ -5,12 +5,14 @@
 #include "autostate.h"
 #include "grab.h"
 #include "log.h"
+#include "navigate.h"
 #include "qtmeta.h"
 #include "scene.h"
 #include "text.h"
 #include "toolfollow.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QJsonArray>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtGui/QGuiApplication>
@@ -19,6 +21,7 @@
 #include <QtQuick/QQuickWindow>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -163,27 +166,32 @@ bool autoInputRequest(const QString &cmd, const QJsonObject &req, std::function<
             if (it->isVisible()) return autoGesture(centerOf(it), centerOf(it), 80, answer), true;
         }
         fail(QStringLiteral("no visible tile titled %1").arg(title));
-    } else if (cmd == QLatin1String("goto")) {
-        QQuickItem *view = followedView();
-        if (!view || !view->isVisible()) return fail(QStringLiteral("no notebook open")), true;
+    } else if (cmd == QLatin1String("goto") || cmd == QLatin1String("goto_doc")) {
+        // goto page: in the open notebook; goto_doc doc page? region? flash?: anywhere
+        // (navigate.h). Navigation, so allowed in any notebook.
+        gotoreq::Request g;
         const QString page = req.value(QStringLiteral("page")).toVariant().toString();
-        for (const char *m : {"goToPageId", "goToPage", "setCurrentPage"}) {
-            const QByteArray sig = QByteArray(m) + "(QString)";
-            const QByteArray sigInt = QByteArray(m) + "(int)";
-            QObject *target = nullptr;
-            for (QQuickItem *v = view; v && !target; v = v->parentItem()) {
-                if (v->metaObject()->indexOfMethod(sig.constData()) >= 0 || v->metaObject()->indexOfMethod(sigInt.constData()) >= 0) target = v;
-            }
-            if (!target) continue;
-            bool isInt = false;
-            const int idx = page.toInt(&isInt);
-            const bool called = isInt && target->metaObject()->indexOfMethod(sigInt.constData()) >= 0 ? invoke(target, m, {idx}) : invoke(target, m, {page});
-            if (called) {
-                answer(QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("via"), QString::fromLatin1(m)}});
-                return true;
-            }
+        if (!page.isEmpty() && !gotoreq::parsePage(page.toStdString(), g)) return fail(QStringLiteral("page must be a uuid or an index")), true;
+        const QJsonArray ra = req.value(QStringLiteral("region")).toArray();
+        if (ra.size() == 4) {
+            g.region = gotoreq::Region{ra[0].toDouble(NAN), ra[1].toDouble(NAN), ra[2].toDouble(NAN), ra[3].toDouble(NAN)};
+            g.hasRegion = true;
+            if (!gotoreq::regionOk(g.region)) return fail(QStringLiteral("region must be [x0,y0,x1,y1] on the page")), true;
         }
-        fail(QStringLiteral("no page navigation function found on the DocumentView chain"));
+        g.flash = g.hasRegion && req.value(QStringLiteral("flash")).toBool(true);
+        g.go = true;
+        auto send = [answer](const QString &r) {
+            answer(QJsonObject{{QStringLiteral("ok"), !r.startsWith(QLatin1String("err "))}, {QStringLiteral("result"), r}});
+        };
+        if (cmd == QLatin1String("goto")) return gotoPage(g, send), true;
+        g.doc = req.value(QStringLiteral("doc")).toString().toStdString();
+        if (!gotoreq::isUuid(g.doc)) return fail(QStringLiteral("doc must be a document uuid")), true;
+        gotoDoc(g, send);
+    } else if (cmd == QLatin1String("folder")) {
+        folder(req.value(QStringLiteral("action")).toString(), req.value(QStringLiteral("id")).toString(),
+               [answer](const QString &r) {
+                   answer(QJsonObject{{QStringLiteral("ok"), !r.startsWith(QLatin1String("err "))}, {QStringLiteral("result"), r}});
+               });
     } else if (cmd == QLatin1String("text_insert") || cmd == QLatin1String("text_read")) {
         if (cmd == QLatin1String("text_insert") && !autorules::editAllowed(visibleDocTitle().toStdString()))
             return fail(QStringLiteral("blocked: edits only in the notebook \"codrawer: test\"")), true;

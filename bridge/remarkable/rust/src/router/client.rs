@@ -86,10 +86,11 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                 }
             }
             // the Primer and the toolbar dock (ADR 010), personal marks (protocol.md, "Personal
-            // marks") and the typer's notes: relayed as sent, like keys
+            // marks"), "take me there" (protocol.md, "goto") and the typer's notes: relayed as sent,
+            // like keys
             "key" | "cursor" | "doc" | "typer_note" | "primer" | "primer_request" | "dock_action"
             | "dock_entries" | "dock_query" | "mark_seen" | "mark_ask" | "mark_define" | "mark_invoke"
-            | "mark_feedback" | "mark_query" | "marks" => sess.lock().unwrap().broadcast(&raw, cid),
+            | "mark_feedback" | "mark_query" | "marks" | "goto" => sess.lock().unwrap().broadcast(&raw, cid),
             "typer_config" => {
                 // The bridge's acknowledgement is its current speed: kept for joiners.
                 let mut s = sess.lock().unwrap();

@@ -4,6 +4,7 @@
 #include "ink.h"
 #include "ink_protocol.h"
 #include "log.h"
+#include "navigate.h"
 #include "paths.h"
 #include "text.h"
 #include "toolfollow.h"
@@ -159,13 +160,55 @@ bool parseInk(const QByteArray &line, InkJob &job, QString &id, QString &why) {
 // ---------------------------------------------------------------------------------------------
 // Serving one client.
 
-// A text op line, answered on the GUI thread: text_read, or text_insert by route A then B.
+// A `goto` op (navigate.h): checked here, carried out (mode "go") or offered on the GUI thread.
+void handleGotoOp(const std::shared_ptr<SocketClient> &cl, const QJsonObject &o, const QString &gid) {
+    gotoreq::Request req;
+    req.doc = o.value(QStringLiteral("doc")).toString().toStdString();
+    const QJsonValue pv = o.value(QStringLiteral("page"));
+    bool ok = gotoreq::isUuid(req.doc);
+    if (ok && pv.isString()) ok = gotoreq::parsePage(pv.toString().toStdString(), req);
+    else if (ok && pv.isDouble()) ok = gotoreq::parsePage(QString::number(pv.toInt(-1)).toStdString(), req);
+    else if (ok && !pv.isUndefined() && !pv.isNull()) ok = false;
+    const QJsonArray ra = o.value(QStringLiteral("region")).toArray();
+    if (ok && ra.size() == 4) {
+        req.region = gotoreq::Region{ra[0].toDouble(NAN), ra[1].toDouble(NAN), ra[2].toDouble(NAN), ra[3].toDouble(NAN)};
+        req.hasRegion = true;
+        ok = gotoreq::regionOk(req.region);
+    } else if (ok && !o.value(QStringLiteral("region")).isUndefined()) {
+        ok = false;
+    }
+    req.flash = req.hasRegion && o.value(QStringLiteral("flash")).toBool(true);
+    req.go = o.value(QStringLiteral("mode")).toString() == QLatin1String("go");
+    const QString reason = o.value(QStringLiteral("reason")).toString().left(120);
+    req.reason = reason.toStdString();
+    if (!ok) {
+        logLine(QStringLiteral("goto: refused %1: bad doc, page or region").arg(gid));
+        cl->reply(QStringLiteral("err %1 bad doc, page or region").arg(gid));
+        return;
+    }
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [cl, req, gid, reason] {
+        auto send = [cl, gid](const QString &r) {
+            if (r.startsWith(QLatin1String("err "))) logLine(QStringLiteral("goto: refused %1: %2").arg(gid, r.mid(4)));
+            const int sp = r.indexOf(QLatin1Char(' '));
+            cl->reply(r.left(sp) + QLatin1Char(' ') + gid + r.mid(sp));
+        };
+        if (req.go) gotoDoc(req, send);
+        else offerGoto(req, reason, send);
+    }, Qt::QueuedConnection);
+}
+
+// A text or goto op line, answered on the GUI thread: text_read, text_insert by route A then B,
+// goto.
 void handleTextOp(const std::shared_ptr<SocketClient> &cl, const QByteArray &line) {
     const QJsonObject o = QJsonDocument::fromJson(line).object();
     const QString op = o.value(QStringLiteral("op")).toString();
     QString tid = o.value(QStringLiteral("id")).toString().left(64);
     tid.replace(QLatin1Char(' '), QLatin1Char('_'));
     if (tid.isEmpty()) tid = QStringLiteral("-");
+    if (op == QLatin1String("goto")) {
+        handleGotoOp(cl, o, tid);
+        return;
+    }
     const QString text = o.value(QStringLiteral("text")).toString();
     if ((op != QLatin1String("text_insert") && op != QLatin1String("text_read")) ||
         (op == QLatin1String("text_insert") && (text.isEmpty() || text.size() > kMaxTextInsert))) {
@@ -193,7 +236,7 @@ void serveInk(const std::shared_ptr<SocketClient> &cl) {
         std::lock_guard<std::mutex> lock(inkClientMutex());
         currentInkClient() = cl;
     }
-    cl->reply(QStringLiteral("hello codrawer-layer ink text_insert text_read"));
+    cl->reply(QStringLiteral("hello codrawer-layer ink text_insert text_read goto"));
     QByteArray buf;
     char chunk[16384];
     for (;;) {

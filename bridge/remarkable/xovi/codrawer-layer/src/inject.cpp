@@ -6,6 +6,7 @@
 #include "inject_conf.h"
 #include "inksock.h"
 #include "log.h"
+#include "navigate.h"
 #include "paths.h"
 #include "qtmeta.h"
 #include "scene.h"
@@ -50,7 +51,8 @@ QList<Injection> &injections() {
 // ---------------------------------------------------------------------------------------------
 // What the injected UI shows.
 
-QVariantList dockEntries() {
+// The configured or built-in entries.
+QVariantList baseEntries() {
     QFile f(QString::fromLatin1(kDockJson));
     if (f.open(QIODevice::ReadOnly)) {
         const QJsonDocument d = QJsonDocument::fromJson(f.read(1 << 16));
@@ -62,6 +64,14 @@ QVariantList dockEntries() {
     };
     return {e("status", "codrawer status"), e("agent_ink", "Agent ink on/off"), e("practice_coach", "Practice coach"),
             e("ask_page", "Ask about this page"), e("ask_selection", "Ask about selection")};
+}
+
+// The entries, with a pending "Go to …?" offer first (navigate.h).
+QVariantList dockEntries() {
+    QVariantList l = baseEntries();
+    const QString offer = offerLabel();
+    if (!offer.isEmpty()) l.prepend(QVariantMap{{QStringLiteral("id"), QStringLiteral("goto_offer")}, {QStringLiteral("label"), offer}});
+    return l;
 }
 
 // The status line: the bridge's (its `status` socket line, or /run/codrawer/status if written in
@@ -86,6 +96,7 @@ void refreshInjected(Injection &in) {
     in.item->setProperty("entries", dockEntries());
     in.item->setProperty("status", localStatus());
     in.item->setProperty("page", visiblePageId());
+    if (in.item->metaObject()->indexOfProperty("badge") >= 0) in.item->setProperty("badge", !offerLabel().isEmpty());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -96,6 +107,17 @@ void dockAction(const QString &source, const QString &id) {
     if (id == QLatin1String("status")) {
         for (Injection &in : injections()) refreshInjected(in);
         logLine(QStringLiteral("action: status (answered locally: %1)").arg(localStatus()));
+        return;
+    }
+    if (id == QLatin1String("goto_offer")) {
+        // the user's tap on the offer: the one way an offered goto navigates (navigate.h)
+        acceptOffer([source](const QString &r) {
+            logLine(QStringLiteral("action: goto_offer accepted: %1").arg(r));
+            const QJsonObject done{{QStringLiteral("t"), QStringLiteral("dock_action")}, {QStringLiteral("id"), QStringLiteral("goto_accepted")},
+                                   {QStringLiteral("page"), visiblePageId()}, {QStringLiteral("source"), source},
+                                   {QStringLiteral("result"), r}};
+            sendToBridge(QJsonDocument(done).toJson(QJsonDocument::Compact));
+        });
         return;
     }
     QJsonObject o{{QStringLiteral("t"), QStringLiteral("dock_action")}, {QStringLiteral("id"), id},

@@ -37,7 +37,9 @@
 //
 // The page is the visible page; the bridge adds the document id from its page watcher and
 // relays the message into the router (docs/protocol.md, "dock_action"). `status` is answered on
-// the tablet. With no bridge connected the action is logged and dropped, and the UI says so. An
+// the tablet. A pending "Go to …?" offer (navigate.h) is the first entry, with `badge` set on the
+// dock; a tap on it (`goto_offer`) navigates and then tells the bridge
+// `{"t":"dock_action","id":"goto_accepted",…,"result":"ok goto …"}`. With no bridge connected the action is logged and dropped, and the UI says so. An
 // `inert=1` injection only logs its taps (a new button's first rollout).
 //
 // # Threading

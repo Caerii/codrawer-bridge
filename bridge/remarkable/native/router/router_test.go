@@ -664,3 +664,16 @@ func TestMarksMessagesAreRelayed(t *testing.T) {
 	}
 	expectQuiet(t, phone, 150*time.Millisecond)
 }
+
+// "Take me there" (protocol.md, "goto") reaches the tablet bridge as sent; the bridge decides
+// whether it navigates or becomes an offer.
+func TestGotoIsRelayed(t *testing.T) {
+	srv := newServer(t)
+	phone := dial(t, srv, "s1")
+	tablet := dial(t, srv, "s1")
+	send(t, phone, `{"t":"goto","doc":"4c0e2d44-91ad-4d94-a473-ac8187400cd7","page":"3","origin":"user"}`)
+	if m := read(t, tablet); m["t"] != "goto" || m["origin"] != "user" || m["page"] != "3" {
+		t.Fatalf("got %v", m)
+	}
+	expectQuiet(t, phone, 150*time.Millisecond)
+}

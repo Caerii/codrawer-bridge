@@ -12,7 +12,9 @@
 // the page overview may be pressed (navigation); in the library, anything not denied. With the
 // lock screen up nothing is pressed. If the user's pen or finger pauses automation mid-gesture,
 // the gesture lets go where it is and answers `paused by the user`. `text_insert` is refused
-// outside "codrawer: test".
+// outside "codrawer: test". `goto`, `goto_doc` and `folder` press nothing: they are navigation
+// through xochitl's own functions, allowed anywhere ("navigation and reading elsewhere are
+// allowed"), and refused while the pen or a finger is on the page.
 //
 // # Commands (each answers one JSON object)
 //
@@ -23,8 +25,9 @@
 //   tap_item selector          the centre of the first visible item matching (scene.h)
 //   tool name                  taps the ToolLoader `editingToolLoader_<name>`
 //   open title                 with no notebook open: taps the library tile titled so
-//   goto page                  the first of goToPageId/goToPage/setCurrentPage on the
-//                              DocumentView chain (an int page uses the (int) overload)
+//   goto page                  the open notebook to a page (uuid or index from 0; navigate.h)
+//   goto_doc doc [page] [region] [flash]   any document by uuid, through xochitl's own path
+//   folder action [id]         library folders: enter id, up, home
 //   text_insert text, text_read   text.h's routes (A, then B)
 //
 // # Threading

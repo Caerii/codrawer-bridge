@@ -223,6 +223,36 @@ Fields: `id` the entry's id (`status` is answered on the tablet and never sent; 
 `bbox` `[x0, y0, x1, y1]` as xochitl signalled it (`SceneController.areaSelected`, scene units,
 x centred) and `items`, the number of selected items. Clients resolve the selected strokes from
 their `page` snapshot (strokes with points inside `bbox` after the conversion `x = (x_rm + w/2)/w`).
+`goto_accepted` (with `result`, the extension's reply) says the user tapped a `goto` offer and the
+tablet went there.
+
+### `goto` (client or agent → server → tablet bridge): "take me there"
+
+Opens a document on the tablet, turns to a page, and can briefly frame a region. Nothing is drawn
+into the page and nothing is saved.
+
+```json
+{"t":"goto","doc":"<doc uuid>","page":"<page uuid>","region":[0.1,0.2,0.3,0.4],"flash":true,
+ "reason":"cited: Lemma 2","origin":"user"}
+```
+
+Fields: `doc` the document's uuid; `page` (optional) a string, a page uuid or a page index counted
+from 0 in digits (`"3"`; the routers read `page` as a string, as in `page` messages, and drop a
+message where it is a number; absent: where the document was last left); `region` (optional) `[x0, y0, x1, y1]` normalised
+like every point (`x = (x_rm + w/2)/w`, `y = y_rm/h`), each in −0.5..1.5; `flash` (default true
+with a region) frames the region for 2 s; `reason` (≤ 120 characters) is what the offer says;
+`origin` is `"user"` only when the user's own tap produced it (a citation, a search result, a
+dock entry on a client).
+
+**Never yank.** The tablet navigates at once only for `"origin":"user"`. Anything else (an agent's
+pointer, a message without an origin) becomes an offer in the tablet's dock, "Go to <reason>?",
+with a dot on the dock button; it waits 10 minutes, a newer offer replaces it, and only the user's
+tap on it navigates (then `dock_action` `goto_accepted`). Nothing navigates while the pen or a
+finger is on the page. The bridge checks the message (agentink/goto.go and agent_ink.rs, the same
+rules and bytes) and has a hook for ADR 011's consent scopes (allows everything until the scopes
+reach the tablet). Navigation uses xochitl's own path (`MainView.onOpened`, `DocumentView.openPage`;
+codrawer-layer `src/navigate.h`), so archived documents, password locks and the last-opened page
+behave as when the user opens them.
 
 ### Personal marks: `mark_seen`, `mark_ask`, `mark_define`, `mark_invoke`, `mark_feedback`, `mark_query`, `marks`
 

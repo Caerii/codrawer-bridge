@@ -39,8 +39,8 @@ from .viewer_page import render_viewer_html
 
 app = FastAPI()
 
-#: Primer and dock messages the router relays as they are (ADR 010).
-PRIMER_RELAY = frozenset({"primer", "primer_request", "dock_action", "dock_entries", "dock_query"})
+#: Primer and dock messages (ADR 010) and "take me there" (protocol.md, "goto"), relayed as they are.
+PRIMER_RELAY = frozenset({"primer", "primer_request", "dock_action", "dock_entries", "dock_query", "goto"})
 
 # Background tasks must stay referenced or the event loop may garbage-collect
 # them mid-flight (asyncio docs). Terminal prompts are launched from the socket
