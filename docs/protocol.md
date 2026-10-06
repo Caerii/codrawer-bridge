@@ -380,30 +380,26 @@ The Primer never draws on the user's layer. When it writes on the page (a sugges
 later its replies: ADR 009, call and response), its ink is `stroke_*` on the `ai` layer with
 `author: "primer"`, like any agent ink (ADR 003).
 
-### `dock_entries`, `dock_query`, `dock_action` (the tablet's toolbar dock)
+### `dock_entries` and `dock_query` (agents → the tablet's dock)
 
-The tablet's toolbar dock (a XOVI extension, configured from `/run/codrawer/dock.json`) shows
-entries contributed by agents. The Primer contributes its entries as
+The dock's entries come from `/run/codrawer/dock.json` (`{"entries":[{"id","label"},…]}`, see
+`dock_action`). An agent announces the entries it answers, so the tablet's bridge can write them
+there (merging owners, each owner's list replaced whole; the bridge side is not built yet, and
+until it is the extension's built-in list carries the same ids):
 
 ```json
 {"t":"dock_entries","owner":"primer","entries":[
-  {"id":"primer.coach","label":"Practice coach · watching","icon":"compass","kind":"button","badge":"watching","hint":"What's next, weak spots, today's plan"},
-  {"id":"primer.ask_page","label":"Ask about this page","icon":"question","kind":"button","hint":"The Primer reads the proof on this page"},
-  {"id":"primer.ask_selection","label":"Ask agent","icon":"lasso","kind":"selection","hint":"The Primer reads the selected ink"}]}
+  {"id":"practice_coach","label":"Practice coach · watching","badge":"watching","hint":"What's next, weak spots, today's plan"},
+  {"id":"ask_page","label":"Ask about this page","hint":"The Primer reads the proof on this page"},
+  {"id":"ask_selection","label":"Ask about selection","kind":"selection","hint":"The Primer reads the selected ink"}]}
 ```
 
-sent by the desktop router to every joining client when `CODRAWER_PRIMER=1`, and in answer to
-`{"t":"dock_query"}`. The tablet's bridge merges each owner's entries into `dock.json` (one
-array per owner, replaced whole). `badge: "watching"` and the label show that the practice coach
-is observing. A press arrives as
-
-```json
-{"t":"dock_action","id":"primer.ask_selection","doc":"<doc uuid>","page":"<page uuid>","bbox":[0.1,0.3,0.7,0.5],"line_ids":["u_12","u_13"]}
-```
-
-`bbox` and `line_ids` (the selected strokes' ids) come with `kind: "selection"` entries only.
-The routers relay all three messages as they are; the desktop router also feeds them to its
-Primer.
+The desktop router sends the Primer's entries to every joining client when `CODRAWER_PRIMER=1`,
+and again in answer to `{"t":"dock_query"}`. While the practice coach is watching, its entry's
+label says so and `badge` is `"watching"` (ADR 010: the learner always sees that it is on). The
+Primer acts on `dock_action` `practice_coach` (the coach view, and the next problem written onto
+the page as agent ink), `ask_page` (a reading of the page) and `ask_selection` (a reading of the
+strokes inside the lasso's `bbox`). All routers relay the three messages as they are.
 
 ## Compatibility notes
 

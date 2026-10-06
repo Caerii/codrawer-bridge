@@ -30,10 +30,10 @@ lectures, and every suggestion says why (ADR 010, "The practice coach").
   machine-written; otherwise text on the phone and glasses only. The native ink path (the XOVI
   extension's ``/run/codrawer/ink.sock``, fed by the bridge from ai-layer strokes) draws the same
   strokes on the tablet itself; the coach does not need to know which surface renders them.
-- **Dock entries.** :data:`DOCK_ENTRIES` are what the desktop publishes for the tablet's toolbar
-  dock (``/run/codrawer/dock.json``): "Practice coach", "Ask about this page" and the lasso
-  "Ask agent" (``primer.ask_selection``). The dock sends ``dock_action`` messages; the Primer
-  agent handles them (agent.py).
+- **Dock entries.** :data:`DOCK_ENTRIES` are what the Primer announces for the tablet's toolbar
+  dock (``/run/codrawer/dock.json``, ADR 009 §4): "Practice coach" (labelled "watching" while it
+  observes), "Ask about this page" and the lasso's "Ask about selection". The dock sends
+  ``dock_action`` messages; the Primer agent handles them (agent.py).
 
 The coach is a SIG background agent in the sense of docs/sig-integration.md: its memory is the
 learner file (mastery, misconceptions, the attempt log, reading positions), its suggestions
@@ -42,7 +42,12 @@ improve as that evidence accumulates, and it can always show its reasons.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from .concepts import CONCEPTS, MISCONCEPTIONS
@@ -50,26 +55,23 @@ from .learner import Attempt, Learner, ReadingEvent
 from .practice import BANK, Problem, choose_queue
 from .proofdoc import ProofDoc
 
-#: Toolbar dock entries the desktop publishes (format proposed in ADR 010 for dock.json).
+#: The dock entries the Primer answers (docs/protocol.md ``dock_entries``). The ids are the
+#: tablet extension's own (``practice_coach``, ``ask_page``, ``ask_selection``), so its built-in
+#: list works before the bridge writes dock.json from these.
 DOCK_ENTRIES: list[dict[str, Any]] = [
     {
-        "id": "primer.coach",
+        "id": "practice_coach",
         "label": "Practice coach",
-        "icon": "compass",
-        "kind": "button",
         "hint": "What's next, weak spots, today's plan",
     },
     {
-        "id": "primer.ask_page",
+        "id": "ask_page",
         "label": "Ask about this page",
-        "icon": "question",
-        "kind": "button",
         "hint": "The Primer reads the proof on this page",
     },
     {
-        "id": "primer.ask_selection",
-        "label": "Ask agent",
-        "icon": "lasso",
+        "id": "ask_selection",
+        "label": "Ask about selection",
         "kind": "selection",
         "hint": "The Primer reads the selected ink",
     },
@@ -81,7 +83,7 @@ def dock_entries(watching: bool) -> list[dict[str, Any]]:
     out = []
     for e in DOCK_ENTRIES:
         e = dict(e)
-        if e["id"] == "primer.coach":
+        if e["id"] == "practice_coach":
             e["badge"] = "watching" if watching else ""
             e["label"] = "Practice coach · watching" if watching else "Practice coach"
         out.append(e)
@@ -300,11 +302,15 @@ def problem_ink(
 ) -> list[dict] | None:
     """
     The problem statement as ``stroke_begin``/``stroke_pts``/``stroke_end`` messages on the
-    ``ai`` layer, word-wrapped into ``width`` (normalized) from the top-left anchor ``(x, y)``,
-    or None when no handwriting provider is installed (then the statement goes out as text).
-    Uses the Hershey "futural" font (public domain); a packages/hand persona replaces it when
-    that package is available.
+    ``ai`` layer, from the top-left anchor ``(x, y)`` (normalized), or None when no handwriting
+    provider is available (then the statement goes out as text only). Providers, in order:
+    a ``packages/hand`` persona (:func:`hand_ink`, the biomechanical hand, ADR 009 §3), then the
+    public-domain Hershey "futural" font word-wrapped into ``width`` (neat, plainly
+    machine-written; needs ``Hershey-Fonts``).
     """
+    via_hand = hand_ink(f"{problem.title}: {problem.statement}", x, y)
+    if via_hand:
+        return via_hand
     try:
         from HersheyFonts import HersheyFonts  # optional: uv run --with Hershey-Fonts
     except ImportError:
@@ -334,7 +340,7 @@ def problem_ink(
             pts = [
                 [
                     round((x * page_w + px * unit) / page_w, 5),
-                    round((base_y - py * unit) / page_h, 5),
+                    round((base_y + py * unit) / page_h, 5),
                     0.45,
                 ]
                 for px, py in stroke
@@ -356,6 +362,53 @@ def problem_ink(
             msgs.append({"t": "stroke_pts", "id": sid, "pts": pts})
             msgs.append({"t": "stroke_end", "id": sid})
     return msgs
+
+
+#: The repository root, where ``packages/hand`` lives when this runs from a checkout.
+REPO = Path(__file__).resolve().parents[3]
+
+
+def hand_ink(
+    text: str, x: float, y: float, persona: str = "mathematician", seed: int = 1
+) -> list[dict] | None:
+    """
+    ``text`` written by a ``packages/hand`` persona, through its CLI (``pnpm --filter hand cli
+    … --out``): ``stroke_*`` messages on the ``ai`` layer with real pen timing in their point
+    timestamps. None when the package, pnpm or Node is missing, or the run fails (60 s cap).
+    """
+    if not (REPO / "packages" / "hand" / "package.json").exists() or not shutil.which("pnpm"):
+        return None
+    with tempfile.TemporaryDirectory(prefix="primer-hand-") as d:
+        out = Path(d) / "hand.jsonl"
+        cmd = [
+            shutil.which("pnpm") or "pnpm",
+            "--filter",
+            "hand",
+            "cli",
+            text,
+            "--persona",
+            persona,
+            "--out",
+            str(out),
+            "--seed",
+            str(seed),
+            "--x",
+            f"{x:.3f}",
+            "--y",
+            f"{y:.3f}",
+        ]
+        try:
+            subprocess.run(cmd, cwd=REPO, capture_output=True, timeout=60, check=True)
+            lines = out.read_text(encoding="utf-8").splitlines()
+        except (OSError, subprocess.SubprocessError):
+            return None
+    msgs = []
+    for line in lines:
+        o = json.loads(line)
+        m = o.get("msg", o)
+        if m.get("t", "").startswith("stroke_"):
+            msgs.append(m)
+    return msgs or None
 
 
 def bank_problem(pid: str) -> Problem | None:

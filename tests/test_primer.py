@@ -527,6 +527,45 @@ def test_agent_reads_a_recorded_session_and_answers_requests(tmp_path):
     assert "proof" not in readings[2] and not LearnerStore(tmp_path).path("nell").exists()
 
 
+def test_dock_selection_in_scene_units_picks_the_lassoed_line(tmp_path):
+    async def nothing(m: dict) -> None:
+        return None
+
+    agent = PrimerAgent(nothing, learner="x", mode="offline", store=LearnerStore(tmp_path))
+    for m in load_recording(FIXTURES / "sqrt2_flawed.jsonl"):
+        agent.log.observe(m)
+    last = segment_lines(agent.log.ink())[-1]
+    x0, y0, x1, y1 = last.bbox
+    pad = 0.005
+    scene = [(x0 - pad) * 1620 - 810, (y0 - pad) * 2160, (x1 + pad) * 1620 - 810, (y1 + pad) * 2160]
+    sel = agent._selection_log({"t": "dock_action", "id": "ask_selection", "bbox": scene})
+    assert {s.id for s in sel.ink()} == set(last.strokes)
+
+
+def test_dock_practice_coach_answers_with_the_coach_view(tmp_path):
+    sent: list[dict] = []
+
+    async def send(m: dict) -> None:
+        sent.append(m)
+
+    store = LearnerStore(tmp_path)
+    lr = store.load("nell")
+    lr.consent = lr.watching = True
+    store.save(lr)
+    agent = PrimerAgent(send, learner="nell", mode="offline", store=store, today="2026-10-06")
+    asyncio.run(agent.handle({"t": "dock_action", "id": "practice_coach", "doc": "d", "page": "p"}))
+    reading = [m for m in sent if m["t"] == "primer"][-1]
+    assert reading["coach"]["watching"] and reading["coach"]["next"]
+    assert all(q["why"] for q in reading["coach"]["next"])
+    ink = [m for m in sent if m["t"] == "stroke_begin"]
+    assert all(m["layer"] == "ai" for m in ink), "a sketched problem is agent ink only"
+    assert coach.dock_entries(True)[0] == {
+        **coach.DOCK_ENTRIES[0],
+        "badge": "watching",
+        "label": "Practice coach · watching",
+    }
+
+
 def test_bkt_values_stay_probabilities_after_a_session(tmp_path):
     store = LearnerStore(tmp_path)
 

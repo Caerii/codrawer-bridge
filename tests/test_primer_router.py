@@ -19,7 +19,7 @@ def test_router_answers_a_primer_request_with_a_reading(tmp_path, monkeypatch):
     with TestClient(app) as client, client.websocket_connect("/ws/primer-router-test") as ws:
         assert json.loads(ws.receive_text())["t"] == "hello"
         dock = json.loads(ws.receive_text())
-        assert dock["t"] == "dock_entries" and dock["entries"][0]["id"] == "primer.coach"
+        assert dock["t"] == "dock_entries" and dock["entries"][0]["id"] == "practice_coach"
         for m in load_recording(FIXTURES / "sqrt2_flawed.jsonl"):
             ws.send_text(json.dumps(m))
         ws.send_text(json.dumps({"t": "primer_request", "what": "proof", "learner": "nell"}))

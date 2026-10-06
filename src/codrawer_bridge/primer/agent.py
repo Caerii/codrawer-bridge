@@ -15,8 +15,8 @@ This is where the parts meet, in the order a reading happens:
 
 **Triggers.** An explicit request always gets an answer: ``primer_request`` (the phone's Proof
 panel), a keyboard line ``/proof`` or ``/hint`` assembled from ``key`` messages, or a
-``dock_action`` from the tablet's toolbar dock (``primer.ask_page``, ``primer.ask_selection``
-with the lasso's ``line_ids``/``bbox``, ``primer.coach``). With ``auto`` on, a lull after new ink
+``dock_action`` from the tablet's toolbar dock (``ask_page``, ``ask_selection``
+with the lasso's ``bbox``, ``practice_coach``). With ``auto`` on, a lull after new ink
 (ink_signals.LullDetector) starts a reading too, at most once per ``auto_min_interval_s``; a lull
 reading whose move is ``silence`` sends nothing.
 
@@ -144,12 +144,13 @@ class PrimerAgent:
             await self.send_plan(include_coach=True)
 
     async def _on_dock(self, msg: dict) -> None:
+        """The tablet dock's entries (docs/protocol.md ``dock_action``; ids as the extension's)."""
         aid = msg.get("id")
-        if aid == "primer.coach":
+        if aid == "practice_coach":
             await self.send_plan(include_coach=True, sketch=True)
-        elif aid == "primer.ask_page":
+        elif aid == "ask_page":
             await self.read("proof")
-        elif aid == "primer.ask_selection":
+        elif aid == "ask_selection":
             await self.read("proof", selection=msg)
 
     def set_learner(self, name: str) -> None:
@@ -175,15 +176,27 @@ class PrimerAgent:
     # ── A reading ────────────────────────────────────────────────────────────────────────────
 
     def _selection_log(self, sel: dict) -> InkLog:
-        """A log of only the lasso's strokes: by ``line_ids`` (stroke ids) or inside ``bbox``."""
+        """
+        A log of only the lasso's strokes: the ids in ``line_ids`` when given, else the strokes
+        whose points lie inside ``bbox``. The dock sends ``bbox`` in xochitl's scene units (x
+        centred on the page, docs/protocol.md ``dock_action``); a box with any coordinate outside
+        [-0.5, 1.5] is taken to be in scene units and normalized with the page size (1620 × 2160).
+        """
         ids = {str(i) for i in sel.get("line_ids") or []}
-        bbox = sel.get("bbox")
+        box = sel.get("bbox")
+        if isinstance(box, list) and len(box) == 4 and any(abs(float(v)) > 1.5 for v in box):
+            w, h = 1620.0, 2160.0
+            box = [
+                (float(box[0]) + w / 2) / w,
+                float(box[1]) / h,
+                (float(box[2]) + w / 2) / w,
+                float(box[3]) / h,
+            ]
         out = InkLog()
         for s in self.log.ink():
             keep = s.id in ids
-            if not keep and isinstance(bbox, list) and len(bbox) == 4:
-                x0, y0, x1, y1 = s.bbox()
-                keep = x0 >= bbox[0] and y0 >= bbox[1] and x1 <= bbox[2] and y1 <= bbox[3]
+            if not keep and isinstance(box, list) and len(box) == 4:
+                keep = all(box[0] <= p[0] <= box[2] and box[1] <= p[1] <= box[3] for p in s.pts)
             if keep:
                 out.strokes[s.id] = InkStroke(**{**s.__dict__})
         return out
