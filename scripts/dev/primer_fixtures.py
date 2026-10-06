@@ -118,8 +118,8 @@ class Pen:
         )
         batch: list[list[float]] = []
         next_flush = sc.BATCH_MS
-        for x, y, p, ms in samples:
-            batch.append([round(x / PAGE_W, 5), round(y / PAGE_H, 5), round(p, 3), int(start + ms)])
+        for x, y, p, ms in samples[::2] + samples[-1:]:  # 120 Hz keeps the files small
+            batch.append([round(x / PAGE_W, 4), round(y / PAGE_H, 4), round(p, 3), int(start + ms)])
             if ms >= next_flush:
                 self.t = start + ms
                 self.emit({"t": "stroke_pts", "id": sid, "pts": batch})

@@ -35,6 +35,8 @@ bridge/remarkable/native/main.test
 
 # Stroke recordings / replay captures (large, machine-specific)
 *.jsonl
+# ...except the Primer's fixture proofs, which its tests and offline demo read
+!src/codrawer_bridge/primer/fixtures/*.jsonl
 recordings/
 
 # Rendered frames from the Even G2 mock viewer
