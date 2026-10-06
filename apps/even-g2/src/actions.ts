@@ -17,7 +17,7 @@ import { setPageMode, syncWideLayout } from './glasses/page'
 import { link } from './link'
 import { followGlasses } from './phone/views'
 import { stage } from './phone/screen'
-import { dirty, glasses, hud, store, view } from './state'
+import { dirty, glasses, hud, isWide, store, view } from './state'
 
 export type Action =
   | 'new-drawing'
@@ -38,6 +38,8 @@ const ZOOM_IN = 0.8
 const ZOOM_OUT = 1.25
 const MIN_WINDOW = 0.06
 const MAX_WINDOW = 1
+/** How close the wide fit view zooms in (× the plain fit). */
+const MAX_FIT_ZOOM = 6
 
 /** Carry out an action. ('send-drawing' is the /snap command; see glasses/input.ts.) */
 export function applyAction(action: Action) {
@@ -83,7 +85,11 @@ export function applyAction(action: Action) {
     if (glasses.wideFit) view.mode = 'full'
   }
   else if (action === 'cycle-highlight') view.highlight = view.highlight === 'all' ? 'user' : view.highlight === 'user' ? 'ai' : 'all'
-  else if (action === 'zoom-in') view.window = Math.max(MIN_WINDOW, view.window * ZOOM_IN)
+  else if ((action === 'zoom-in' || action === 'zoom-out') && isWide()) {
+    // the wide fit view has no loupe: the ring zooms the view itself, toward the pen
+    const z = (view.fitZoom ?? 1) * (action === 'zoom-in' ? 1 / ZOOM_IN : 1 / ZOOM_OUT)
+    view.fitZoom = Math.min(MAX_FIT_ZOOM, Math.max(1, z))
+  } else if (action === 'zoom-in') view.window = Math.max(MIN_WINDOW, view.window * ZOOM_IN)
   else if (action === 'zoom-out') view.window = Math.min(MAX_WINDOW, view.window * ZOOM_OUT)
   if (action === 'toggle-mode' || action === 'toggle-wide' || action === 'cycle-view' || action === 'zoom-in' || action === 'zoom-out') {
     followGlasses() // the phone follows the ring too

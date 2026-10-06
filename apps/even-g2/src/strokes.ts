@@ -68,6 +68,12 @@ export interface RasterOptions {
   center?: [number, number]
   /** a rectangle in page coords to outline (the loupe's view, shown on the big canvas) */
   marker?: [number, number, number, number]
+  /**
+   * full mode: magnification over the plain fit (1 = the whole inked area; 2 = twice as close),
+   * centred on the pen (or `center`), kept inside the inked area. The ring's scroll sets it in the
+   * wide fit view, which has no loupe to zoom instead (glasses/display.ts).
+   */
+  fitZoom?: number
 }
 
 // Memory and raster cost scale with points, so the page is bounded by points (oldest finished
@@ -302,11 +308,20 @@ function makeMapper(o: RasterOptions, store: StrokeStore) {
   // physical size of the box: page width units are pageAspect × page height units
   const physW = bw * o.pageAspect
   const physH = bh
-  const scale = Math.min(o.width / physW, o.height / physH)
+  const z = Math.max(1, o.fitZoom ?? 1)
+  const scale = Math.min(o.width / physW, o.height / physH) * z
   const dw = physW * scale
   const dh = physH * scale
-  const ox = (o.width - dw) / 2
-  const oy = (o.height - dh) / 2
+  let ox = (o.width - dw) / 2
+  let oy = (o.height - dh) / 2
+  if (z > 1) {
+    // bring the pen (or `center`) to the middle, without showing past the inked area's edges
+    const f = last ?? [bx0 + bw / 2, by0 + bh / 2]
+    const fx = ((f[0] - bx0) / bw) * dw
+    const fy = ((f[1] - by0) / bh) * dh
+    ox = dw > o.width ? Math.min(0, Math.max(o.width - dw, o.width / 2 - fx)) : ox
+    oy = dh > o.height ? Math.min(0, Math.max(o.height - dh, o.height / 2 - fy)) : oy
+  }
   return (x: number, y: number): [number, number] => [ox + ((x - bx0) / bw) * dw, oy + ((y - by0) / bh) * dh]
 }
 
