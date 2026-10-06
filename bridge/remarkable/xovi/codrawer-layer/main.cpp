@@ -1450,39 +1450,24 @@ void drawLines(const CommitPtr &s) {
     const bool hasItemsBounds = cm->indexOfProperty("itemsBoundingRect") >= 0;
     s->boundsBefore = hasItemsBounds ? s->c->property("itemsBoundingRect") : QVariant();
     int added = 0;
-    // Placement. Probe 1 showed that `addDrawingLine` takes the Line in the pen's frame, not in
-    // page coordinates: a wave given at x −560…−140, y 285…375 was saved at x +12…+432,
-    // y −12…+78 on a page the user had panned. xochitl maps a pen stroke through the view's
-    // transform, so ink given in page coordinates is first mapped scene → view with the tile
-    // manager's own `sceneToViewTransform`, making it land where it was meant to be saved.
-    // `raw` (probe only) skips this.
-    QTransform toView;
-    bool mapped = false;
-    if (!s->job.raw && s->tiles && s->tiles->metaObject()->indexOfProperty("sceneToViewTransform") >= 0) {
+    // Placement: `addDrawingLine` takes the Line in page (scene) coordinates, exactly as the .rm
+    // file stores them; nothing is mapped. Measured 2026-10-06 on a page scrolled to view offset
+    // [810, −196]:
+    //   - an unmapped probe wave given at x −564…−136, y 281…379 was saved at x −560…−140,
+    //     y 285…375 (the same place, within the pen's width);
+    //   - ink first mapped scene → view through the tile manager's `sceneToViewTransform` (what this
+    //     code did before) was saved shifted by exactly that offset, off the page's right edge.
+    // Probe 1's earlier shift came from its first, synchronous commit path, since replaced. The
+    // view transform is still logged in verbose mode, so a future OS that changes this shows up.
+    if (s->job.verbose && s->tiles && s->tiles->metaObject()->indexOfProperty("sceneToViewTransform") >= 0) {
         const QVariant tv = s->tiles->property("sceneToViewTransform");
         if (tv.metaType().id() == QMetaType::QTransform) {
-            toView = tv.value<QTransform>();
-            mapped = toView.isInvertible();
+            const QTransform t = tv.value<QTransform>();
+            logLine(QStringLiteral("ink: view offset dx %1 dy %2 zoom %3 (not applied: Lines are page coordinates)")
+                        .arg(t.dx()).arg(t.dy()).arg(t.m11()));
         }
-    }
-    if (!s->job.raw && !mapped) {
-        restoreUserLayer(s, QStringLiteral("err no sceneToViewTransform; nothing drawn"));
-        return;
-    }
-    if (s->job.verbose && mapped) {
-        const RmPoint &f = s->job.strokes.first().pts.first();
-        logLine(QStringLiteral("ink: sceneToView [%1 %2 | %3 %4 | dx %5 dy %6]; first point (%7,%8) -> %9")
-                    .arg(toView.m11()).arg(toView.m12()).arg(toView.m21()).arg(toView.m22()).arg(toView.dx()).arg(toView.dy())
-                    .arg(f.x).arg(f.y).arg(show(toView.map(QPointF(f.x, f.y)))));
     }
     for (InkStroke &st : s->job.strokes) {
-        if (mapped) {
-            for (RmPoint &q : st.pts) {
-                const QPointF v = toView.map(QPointF(q.x, q.y));
-                q.x = float(v.x());
-                q.y = float(v.y());
-            }
-        }
         QVariant line;
         if (!buildLine(st.tool, st.argb, st.thickness, st.pts, line, s->job.verbose)) continue;
         if (!invoke(s->c, "addDrawingLine", {line})) continue;
