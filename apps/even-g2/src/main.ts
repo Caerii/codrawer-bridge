@@ -42,7 +42,7 @@ import { tick } from './loop'
 import { keepScreenAwake } from './phone/awake'
 import { setupCamera } from './phone/camera'
 import { installDevLog } from './phone/devlog'
-import { setupDrawing } from './phone/draw'
+import { forgetMyStrokes, setupDrawing } from './phone/draw'
 import { setupMenu } from './phone/menu'
 import { askPairingCode, askRouterAddress, onHelloNotice } from './phone/notices'
 import { showStatus } from './phone/panel'
@@ -75,6 +75,7 @@ link.onClose(() => {
 link.on('hello', () => showConnection(true))
 link.on('hello', onHelloNotice)
 link.on('hello', session.onHello)
+link.on('hello', forgetMyStrokes) // a new connection owns no strokes yet (phone/draw.ts)
 link.on('error', (m) => {
   if (m.code !== 'unauthorized') return
   askPairingCode()
@@ -84,6 +85,7 @@ link.on('cursor', session.onCursor)
 link.on('stroke_begin', session.onStrokeBegin)
 link.on('stroke_pts', session.onStrokePoints)
 link.on('stroke_end', session.onStrokeEnd)
+link.on('stroke_delete', session.onStrokeDelete)
 link.on('ai_stroke_begin', session.onAiStrokeBegin)
 link.on('ai_stroke_pts', session.onAiStrokePoints)
 link.on('ai_stroke_end', session.onAiStrokeEnd)

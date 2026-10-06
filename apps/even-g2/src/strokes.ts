@@ -98,7 +98,15 @@ export class StrokeStore {
   /** the tablet page the snapshot strokes belong to (null: no `page` message yet) */
   page: { doc: string; page: string; title?: string; rev: number } | null = null
 
+  /**
+   * Ids removed by a `stroke_delete`, so points still in flight for them (a stroke deleted while
+   * being drawn) do not bring them back through {@link points}' implicit begin. A new
+   * stroke_begin with the same id is a new stroke and lifts it. Bounded: the oldest are forgotten.
+   */
+  private deleted = new Set<string>()
+
   begin(id: string, layer: Layer, brush = 'pen', ts?: number, peer?: { color?: string; author?: string }) {
+    this.deleted.delete(id)
     const old = this.strokes.get(id)
     if (old) {
       // Seen before (a router replaying the page after a reconnect): restart it in place.
@@ -183,6 +191,7 @@ export class StrokeStore {
   points(id: string, pts: number[][], layerHint: Layer) {
     let s = this.strokes.get(id)
     if (!s) {
+      if (this.deleted.has(id)) return // deleted mid-stroke: its late points stay deleted
       this.begin(id, layerHint)
       s = this.strokes.get(id)!
     }
@@ -218,10 +227,38 @@ export class StrokeStore {
     for (const s of this.strokes.values()) if (!s.done) this.end(s.id)
   }
 
+  /**
+   * A `stroke_delete` (docs/protocol.md): forget these strokes. Unknown ids are ignored. Returns
+   * the ids that were here, so callers redraw only when something went. Who may delete what is
+   * the router's rule (a client its own strokes, anyone the `ai` layer); a client applies what
+   * the router relays, and its own deletes before sending them.
+   */
+  remove(ids: readonly string[]): string[] {
+    const gone: string[] = []
+    for (const id of ids) {
+      if (typeof id !== 'string') continue
+      const s = this.strokes.get(id)
+      this.deleted.add(id)
+      if (this.deleted.size > MAX_STROKES) this.deleted.delete(this.deleted.values().next().value as string)
+      if (!s) continue
+      this.nPoints -= s.pts.length
+      this.strokes.delete(id)
+      gone.push(id)
+    }
+    if (gone.length) this.order = this.order.filter((id) => this.strokes.has(id))
+    return gone
+  }
+
+  /** Whether the store holds a stroke with this id. */
+  has(id: string): boolean {
+    return this.strokes.has(id)
+  }
+
   /** Drop every stroke, or only one layer's. */
   clear(layer?: Layer) {
     if (!layer) {
       this.strokes.clear()
+      this.deleted.clear()
       this.order = []
       this.nPoints = 0
       this.lastPoint = null

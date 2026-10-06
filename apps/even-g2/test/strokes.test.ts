@@ -206,3 +206,41 @@ test('clear forgets the page; malformed snapshot entries are ignored', () => {
   assert.equal(s.page, null)
   assert.equal(s.all().length, 0)
 })
+
+test('stroke_delete removes strokes and their points; unknown ids are ignored', () => {
+  const s = new StrokeStore()
+  s.begin('u_1', 'user')
+  s.points('u_1', [pt(0.1, 0.1), pt(0.2, 0.2)], 'user')
+  s.begin('ai_1', 'ai', 'pen', 1, { color: '#7a4fd8', author: 'agent' })
+  s.points('ai_1', [pt(0.3, 0.3)], 'ai')
+  s.begin('u_2', 'user')
+  s.points('u_2', [pt(0.4, 0.4)], 'user')
+  assert.deepEqual(s.remove(['ai_1', 'nope', 'u_1']), ['ai_1', 'u_1'])
+  assert.deepEqual(s.all().map((x) => x.id), ['u_2'])
+  assert.equal(s.pointCount, 1)
+  assert.equal(s.has('u_1'), false)
+  assert.equal(s.has('u_2'), true)
+  assert.deepEqual(s.remove(['u_1']), [], 'a second delete is a no-op')
+})
+
+test('points arriving after a delete do not resurrect the stroke; a new begin does', () => {
+  const s = new StrokeStore()
+  s.begin('ai_9', 'ai')
+  s.points('ai_9', [pt(0.1, 0.1)], 'ai')
+  s.remove(['ai_9'])
+  s.points('ai_9', [pt(0.2, 0.2)], 'ai') // still in flight when the delete was applied
+  assert.equal(s.all().length, 0)
+  s.begin('ai_9', 'ai') // the id reused for a new stroke
+  s.points('ai_9', [pt(0.3, 0.3)], 'ai')
+  assert.deepEqual(s.all().map((x) => x.pts.length), [1])
+})
+
+test('a deleted id never seen before is still remembered, so its first points stay away', () => {
+  const s = new StrokeStore()
+  assert.deepEqual(s.remove(['later']), [])
+  s.points('later', [pt(0.5, 0.5)], 'user')
+  assert.equal(s.all().length, 0)
+  s.clear()
+  s.points('later', [pt(0.5, 0.5)], 'user') // a new drawing forgets old deletes
+  assert.equal(s.all().length, 1)
+})

@@ -51,6 +51,54 @@ export function setMyColor(color: string) {
   drawBtn().style.color = color
 }
 
+// ── Taking strokes back ───────────────────────────────────────────────────────────────────────
+//
+// The routers let a connection delete only the strokes it began (docs/protocol.md,
+// `stroke_delete`), so "my strokes" are the ones drawn here since this connection's `hello`: after
+// a reconnect the router would refuse the older ones, and deleting them here alone would be a lie
+// undone by the next replay. The list is forgotten on every hello.
+
+/** Ids of the strokes drawn here on this connection, oldest first. */
+let mine: string[] = []
+
+/** A new connection: the router no longer counts earlier strokes as ours. */
+export function forgetMyStrokes() {
+  mine = []
+}
+
+/** The strokes drawn here on this connection that are still on the page, oldest first. */
+export function myStrokes(): string[] {
+  mine = mine.filter((id) => store.has(id) && id !== current)
+  return mine
+}
+
+/** Delete strokes for everyone: here at once, then `stroke_delete` to the session. */
+function deleteForEveryone(ids: string[]) {
+  if (ids.length === 0) return
+  store.remove(ids)
+  mine = mine.filter((id) => !ids.includes(id))
+  link.send({ t: 'stroke_delete', ids, ts: Date.now() })
+  stage.invalidate()
+  dirty.loupe = true
+  dirty.canvas = true
+  dirty.flushCanvas = true
+}
+
+/** "Undo my last stroke": the newest stroke drawn here, if any. Returns whether one went. */
+export function undoMyLastStroke(): boolean {
+  const ids = myStrokes()
+  const last = ids.length ? ids[ids.length - 1] : undefined
+  if (last !== undefined) deleteForEveryone([last])
+  return last !== undefined
+}
+
+/** "Clear my strokes": every stroke drawn here on this connection. Returns how many went. */
+export function clearMyStrokes(): number {
+  const ids = [...myStrokes()]
+  deleteForEveryone(ids)
+  return ids.length
+}
+
 /** The stroke being drawn here, and its points not yet sent. */
 let current: string | null = null
 let batch: number[][] = []
@@ -78,6 +126,7 @@ export function setupDrawing() {
     if (phase === 'down') {
       current = `p_${me.id}_${Date.now().toString(36)}`
       store.begin(current, 'peer', 'pen', Date.now(), { color: me.color, author: me.id })
+      mine.push(current)
       link.send({ t: 'stroke_begin', id: current, layer: 'peer', brush: 'pen', color: me.color, author: me.id, ts: Date.now() })
       batch = []
     }
