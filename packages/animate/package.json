@@ -1,0 +1,23 @@
+{
+  "name": "animate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "codrawer-animate's pure core: a Flipnote-style frame model, onion skin, in-betweening and motion for stroke-native animation",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "dependencies": {
+    "hand": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0"
+  }
+}
