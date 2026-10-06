@@ -155,6 +155,8 @@ For AI ink and Claude Code turns, run the desktop router as well: `scripts/dev/u
 | [`scripts/dev/`](scripts/dev/README.md) | Deploy, QR, engine benchmark, keyboard and replay harnesses |
 | [`docs/`](docs) | Protocol, decisions (`adr/`), device investigations (`investigations/`) |
 
+What's next: [`docs/roadmap.md`](docs/roadmap.md) (Putnam mock-exam mode, thinking replay, marks that earn their meaning).
+
 ## Design decisions
 
 | ADR | Decision |
