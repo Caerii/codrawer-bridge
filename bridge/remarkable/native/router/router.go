@@ -28,6 +28,8 @@
 //     can detect a half-open socket on its side. hello carries "replay":true|false.
 //   - A pen source joins with ?replay=0 (the bridge does: it has no use for the page). When a
 //     client leaves mid-stroke, its open strokes are ended for everyone.
+//   - stroke_delete takes strokes back: a client may delete the strokes it began, and anyone may
+//     delete ai-layer ink. Deleted strokes leave the replay, so late joiners never see them.
 //   - Off-machine clients can be required to present a pairing code (Router.Token).
 //
 // # Reading order
