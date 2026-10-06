@@ -19,6 +19,8 @@
 
 /** Ink counts as still flowing for this long after the last stroke message, ms. */
 export const INK_LULL_MS = 700
+/** Names this pacing in latency traces (keylat.ts). */
+export const PACING = 'tick150'
 /** A keystroke this recent means the user is typing, ms. */
 const TYPING_MS = 1500
 /** Minimum spacing between text updates while typing / otherwise, ms. */
@@ -38,8 +40,11 @@ export class TextPusher {
   private chain: Promise<void> = Promise.resolve()
 
   constructor(
-    /** Send the content to the text container (glasses/display.ts wraps textContainerUpgrade). */
-    private transmit: (content: string) => Promise<unknown>,
+    /**
+     * Send the content to the text container (glasses/display.ts wraps textContainerUpgrade);
+     * `renderedAt` is when the content was offered, for latency tracing (keylat.ts).
+     */
+    private transmit: (content: string, renderedAt: number) => Promise<unknown>,
     private now: () => number = () => performance.now(),
   ) {}
 
@@ -53,10 +58,10 @@ export class TextPusher {
       if (now - this.lastAt < (typing ? TYPING_FLOOR_MS : QUIET_FLOOR_MS)) return false
     }
     this.lastSent = content
-    this.lastAt = this.now()
+    const at = (this.lastAt = this.now())
     this.chain = this.chain.then(async () => {
       try {
-        await this.transmit(content)
+        await this.transmit(content, at)
       } catch (e) {
         console.error('[codrawer] text update threw', e)
       }

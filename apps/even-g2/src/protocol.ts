@@ -18,6 +18,8 @@ export interface KeyMessage {
   /** The printable character, when the key produces one. */
   char?: string
   mods?: KeyMods
+  /** When the bridge read the key: Unix ms on the tablet's clock (absent for ring-made keys). */
+  ts?: number
 }
 
 export interface KeyMods {

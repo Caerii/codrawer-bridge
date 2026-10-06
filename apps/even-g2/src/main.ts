@@ -31,7 +31,7 @@ import { TextContainerUpgrade, waitForEvenAppBridge, type EvenAppBridge } from '
 import { BENCH, HAS_LOUPE, RENDER_INTERVAL_MS } from './config'
 import { collab, loadDocument, onDocCompact, onDocUpdate, onPlainDoc } from './doc/document'
 import { runBench } from './glasses/bench'
-import { drawCanvas, drawLoupe } from './glasses/display'
+import { drawCanvas, drawLoupe, keyTrace } from './glasses/display'
 import { onGlassesEvent } from './glasses/input'
 import { TEXT_ID } from './glasses/layout'
 import { attachGlasses, releaseIfStale } from './glasses/page'
@@ -92,7 +92,10 @@ link.on('ai_stroke_end', session.onAiStrokeEnd)
 link.on('ai_intent', session.onAiIntent)
 link.on('page', session.onPage)
 link.on('clear', session.onClear)
-link.on('key', onKey)
+link.on('key', (m) => {
+  keyTrace?.key(m.ts)
+  onKey(m)
+})
 link.on('doc_update', onDocUpdate)
 link.on('doc_compact', onDocCompact)
 link.on('doc', onPlainDoc)

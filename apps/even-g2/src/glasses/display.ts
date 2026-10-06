@@ -23,7 +23,8 @@ import { makeEncoder } from './encode'
 import { IMG_ID, LOUPE_ID, TEXT_ID, WIDE_TILE_W } from './layout'
 import { loupeBaseWindow, writingContext, zoomForBoxWidth } from './loupe'
 import { FrameScheduler, type Frame, type Slot } from './scheduler'
-import { TextPusher } from './text'
+import { KeyLatency } from '../keylat'
+import { PACING, TextPusher } from './text'
 
 // ── Surfaces ──────────────────────────────────────────────────────────────────────────────────
 
@@ -162,5 +163,15 @@ export function sendStatusText(content: string) {
   return glasses.bridge!.textContainerUpgrade(new TextContainerUpgrade({ containerID: TEXT_ID, containerName: 'status', content }))
 }
 
+/** Per-key latency on the phone (keylat.ts); dev builds only, where the console reaches the desktop. */
+export const keyTrace = import.meta.env.DEV ? new KeyLatency(PACING, (b) => console.log('[keylat] ' + JSON.stringify(b))) : null
+
 /** Status text to the glasses, paced around the ink (see text.ts). */
-export const textPusher = new TextPusher(sendStatusText)
+export const textPusher = new TextPusher(async (content, renderedAt) => {
+  const done = keyTrace?.sending(renderedAt)
+  try {
+    return await sendStatusText(content)
+  } finally {
+    done?.()
+  }
+})
