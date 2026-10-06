@@ -38,7 +38,7 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$mount:/src" -w /src "$image" sh -euc '
         -o out/main.o main.cpp
     aarch64-linux-gnu-g++ -shared -Wl,--as-needed -Wl,-z,defs -s -o out/codrawer-layer.so \
         out/main.o out/xovi.o \
-        -L/usr/lib/aarch64-linux-gnu -lQt6Quick -lQt6Gui -lQt6Core -lpthread
+        -L/usr/lib/aarch64-linux-gnu -lQt6Quick -lQt6Qml -lQt6Gui -lQt6Core -lpthread
     rm -f out/*.o
     file out/codrawer-layer.so
     aarch64-linux-gnu-readelf -d out/codrawer-layer.so | grep NEEDED

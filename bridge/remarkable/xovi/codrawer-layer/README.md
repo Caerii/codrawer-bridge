@@ -1,10 +1,11 @@
 # codrawer-layer (XOVI probe)
 
-> **Status (2026-10-06): run on the device (3.29.0.149, tethered).** `dump` and the erase probe's
-> `watch` work: `strokeCompleted` decodes ink, the eraser end and the toolbar eraser
-> (`docs/investigations/native-erase.md`). Tool following (below) feeds the bridge. `stroke` (Probe 1)
-> and the `save` routes are still untested. Since 2026-10-06 every codrawer release ships it, and
-> the tablet starts it after each boot under a crash guard (Install, below).
+> **Status (2026-10-06): run on the device (3.29.0.149).** `dump`, the erase probe's `watch` and
+> tool following work. **Probe 1 passed**: `stroke` put a 120-point fineliner wave on its own
+> layer; it rendered at once, saved into the notebook, and the user's undo removed it
+> (`docs/investigations/native-multiplayer-layer.md`). Built on top, not yet run on the device:
+> placement through the view transform, the agent ink socket, text insertion, the dock, the
+> selection follower, and event-driven tool following.
 
 A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
 open page, on its own layer named `codrawer: test`, through xochitl's own commit path
@@ -85,6 +86,38 @@ that page is the one on screen.
 | `save page=<uuid> via=deferred\|modified\|abouttosleep\|sleepcycle` | Asks xochitl to store the page's pending lines now through one of its own meta-methods (see `main.cpp` `cmdSave`); with `watch` on, `worker.linesStored` shows whether and when it did. Try the routes in that order; `sleepcycle` last. |
 | `dumpscene page=<uuid>` | Calls xochitl's debug slot `SceneController::dumpScene()`; output, if any, goes to xochitl's journal. |
 | `tool` | Logs the tool line last written to `/run/codrawer/tool` (see below). |
+| `stroke … adopt=<n> restore=<n> raw=1` | Probe options: name an existing last layer instead of adding one; select layer `n` afterwards; skip the scene → view mapping. |
+| `xform page=<uuid>` | Logs every view↔scene transform xochitl exposes for the page (read-only). |
+| `tree [match=<spec>] [depth=<n>]` | Logs the live QML item tree, or the items matching `class:`/`name:`/`text:`/`prop:` with their ancestry (read-only; for finding where to inject). |
+| `inject name=<n> parent=<spec>[^] qml=<file> [after=1]` | Creates our QML file in xochitl's engine, parented into the matched item (`^`: its parent; `after=1`: stacked after it). `uninject name=<n>` removes it. `exthome/codrawer-layer/inject.conf` lists the ones to make from load on. |
+
+## The socket: agent ink, text, actions (`/run/codrawer/ink.sock`)
+
+A Unix socket (0600) the bridge connects to (`INK_SOCKET`, `agent_ink.go` / `agent_ink.rs`). On
+connect the extension says `hello codrawer-layer ink text_insert text_read`. Then, one JSON
+object per line:
+
+- **Agent ink** (with `NATIVE_AGENT_INK=1` on the bridge): `{"id","page","layer":"agent",
+  "strokes":[{"tool","argb","thickness","pts":[[x,y,pressure,width_px],…]}]}` in page units
+  (x centred). The extension refuses any page but the visible one, any tool that is not ink, more
+  than 64 strokes or 4000 points, and out-of-range points; it commits into the layer
+  `codrawer: agent`, after mapping page coordinates through the tile manager's
+  `sceneToViewTransform` (Probe 1 found that `addDrawingLine` takes the pen's frame). It waits
+  while the user's pen is down. Answer: `ok <id> <n>` or `err <id> <why>`.
+- **Text**: `{"op":"text_insert","id","text"}` puts text into the focused text item of the visible
+  page, as an input method's commit (Return between lines); `{"op":"text_read","id"}` answers
+  `text <id> {…}`. Refused (`err`) with no focused text item on the page, or while the pen is down.
+- **Actions** (extension → bridge): `{"t":"dock_action",…}` from the dock and the selection.
+
+## The dock (`qml/dock.qml`)
+
+A toolbar button with a non-modal list. Entries come from `/run/codrawer/dock.json`
+(`{"entries":[{"id","label"},…]}`, re-read on change) or the built-in list: codrawer status
+(answered on the tablet), Agent ink on/off, Practice coach, Ask about this page, Ask about
+selection. A tap sends a `dock_action` (docs/protocol.md). Where it goes is a line in
+`inject.conf`, found with `tree` on the device; the release ships `dock.qml` and `inject.conf`
+into `exthome/codrawer-layer/` (xovi.sh).
+
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'
@@ -93,9 +126,9 @@ ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sle
 ## Following the tool (`/run/codrawer/tool`)
 
 From load on, without a command, the extension follows the pen handler's `lineTool` and
-`lineThickness` (100 ms timer on the GUI thread: two property reads) and writes one line,
-`<tool> <thickness>`, to `/run/codrawer/tool` by rename on every change, plus a rewrite every
-second as a heartbeat. Tools: `eraser`, `erase_area`, `clear_page`, `select`, `highlighter`,
+`lineThickness` through their change signals and writes one line, `<tool> <thickness>`, to
+`/run/codrawer/tool` by rename on every change; a 2 s timer touches the file (utime) as a
+heartbeat and looks for the pen handler only while none is known. Tools: `eraser`, `erase_area`, `clear_page`, `select`, `highlighter`,
 `shader`, `zoom`, `pen`, or `none` when no document is open. The bridge (`TOOL_FILE`, package
 `toolhint`) reads it at each pen-down and streams tip strokes as brush `eraser` while it says
 `eraser`, the way it already streams the eraser end. A file older than 3 s is ignored, so a
