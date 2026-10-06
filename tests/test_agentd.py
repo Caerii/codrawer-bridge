@@ -9,6 +9,7 @@ codrawer-agentd without a tablet, a model or Node: placement, the prompt, the qu
 - The queue (queue.py): one job at a time per page, in order; other pages run alongside; a full
   line refuses; a failing job does not stop the line.
 - The page model (page.py): scene-unit boxes, selection, snapshot replacing live strokes.
+- ``agent_status`` (service.py): ``thinking`` then ``done`` for a failed turn, in scene units.
 """
 
 from __future__ import annotations
@@ -304,3 +305,43 @@ def test_page_model_live_strokes_and_snapshots():
     assert {s.id for s in m.ink()} == {"1:9"}  # the save holds it now
     m.observe(page_msg([], page="p2"))
     assert m.ink() == [] and m.page == "p2"
+
+
+# ── agent_status ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_agent_status_thinking_then_done_in_scene_units(tmp_path):
+    from codrawer_bridge.agentd.service import Agentd, Config
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go():
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off", thinking="overlay"))
+        sent: list[dict] = []
+
+        async def send(msg):
+            sent.append(msg)
+            return True
+
+        async def ask(text, timeout_s=90.0):
+            return Reply(error="timed out after 90 s")
+
+        a.send = send  # type: ignore[method-assign]
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
+        a.handle(page_msg([word]))
+        rec = await a.answer(
+            {
+                "t": "dock_action",
+                "id": "ask_selection",
+                "doc": "d",
+                "page": "p1",
+                "bbox": [-500.0, 300.0, -300.0, 360.0],
+            }
+        )
+        st = [m for m in sent if m["t"] == "agent_status"]
+        assert [m["state"] for m in st] == ["thinking", "done"]
+        assert st[0]["bbox"] == [-500.0, 300.0, -300.0, 360.0]  # the selection, x centred
+        assert st[1]["ok"] is False and st[0]["id"] == st[1]["id"] == f"agentd_{rec.n}"
+        assert rec.error and not [m for m in sent if m["t"].startswith("stroke_")]
+
+    asyncio.run(go())

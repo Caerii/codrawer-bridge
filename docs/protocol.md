@@ -254,6 +254,33 @@ reach the tablet). Navigation uses xochitl's own path (`MainView.onOpened`, `Doc
 codrawer-layer `src/navigate.h`), so archived documents, password locks and the last-opened page
 behave as when the user opens them.
 
+### `agent_status` (agent → tablet)
+
+What an agent answering on the page is doing, and where, so the tablet can show it live without
+writing anything into the notebook: an animated "thinking" overlay over the spot the answer will
+take, which the codrawer-layer extension draws and removes (not ink, never saved). Sent by
+codrawer-agentd (`src/codrawer_bridge/agentd`) for each `ask_page` / `ask_selection`.
+
+```json
+{"t":"agent_status","id":"agentd_7","agent":"agentd","state":"thinking","bbox":[-120,1168,633,1540],"doc":"<doc uuid>","page":"<page uuid>","ts":1791325634200}
+{"t":"agent_status","id":"agentd_7","agent":"agentd","state":"writing","bbox":[-120,1168,633,1630],"doc":"…","page":"…","ts":…}
+{"t":"agent_status","id":"agentd_7","agent":"agentd","state":"done","ok":true,"bbox":[-120,1168,633,1630],"doc":"…","page":"…","ts":…}
+```
+
+Fields: `id` one request (the three states of a request share it); `state` `thinking` (the model
+is reading; `bbox` is the spot reserved for a typical answer, or the selection when agent ink is
+off), `writing` (the hand is writing; `bbox` is the answer's actual block), `done` (finished or
+failed, `ok` says which; clear the overlay); `bbox` `[x0, y0, x1, y1]` in xochitl's page units
+with x centred, like `dock_action`'s (normalize with `x = (x_rm + w/2)/w`, `y = y_rm/h`).
+`thinking` may be followed directly by `done` (no answer, or text only).
+
+Relay (not built yet): the routers relay `agent_status` to every other client like `dock_action`
+(the Go and Rust routers drop unknown types today, so their relay lists need it), and the tablet
+bridge forwards it to the extension's ink socket as `{"op":"overlay","kind":"thinking",
+"state":<state>,"bbox":<bbox>,"id":<id>}`, the extension clearing the overlay on `done`. Until
+then agentd's fallback is a static "…" in agent ink at the reserved spot (`--thinking dots`);
+with the overlay in place, `--thinking overlay` drops the dots.
+
 ### Personal marks: `mark_seen`, `mark_ask`, `mark_define`, `mark_invoke`, `mark_feedback`, `mark_query`, `marks`
 
 Marks that earn their meaning (ADR 013, `packages/marks`): the user invents a glyph; the first

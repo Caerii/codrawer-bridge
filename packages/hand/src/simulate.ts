@@ -23,7 +23,7 @@
  * text with the same seed and options produces identical strokes.
  */
 
-import { runArm, type ArmFrame, type WordPen } from './arm'
+import { RELOCATE_MM, runArm, type ArmFrame, type WordPen } from './arm'
 import { compose, composePaths, type ComposeOptions, type Phrase, type WordInfo } from './compose'
 import { chord, type Impulse } from './lognormal'
 import type { Pt } from './layout'
@@ -112,6 +112,9 @@ export type SimulateInput = string | Phrase[] | { paths: Pt[][] }
 /** The pen hovers this long over the first point before touching down, s. */
 const LEAD_IN = 0.12
 
+/** After a carriage return (a flight longer than RELOCATE_MM), the pen hovers this long, s. */
+const RELOCATE_LAND = 0.1
+
 /** Rehearsals of the plan on the arm, to pre-compensate its smoothing of the power law. */
 const REHEARSALS = 2
 
@@ -148,8 +151,11 @@ export function simulate(input: SimulateInput, persona: Persona, opts: SimulateO
       const f = planFlight(at, aim, fs, dur, 0.28, rMotor, i)
       impulses.push(f)
       at = aim
-      // touch down while the flight is still settling (a landing hook), unless hovering first
-      land = fs + (g.hover > 0 ? dur + g.hover : 0.9 * dur) + T.lift / 2
+      // touch down while the flight is still settling (a landing hook), unless hovering first;
+      // after a carriage return the hand arrives first and settles (arm.ts carriageFilter), or
+      // the next line's first letter is written by a hand still travelling
+      const settle = dist > RELOCATE_MM ? dur + Math.max(g.hover, RELOCATE_LAND) : g.hover > 0 ? dur + g.hover : 0.9 * dur
+      land = fs + settle + T.lift / 2
     }
     const slow = (k: number) => g.slow * (k < 3 ? 1 + (g.slowFirst - 1) * (1 - k / 3) : 1)
     const pts = g.pts.map((p) => [p[0] - start[0] + at[0], p[1] - start[1] + at[1]] as Pt)

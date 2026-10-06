@@ -62,7 +62,13 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
         help="write answers as agent ink (auto: ask the tablet over --ssh)",
     )
     ap.add_argument("--ssh", default="", help="root@<tablet> for --ink auto")
-    ap.add_argument("--no-pending-mark", action="store_true", help="no '…' while thinking")
+    ap.add_argument(
+        "--thinking",
+        choices=("dots", "overlay", "none"),
+        default="dots",
+        help="pending mark: '…' in agent ink (dots), or none because the tablet draws an "
+        "agent_status overlay (overlay); agent_status is sent either way",
+    )
     ap.add_argument("--timeout", type=float, default=90.0, help="seconds to wait for an answer")
     ap.add_argument(
         "--open-timeout", type=float, default=60.0, help="seconds to wait for the router to accept"
@@ -96,7 +102,7 @@ async def _main(a: argparse.Namespace) -> int:
         speed=a.speed,
         ink=a.ink,
         ssh=a.ssh,
-        pending_mark=not a.no_pending_mark,
+        thinking=a.thinking,
         timeout_s=a.timeout,
         open_timeout_s=a.open_timeout,
         include_ai=a.include_ai,

@@ -10,9 +10,12 @@ Messages sent while the link is down wait for it up to ``send_wait_s`` and are t
 **A request**, in order (:meth:`Agentd.answer`); every step's time goes into the log:
 
 1. *Acknowledge.* The glasses get "thinking…" at once. With agent ink on, a reply spot is
-   reserved near the selection (placement.py, for a typical three-line answer) and three small
-   dots are written there: the pending mark. They stay (native ink cannot be taken back by the
-   router); the answer starts right after them, so they read as its lead-in.
+   reserved near the selection (placement.py, for a typical three-line answer), and an
+   ``agent_status`` ``thinking`` names it (docs/protocol.md): the tablet can animate an unsaved
+   overlay there while the model thinks; ``writing`` and ``done`` follow. Until that overlay
+   exists (``--thinking dots``, the default), three small dots are written at the spot instead:
+   a static pending mark. They stay (native ink cannot be taken back by the router); the answer
+   starts right after them, so they read as its lead-in.
 2. *The page.* If the request names a page other than the snapshot's, wait up to 5 s for the
    page watcher's snapshot of it.
 3. *The picture.* ``ask_selection``: the lasso's box with a margin (render.py), the selected
@@ -74,7 +77,7 @@ class Config:
     speed: float = 1.5
     ink: str = "auto"  # on | off | auto (auto reads the tablet over ssh, else on)
     ssh: str = ""  # root@<tablet> for --ink auto
-    pending_mark: bool = True
+    thinking: str = "dots"  # dots | overlay | none: the pending mark (agent_status is always sent)
     timeout_s: float = 90.0
     open_timeout_s: float = 60.0
     send_wait_s: float = 30.0
@@ -110,6 +113,7 @@ class Record:
     yielded_s: float = 0.0
     note: str = ""
     error: str = ""
+    status_box: tuple[float, float, float, float] | None = None  # page units, last agent_status
 
 
 class Agentd:
@@ -301,10 +305,16 @@ class Agentd:
                 anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
             rec.ink = await self.ink_enabled()
             prefer = None
-            if rec.ink and self.cfg.pending_mark and not self.cfg.dry_run:
-                prefer = await self._pending(anchor, run)
-                if prefer is not None:
+            if not self.cfg.dry_run:
+                spot = self._reserve(anchor) if rec.ink else None
+                status_box = spot.rect if spot is not None else placement.to_pu(anchor, W, H)
+                await self._status(rec, "thinking", status_box)
+                if spot is not None and self.cfg.thinking == "dots":
+                    await self._dots(spot, run)
+                    prefer = (spot.x + DOTS_PU, spot.y)
                     rec.pending_at = since()
+                elif spot is not None:
+                    prefer = (spot.x, spot.y)  # the overlay marks the spot; the answer starts there
             # 3. the picture
             img = self.state / f"req-{n}.png"
             if sel_box is not None:
@@ -344,7 +354,7 @@ class Agentd:
                 await self._glasses(
                     "Couldn't answer just now", f"Couldn't answer just now ({rec.error[:80]})."
                 )
-                if prefer is not None:
+                if prefer is not None and self.cfg.thinking == "dots":
                     await self._write(text_out, anchor, prefer, run + "e", rec, since)
                 return rec
             rec.answer = text
@@ -360,10 +370,12 @@ class Agentd:
             log.exception("request %d failed", n)
             return rec
         finally:
+            if rec.status_box is not None:
+                await self._status(rec, "done", rec.status_box)
             self._log(rec)
 
-    async def _pending(self, anchor: Box, run: str) -> tuple[float, float] | None:
-        """Reserve a spot for a typical answer near ``anchor`` and write the dots there."""
+    def _reserve(self, anchor: Box) -> placement.Placement | None:
+        """A spot near ``anchor`` for a typical answer (three lines, ~80 mm), before it is known."""
         m = self.model
         occ = placement.Occupancy([s.pts for s in m.ink()], m.w, m.h, height=_ink_height(m))
         typical = [
@@ -372,10 +384,11 @@ class Agentd:
             )
             for s in self.cfg.scales
         ]
-        spot = placement.place(occ, typical, placement.to_pu(anchor, m.w, m.h))
-        if spot is None:
-            return None
-        # the dots sit on the first line's x-height, the answer starts right after them
+        return placement.place(occ, typical, placement.to_pu(anchor, m.w, m.h))
+
+    async def _dots(self, spot: placement.Placement, run: str) -> None:
+        """The static pending mark: three dots at the reserved spot, on the first baseline."""
+        m = self.model
         x, y = spot.x, spot.y + 5.2 * spot.block.scale / placement.MM_PER_PU
         msgs = handmod.dots(
             x,
@@ -394,7 +407,30 @@ class Agentd:
                 f"agentd_{run}_dot{d}",
                 [[(cx - 3) / m.w, (y - 3) / m.h, 0.6], [(cx + 3) / m.w, (y + 3) / m.h, 0.6]],
             )
-        return (spot.x + DOTS_PU, spot.y)
+
+    async def _status(self, rec: Record, state: str, box_pu: Box) -> None:
+        """
+        ``agent_status`` (docs/protocol.md): what agentd is doing and where, for an animated,
+        unsaved overlay on the tablet. ``bbox`` is in xochitl's page units with x centred, like
+        ``dock_action``'s; ``done`` carries ``ok``.
+        """
+        x0, y0, x1, y1 = box_pu
+        half = self.model.w / 2
+        bbox = [round(x0 - half, 1), round(y0, 1), round(x1 - half, 1), round(y1, 1)]
+        rec.status_box = box_pu
+        msg: dict[str, Any] = {
+            "t": "agent_status",
+            "id": f"agentd_{rec.n}",
+            "agent": "agentd",
+            "state": state,
+            "bbox": bbox,
+            "doc": rec.doc or self.model.doc,
+            "page": rec.page or self.model.page,
+            "ts": int(time.time() * 1000),
+        }
+        if state == "done":
+            msg["ok"] = bool(rec.answer) and not rec.error
+        await self.send(msg)
 
     async def _write(
         self,
@@ -455,6 +491,7 @@ class Agentd:
         rec.strokes = len(lay.strokes)
         if not perform:
             return
+        await self._status(rec, "writing", spot.rect)
         first = await self._play(
             msgs, on_first=lambda: setattr(rec, "first_stroke_at", since()), rec=rec
         )
