@@ -1,0 +1,10 @@
+{
+  "name": "codrawer",
+  "private": true,
+  "description": "codrawer-bridge TypeScript workspace: apps/even-g2, packages/hand, apps/hand-lab",
+  "packageManager": "pnpm@10.25.0",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}

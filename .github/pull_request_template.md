@@ -9,7 +9,7 @@ hardware, if any: tablet OS version, glasses firmware. -->
 
 - [ ] Go: `cd bridge/remarkable/native && go test ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/`
 - [ ] Rust: `cd bridge/remarkable/rust && cargo test`
-- [ ] App: `cd apps/even-g2 && pnpm typecheck && pnpm test`
+- [ ] TypeScript: `pnpm -r typecheck && pnpm -r test` (apps/even-g2, packages/hand, apps/hand-lab)
 - [ ] Boot scripts: `bash bridge/remarkable/boot/test/run.sh`
 - [ ] Desktop router: `uv run pytest -q && uv run ruff check . && uv run mypy .`
 
