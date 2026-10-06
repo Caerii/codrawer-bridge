@@ -94,6 +94,13 @@
 // `watch` on, `linesStored` shows whether it worked and how long the store took. `pending` logs
 // that state alone. None of these change page content.
 //
+// # Following the tool
+//
+// evdev shows the bridge the Marker's eraser end, but not the eraser picked in the toolbar and
+// used with the tip. From load on, a 100 ms GUI-thread timer copies the pen handler's `lineTool`
+// to /run/codrawer/tool, which the bridge reads at each pen-down (section "Following the tool").
+// This is the one thing the extension does without a command, and it only reads properties.
+//
 // Build: `build.sh` (aarch64, Qt 6 headers). Install and use: `README.md`.
 
 #include <QtCore/QCoreApplication>
@@ -106,6 +113,7 @@
 #include <QtCore/QRectF>
 #include <QtCore/QSequentialIterable>
 #include <QtCore/QSet>
+#include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
@@ -1083,6 +1091,103 @@ void cmdDumpScene(const QStringList &w) {
     logLine(QStringLiteral("dumpscene: invoked=%1 in %2 ms (see journalctl -u xochitl)").arg(ok).arg(nowMs() - t0));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Following the tool: /run/codrawer/tool.
+//
+// The bridge sees the pen only through evdev, which tells the Marker's eraser *end* apart
+// (BTN_TOOL_RUBBER, sent as brush `eraser`) but not the toolbar. With the toolbar's Eraser
+// selected, the tip erases in xochitl while the bridge streamed it as ink. The tool the tip
+// draws with is the pen handler's `lineTool` (PenInputLineHandler, notify `lineToolChanged`):
+// `Eraser` while the toolbar eraser is selected, and `lineThickness` is then the eraser's
+// thickness, its size squared (sizes 1/2/3 give 1/4/9; DocumentView QML, native-erase.md §1). The
+// erase probe on the device (3.29.0.149, 2026-10-06) saw `strokeCompleted` with tool=6 eraser=1
+// thickness=4 for the toolbar eraser used with the tip, and thickness=5.76 for the eraser end.
+//
+// From load on, a GUI-thread timer reads `lineTool` and `lineThickness` from the open
+// DocumentView's pen handler every 100 ms: two property reads. The item tree is walked only when
+// no handler is known, at most every 2 s, because a walk costs milliseconds of GUI time. The
+// timer writes one line, `<tool> <thickness>`, to /run/codrawer/tool by rename whenever it
+// changes, and rewrites it every second as a heartbeat. The tool is one of `eraser` (Eraser,
+// MaskedEraser), `erase_area` (EraseSection), `clear_page`, `select`, `highlighter`, `shader`,
+// `zoom` or `pen`. It is `none` when no document is open. The bridge trusts the file only while
+// its mtime is fresh, so a stock xochitl (no extension) or a hung one leaves the bridge as it was
+// before. /run is tmpfs, so nothing survives a reboot.
+
+constexpr const char *kToolDir = "/run/codrawer";
+constexpr const char *kToolFile = "/run/codrawer/tool";
+constexpr const char *kToolTmp = "/run/codrawer/.tool.tmp";
+
+// Line::Tool values (the `Line` gadget's enum on this build, logged by `dump`) as protocol words.
+const char *toolWord(int tool) {
+    switch (tool) {
+    case 6: case 22: return "eraser";  // Eraser, MaskedEraser
+    case 8: return "erase_area";       // EraseSection
+    case 9: return "clear_page";       // ClearPage
+    case 11: return "select";          // SelectionTool
+    case 5: case 18: return "highlighter";
+    case 23: return "shader";          // ShadingMarker
+    case 10: return "zoom";            // ZoomTool
+    default: return "pen";
+    }
+}
+
+struct ToolFollow {
+    QPointer<QObject> pen;
+    qint64 lastFind = 0, lastWrite = 0;
+    QByteArray last;
+};
+
+ToolFollow &toolFollow() {
+    static ToolFollow tf;
+    return tf;
+}
+
+bool writeToolFile(const QByteArray &line) {
+    mkdir(kToolDir, 0755);
+    FILE *f = std::fopen(kToolTmp, "w");
+    if (!f) return false;
+    std::fwrite(line.constData(), 1, size_t(line.size()), f);
+    std::fputc('\n', f);
+    std::fclose(f);
+    return std::rename(kToolTmp, kToolFile) == 0;
+}
+
+void toolTick() {
+    ToolFollow &tf = toolFollow();
+    const qint64 now = nowMs();
+    if (!tf.pen && now - tf.lastFind >= 2000) {
+        tf.lastFind = now;
+        for (const OpenPage &p : findDocumentViews()) {
+            if (p.pen && p.view->isVisible()) {
+                tf.pen = p.pen;
+                logLine(QStringLiteral("tool: following %1 (found in %2 ms)")
+                            .arg(QString::fromLatin1(p.pen->metaObject()->className())).arg(nowMs() - now));
+                break;
+            }
+        }
+    }
+    QByteArray line("none");
+    if (tf.pen) {
+        bool ok = false;
+        const int tool = tf.pen->property("lineTool").toInt(&ok);
+        const double thickness = tf.pen->property("lineThickness").toDouble();
+        line = ok ? QByteArray(toolWord(tool)) + ' ' + QByteArray::number(thickness, 'g', 4) : QByteArray("unknown");
+    }
+    if (line == tf.last && now - tf.lastWrite < 1000) return;
+    if (line != tf.last) logLine(QStringLiteral("tool: %1").arg(QString::fromLatin1(line)));
+    if (writeToolFile(line) || line != tf.last) tf.lastWrite = now;
+    tf.last = line;
+}
+
+// Started once on the GUI thread by the worker; runs for the life of xochitl.
+void startToolFollow() {
+    auto *t = new QTimer(QCoreApplication::instance());
+    t->setInterval(100);
+    QObject::connect(t, &QTimer::timeout, [] { toolTick(); });
+    t->start();
+    logLine(QStringLiteral("tool: following the pen handler's lineTool into %1").arg(QString::fromLatin1(kToolFile)));
+}
+
 void runCommand(const QString &text) {
     for (const QString &rawLine : text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
         const QStringList w = rawLine.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -1099,6 +1204,7 @@ void runCommand(const QString &text) {
         else if (c == QLatin1String("pending")) cmdPending(w);
         else if (c == QLatin1String("save")) cmdSave(w);
         else if (c == QLatin1String("dumpscene")) cmdDumpScene(w);
+        else if (c == QLatin1String("tool")) logLine(QStringLiteral("tool: %1").arg(QString::fromLatin1(toolFollow().last)));
         else logLine(QStringLiteral("unknown command %1").arg(c));
         logLine(QStringLiteral("< done %1").arg(c));
     }
@@ -1111,6 +1217,7 @@ void worker() {
     while (!QCoreApplication::instance()) usleep(200 * 1000);
     sleep(3);
     logLine(QStringLiteral("ready (pid %1), commands in %2").arg(getpid()).arg(QString::fromLatin1(kCmd)));
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [] { startToolFollow(); }, Qt::QueuedConnection);
     for (;;) {
         usleep(250 * 1000);
         if (access(kCmd, F_OK) != 0) continue;
@@ -1126,7 +1233,9 @@ void worker() {
 
 }  // namespace
 
-extern "C" void _xovi_construct() {
+// Exported explicitly: build.sh compiles with -fvisibility=hidden, and xovi finds the
+// constructor by name in the dynamic symbol table.
+extern "C" __attribute__((visibility("default"))) void _xovi_construct() {
     mkdir(kDir, 0700);
     std::thread(worker).detach();
 }

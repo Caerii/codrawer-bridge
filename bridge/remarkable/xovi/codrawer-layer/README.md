@@ -1,8 +1,9 @@
 # codrawer-layer (XOVI probe)
 
-> **Status (2026-10-05): built, not yet run on the device. Probe 0, Probe 1 and the erase probe
-> (`watch`, `save`; `docs/investigations/native-erase.md`) have not been executed.** The tablet went to sleep (off Wi-Fi) before XOVI was installed, so nothing is installed
-> on it. The command table below describes what the extension does once it is installed.
+> **Status (2026-10-06): run on the device (3.29.0.149, tethered).** `dump` and the erase probe's
+> `watch` work: `strokeCompleted` decodes ink, the eraser end and the toolbar eraser
+> (`docs/investigations/native-erase.md`). Tool following (below) feeds the bridge. `stroke` (Probe 1)
+> and the `save` routes are still untested.
 
 A XOVI extension that runs inside xochitl on the reMarkable Paper Pro and puts a stroke on the
 open page, on its own layer named `codrawer: test`, through xochitl's own commit path
@@ -26,6 +27,8 @@ bridge/remarkable/xovi/codrawer-layer/build.sh      # needs Docker; output in ou
 
 The first run builds `codrawer-xovi-build:trixie` (Debian trixie, aarch64 g++, Qt 6.8 arm64).
 An extension built against Qt 6.8 runs on the tablet's Qt 6.10.3 (Qt 6 binary compatibility).
+`_xovi_construct` is marked `visibility("default")`: under `-fvisibility=hidden` it was missing
+from the dynamic symbol table, and xovi loaded the extension without ever calling it.
 
 ## Install (tethered: gone after a reboot)
 
@@ -61,10 +64,26 @@ that page is the one on screen.
 | `pending page=<uuid>` | Logs whether the document has unsaved lines and the worker's queue (read-only). |
 | `save page=<uuid> via=deferred\|modified\|abouttosleep\|sleepcycle` | Asks xochitl to store the page's pending lines now through one of its own meta-methods (see `main.cpp` `cmdSave`); with `watch` on, `worker.linesStored` shows whether and when it did. Try the routes in that order; `sleepcycle` last. |
 | `dumpscene page=<uuid>` | Calls xochitl's debug slot `SceneController::dumpScene()`; output, if any, goes to xochitl's journal. |
+| `tool` | Logs the tool line last written to `/run/codrawer/tool` (see below). |
 
 ```bash
 ssh root@<tablet> 'echo "stroke page=<page-uuid>" > /tmp/codrawer-layer/cmd; sleep 2; tail -n 20 /tmp/codrawer-layer/log'
 ```
+
+## Following the tool (`/run/codrawer/tool`)
+
+From load on, without a command, the extension follows the pen handler's `lineTool` and
+`lineThickness` (100 ms timer on the GUI thread: two property reads) and writes one line,
+`<tool> <thickness>`, to `/run/codrawer/tool` by rename on every change, plus a rewrite every
+second as a heartbeat. Tools: `eraser`, `erase_area`, `clear_page`, `select`, `highlighter`,
+`shader`, `zoom`, `pen`, or `none` when no document is open. The bridge (`TOOL_FILE`, package
+`toolhint`) reads it at each pen-down and streams tip strokes as brush `eraser` while it says
+`eraser`, the way it already streams the eraser end. A file older than 3 s is ignored, so a
+stock xochitl leaves the bridge as before. `/run` is tmpfs.
+
+Measured on 3.29.0.149 (2026-10-06): `strokeCompleted` gives `tool=6 eraser=1 thickness=4` for
+the toolbar eraser (size 2) used with the tip, and `thickness=5.76` for the Marker's eraser end.
+Ink is `eraser=0` (tool 13 SharpPencilv2, 21 Calligraphy).
 
 ## Remove
 

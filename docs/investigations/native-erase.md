@@ -232,3 +232,33 @@ EOF
 Each crossed line becomes two pieces; the gap between them (end x of one, start x of the next) is
 expected at ~62 px for both pressures (no pressure dependence) and ~33 px for the zoomed one
 (`/ penScale`). A different gap: set `?eraser=` to (gap − ink width) / 2 and record it here.
+
+## 6. Device results (2026-10-06, 3.29.0.149, XOVI tethered)
+
+The first install loaded `codrawer-layer.so` but never ran it. `build.sh`'s `-fvisibility=hidden`
+had also hidden `_xovi_construct`, so xovi found no constructor. It is now exported explicitly.
+`watch` then hooked 154 signals, and xochitl stayed up with no restart. The user wrote, erased
+with the eraser end, erased with the toolbar Eraser and the tip, and turned pages:
+
+| what | `pen.strokeCompleted` |
+| --- | --- |
+| ink (fineliner-like, calligraphy) | `tool=13` / `tool=21`, `eraser=0`, thickness 1 / 2 |
+| Marker's eraser end | `tool=6 eraser=1 thickness=5.76`, point width 230 (¼ px), path file written |
+| toolbar Eraser (size 2) with the tip | `tool=6 eraser=1 thickness=4`, point width 160, path file written |
+
+So both erasers reach `strokeCompleted` with their path, and they are told apart from ink by
+`isEraserTool`, and from each other by thickness (5.76 = 2.4², fixed; the toolbar eraser is size²).
+`worker.linesStored` followed each stroke 10–15 s later. The handler stayed connected across page
+turns and new pages.
+
+**The current tool is a property.** `PenInputLineHandler.lineTool` (notify `lineToolChanged`)
+reads `SharpPencilv2` with a pen selected. With the toolbar Eraser selected it is `Eraser`, and
+`lineThickness` is then the eraser's size². `eraserTool` (the eraser end's tool) is `Eraser`. The
+extension now copies `lineTool` to `/run/codrawer/tool` (README "Following the tool"). The bridge
+streams tip strokes as brush `eraser` while that file says `eraser` (package `toolhint`).
+
+Not measured yet: the radius check against a saved `.rm`. The user erased whole words, so no
+partly cut line survived to measure a gap. The toolbar eraser's radius should be 5 × size² +
+half the ink width, which is 20 px at size 2, against 28.8 px for the eraser end. Clients still
+use 28.8 px for both. Also untested: the `save` routes, which need an erase right before the
+command.
