@@ -1,6 +1,6 @@
 //! WebSocket client for the bridge (ws_client.go):
 //! - TCP keepalive (15 s) and a 10 s connect + handshake timeout
-//! - an aggressive ping ticker
+//! - a ping every `-ping-seconds` (10 s; the trade-off is in Go's ws_client.go)
 //! - a pong watchdog: the read deadline only moves forward when a pong arrives
 //! - a background reader that processes control frames and hands text frames to `on_message`
 //!

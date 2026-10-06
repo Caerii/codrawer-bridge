@@ -177,8 +177,9 @@ Everything in `../native`:
   fixtures (`matches_rmscene`, the port of `TestMatchesRmscene`).
 - **pagewatch + page_watch.go → `src/pagewatch/`, `src/page_watch.rs`:** finds the open document
   (newest `<doc>.content`) and page (`cPages.lastOpened.value`, then `.metadata`
-  `lastOpenedPage`, then the newest `.rm`), polls with stat calls (1 s, floor 100 ms) and parses
-  only on change. The `page` message is encoded by hand and is **byte-identical to Go's**: a Go
+  `lastOpenedPage`, then the newest `.rm`), polls when inotify reports a write to a `.content`,
+  `.metadata` or the open document's `.rm` (`src/inotify.rs`; retries and the no-inotify fallback
+  use `PAGE_POLL_MS`, 1 s, floor 100 ms) and parses only on change. The `page` message is encoded by hand and is **byte-identical to Go's**: a Go
   build of `pagewatch` and `-page-dump` here gave the same bytes for all eight fixtures, with a
   title holding `<&>`, U+2028 and a quote (by hand on Windows, not in CI). `rev` is the `.rm` mtime,
   or on a page change the later of that and the `.content` mtime, and never goes backwards on one

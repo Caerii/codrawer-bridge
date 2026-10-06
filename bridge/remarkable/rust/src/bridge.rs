@@ -15,6 +15,11 @@
 //! - [`run_connections`] dials the router and writes the outbox (and keys) until the socket dies,
 //!   then reconnects. It also notices a suspend/resume and reconnects at once instead of writing
 //!   into a socket that died while the tablet slept.
+//!
+//! Nothing here wakes on a timer while the tablet is idle: the batch timer is armed only while
+//! points wait, the suspend check runs at each write rather than every second, and the only
+//! periodic work left on a connection is its keepalive ping (`-ping-seconds`, 10 s).
+//! docs/investigations/idle-cost.md has the measurements.
 
 use std::time::{Duration, SystemTime};
 
@@ -127,6 +132,9 @@ pub struct Sources {
     pub key_rx: Option<mpsc::Receiver<OutKey>>,
     /// The latest `page` snapshot, when the page watcher runs.
     pub pages: Option<PageFeed>,
+    /// A message taken from the outbox or the keyboard but not written, because the tablet had
+    /// just resumed and the socket was presumed dead: the next connection writes it first.
+    pub held: Option<String>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -206,7 +214,7 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         None
     };
 
-    run_connections(cfg, Sources { out_rx, key_rx, pages }, on_message).await
+    run_connections(cfg, Sources { out_rx, key_rx, pages, held: None }, on_message).await
 }
 
 /// Runs the stroke state machine for the life of the process: drains pen events into encoded
@@ -310,53 +318,89 @@ pub fn suspend_gap(wall_elapsed: Option<Duration>, mono_elapsed: Duration) -> Op
     wall_elapsed?.checked_sub(mono_elapsed)
 }
 
-/// Writes queued messages (and keys) until the socket fails; returns the error. A wall clock that
-/// jumps more than 2 s ahead of the monotonic clock means the tablet was suspended: the socket is
-/// presumed dead (its timers did not run while asleep) and the caller reconnects immediately.
+/// Notices that the tablet slept: the wall clock ran more than 2 s ahead of the monotonic clock
+/// (which stops in suspend) since the last look. Looking costs two clock reads, so it is done
+/// at each write instead of on a timer: an idle bridge does not wake to check, and a write is
+/// exactly when a socket that died in suspend would swallow ink.
+pub struct SuspendCheck {
+    wall: SystemTime,
+    mono: std::time::Instant,
+}
+
+impl SuspendCheck {
+    pub fn new() -> Self {
+        SuspendCheck { wall: SystemTime::now(), mono: std::time::Instant::now() }
+    }
+
+    /// `Some(reason)` when the tablet slept since the last call (or since `new`).
+    pub fn resumed(&mut self) -> Option<String> {
+        self.resumed_at(SystemTime::now(), std::time::Instant::now())
+    }
+
+    /// [`SuspendCheck::resumed`] with the clocks given (tests).
+    pub fn resumed_at(&mut self, wall: SystemTime, mono: std::time::Instant) -> Option<String> {
+        let gap = suspend_gap(wall.duration_since(self.wall).ok(), mono.duration_since(self.mono));
+        (self.wall, self.mono) = (wall, mono);
+        let gap = gap.filter(|g| *g > Duration::from_secs(2))?;
+        let rounded = Duration::from_secs((gap.as_millis() as u64 + 500) / 1000);
+        Some(format!("resumed after ~{} asleep", go_duration(rounded)))
+    }
+}
+
+impl Default for SuspendCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Writes one message unless the tablet has just resumed; then the message is held for the next
+/// connection (in `held`) and the reason returned, so the caller reconnects first.
+async fn write_checked(ws: &WsConn, msg: String, check: &mut SuspendCheck, held: &mut Option<String>) -> Result<(), String> {
+    if let Some(why) = check.resumed() {
+        *held = Some(msg);
+        return Err(why);
+    }
+    // On failure the message is lost with the socket; the router ends the stroke.
+    ws.write_text(msg).await
+}
+
+/// Writes queued messages (and keys) until the socket fails; returns the error. A tablet that was
+/// suspended ([`SuspendCheck`]) has its socket presumed dead (its timers did not run while
+/// asleep): the message is held and the caller reconnects immediately.
 pub async fn write_outbox(src: &mut Sources, ws: &WsConn, err_rx: &mut mpsc::Receiver<String>) -> String {
-    let mut check = tokio::time::interval_at(Instant::now() + Duration::from_secs(1), Duration::from_secs(1));
-    let (mut last_wall, mut last_mono) = (SystemTime::now(), std::time::Instant::now());
+    let mut check = SuspendCheck::new();
     // A new socket may lead to a new router (restarted, or the desktop instead of the tablet's
     // own): it gets the latest page snapshot first, as Go's pumpPages does.
     if let Some(pages) = &mut src.pages {
         pages.mark_changed();
     }
+    if let Some(msg) = src.held.take() {
+        if let Err(e) = write_checked(ws, msg, &mut check, &mut src.held).await {
+            return e;
+        }
+    }
     loop {
-        tokio::select! {
+        let r = tokio::select! {
             e = err_rx.recv() => {
                 // ping/pong/close/write failure: bail so the outer loop reconnects
                 return e.unwrap_or_else(|| "connection closed".into());
             }
             msg = src.out_rx.recv() => {
                 let Some(msg) = msg else { return "pen machine stopped".into() };
-                // On failure the message is lost with the socket; the router ends the stroke.
-                if let Err(e) = ws.write_text(msg).await {
-                    return e;
-                }
+                write_checked(ws, msg, &mut check, &mut src.held).await
             }
-            k = recv_opt(&mut src.key_rx) => {
-                if let Some(k) = k {
-                    let msg = serde_json::to_string(&k).expect("serialize");
-                    if let Err(e) = ws.write_text(msg).await {
-                        return e;
-                    }
-                }
-            }
+            k = recv_opt(&mut src.key_rx) => match k {
+                Some(k) => write_checked(ws, serde_json::to_string(&k).expect("serialize"), &mut check, &mut src.held).await,
+                None => Ok(()),
+            },
             page = next_page(&mut src.pages) => {
-                if let Err(e) = ws.write_text(page).await {
-                    return e;
-                }
+                // not held: every new connection sends the latest page anyway
+                let mut dropped = None;
+                write_checked(ws, page, &mut check, &mut dropped).await
             }
-            _ = check.tick() => {
-                let (wall, mono) = (SystemTime::now(), std::time::Instant::now());
-                if let Some(gap) = suspend_gap(wall.duration_since(last_wall).ok(), mono.duration_since(last_mono)) {
-                    if gap > Duration::from_secs(2) {
-                        let rounded = Duration::from_secs((gap.as_millis() as u64 + 500) / 1000);
-                        return format!("resumed after ~{} asleep", go_duration(rounded));
-                    }
-                }
-                (last_wall, last_mono) = (wall, mono);
-            }
+        };
+        if let Err(e) = r {
+            return e;
         }
     }
 }
@@ -396,6 +440,20 @@ mod tests {
         assert_eq!(suspend_gap(Some(s(0)), s(1)), None);
     }
 
+    /// The check runs at writes, however far apart: only a wall clock that ran ahead of the
+    /// monotonic one counts, never the time between writes itself.
+    #[test]
+    fn suspend_check_compares_the_clocks_between_writes() {
+        let s = Duration::from_secs;
+        let mut c = SuspendCheck::new();
+        let (w0, m0) = (c.wall, c.mono);
+        assert_eq!(c.resumed_at(w0 + s(600), m0 + s(600)), None, "ten idle minutes awake");
+        assert_eq!(c.resumed_at(w0 + s(602), m0 + s(601)), None, "within 2 s of drift");
+        assert_eq!(c.resumed_at(w0 + s(700), m0 + s(611)).as_deref(), Some("resumed after ~1m28s asleep"), "98 s of wall time in 10 s awake");
+        assert_eq!(c.resumed_at(w0 + s(701), m0 + s(612)), None, "reported once");
+        assert_eq!(c.resumed_at(w0, m0 + s(613)), None, "a wall clock stepped back is no suspend");
+    }
+
     type ServerWs = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
     /// Accepts the bridge's next connection (within 10 s).
@@ -426,7 +484,7 @@ mod tests {
         cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
         let (_out_tx, out_rx) = mpsc::channel(8);
         let (page_tx, page_rx) = tokio::sync::watch::channel(Some(r#"{"t":"page","rev":1}"#.to_string()));
-        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx) };
+        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), held: None };
         tokio::spawn(run_connections(cfg, src, None));
 
         let mut first = accept_ws(&listener).await;

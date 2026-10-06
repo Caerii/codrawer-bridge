@@ -1,5 +1,6 @@
 //! The polling state machine: remembers what was last published and decides, on each poll,
-//! whether the open page changed or its `.rm` was rewritten.
+//! whether the open page changed or its `.rm` was rewritten. When to poll is the page thread's
+//! business ([`crate::page_watch`]): on an inotify event, or on a timer where inotify is missing.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -9,7 +10,7 @@ use super::{message, Location, PollError};
 use crate::rmlines;
 use crate::util::unix_millis;
 
-/// Watches xochitl's data directory. Call [`Watcher::poll`] periodically.
+/// Watches xochitl's data directory. Call [`Watcher::poll`] whenever something may have changed.
 #[derive(Debug, Default)]
 pub struct Watcher {
     dir: PathBuf,
@@ -23,6 +24,8 @@ pub struct Watcher {
     rev: i64,
     /// Something was published.
     started: bool,
+    /// The document the last poll found open, published or not ("" before one is found).
+    located: String,
 }
 
 impl Watcher {
@@ -69,10 +72,18 @@ impl Watcher {
         Ok(Some(msg))
     }
 
+    /// The document the last poll found open (its `.content` is the newest), even if nothing
+    /// was published for it yet; `None` before any document was found. The page thread watches
+    /// this document's folder for `.rm` writes.
+    pub fn located_doc(&self) -> Option<&str> {
+        (!self.located.is_empty()).then_some(self.located.as_str())
+    }
+
     /// The open document, and its page and title. `.content` and `.metadata` are re-read only
     /// when the document's `.content` was rewritten (or the page is a guess).
     fn current_location(&mut self) -> Result<Location, PollError> {
         let mut loc = newest_content(&self.dir)?;
+        self.located.clone_from(&loc.doc);
         let unchanged = self.started && loc.doc == self.loc.doc && loc.content_mtime == self.loc.content_mtime;
         if unchanged && !self.guessed {
             loc.page = self.loc.page.clone();

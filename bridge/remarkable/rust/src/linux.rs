@@ -328,17 +328,49 @@ pub fn hold_awake() {
 
 // ── keyboard reader ────────────────────────────────────────────────────────
 
+/// Waits for a keyboard to appear. Most of the time none is connected (the Paper Pro's
+/// Bluetooth is dormant unless brought up), so this is the keyboard thread's idle state: it
+/// sleeps until a node appears in /dev/input (inotify), with a [`KEYBOARD_RESCAN`] net, instead
+/// of rescanning /proc every 5 s. Without inotify it rescans every 5 s, as before.
+struct InputNodes {
+    ino: Option<crate::inotify::Inotify>,
+}
+
+/// With inotify, the longest the keyboard thread sleeps before rescanning anyway.
+pub const KEYBOARD_RESCAN: Duration = Duration::from_secs(60);
+
+impl InputNodes {
+    fn new() -> Self {
+        use crate::inotify::{Inotify, IN_ATTRIB, IN_CREATE, IN_MOVED_TO, IN_ONLYDIR};
+        let ino = Inotify::new().ok().filter(|i| i.add(std::path::Path::new("/dev/input"), IN_CREATE | IN_MOVED_TO | IN_ATTRIB | IN_ONLYDIR).is_ok());
+        InputNodes { ino }
+    }
+
+    /// Sleeps until /dev/input changes (or the rescan net), or 5 s without inotify.
+    fn wait(&mut self) {
+        let Some(ino) = &self.ino else {
+            sleep(Duration::from_secs(5));
+            return;
+        };
+        if ino.wait(Some(Instant::now() + KEYBOARD_RESCAN)).is_err() {
+            self.ino = None;
+            sleep(Duration::from_secs(5));
+        }
+    }
+}
+
 /// Reads the keyboard and pushes key messages into `out`. Never returns; when the device is
-/// missing or drops, it retries.
+/// missing it waits for one to appear ([`InputNodes`]), when it drops it reopens after 2 s.
 pub fn run_keyboard_forever(explicit: &str, grab: bool, debug: bool, out: mpsc::Sender<OutKey>) {
+    let mut nodes = InputNodes::new();
     loop {
         let path = match find_keyboard_device(explicit) {
             Ok(p) => p,
             Err(e) => {
                 if debug {
-                    println!("[keyboard] {e}; retrying in 5s");
+                    println!("[keyboard] {e}; waiting for an input device");
                 }
-                sleep(Duration::from_secs(5));
+                nodes.wait();
                 continue;
             }
         };

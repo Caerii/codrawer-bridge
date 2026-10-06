@@ -17,7 +17,10 @@
 //!   `http`, `messages`, `session` and `client` submodules
 //! - [`rmlines`]: reader for xochitl's v6 `.rm` page files (package rmlines)
 //! - [`pagewatch`]: finds xochitl's open page and builds the `page` snapshot (package pagewatch)
-//! - [`page_watch`]: the watcher thread, its gating and its feed into the bridge (page_watch.go)
+//! - [`page_watch`]: the watcher thread (woken by inotify), its gating and its feed into the
+//!   bridge (page_watch.go)
+//! - [`inotify`]: the minimal inotify binding the page and keyboard threads sleep on
+//!   (inotify_linux.go)
 //! - [`release`]: build, sign and verify tablet releases (package release, release_cmd.go)
 //! - [`toolhint`]: follows the tool selected in xochitl's toolbar, reported by the codrawer-layer
 //!   XOVI extension (package toolhint)
@@ -27,6 +30,7 @@
 pub mod bridge;
 pub mod devices;
 pub mod flags;
+pub mod inotify;
 pub mod input;
 pub mod keymap;
 pub mod page_watch;

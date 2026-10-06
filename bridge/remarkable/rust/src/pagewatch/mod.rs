@@ -13,11 +13,12 @@
 //! - `watcher`: the polling state machine (what was published, when to publish again, `rev`).
 //! - `message`: the `page` JSON, byte-compatible with the Go bridge.
 //!
-//! It only ever reads xochitl's data directory. It polls (stat calls once a second, a parse only
-//! when something changed), which is portable and cheap: xochitl writes a page's `.rm` ~6–10 s
-//! after the user pauses or when leaving the page, and the open page shows in `<doc>.content`
-//! within ~1–2 s of a turn (docs/investigations/xochitl-pen-data.md), so inotify would not buy
-//! visible latency. The bridge side (thread, feed, gating) is [`crate::page_watch`].
+//! It only ever reads xochitl's data directory. A poll lists the directory (a stat per entry)
+//! and parses a page only when something changed. xochitl writes a page's `.rm` ~6–10 s after
+//! the user pauses or when leaving the page, and the open page shows in `<doc>.content` within
+//! ~1–2 s of a turn (docs/investigations/xochitl-pen-data.md). When to poll is the bridge side's
+//! business ([`crate::page_watch`]: thread, feed, gating): on inotify events, since a timed poll
+//! of a directory with thousands of entries was the bridge's largest idle cost.
 
 mod locate;
 mod message;
