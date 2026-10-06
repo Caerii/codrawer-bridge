@@ -51,7 +51,8 @@ import { showStatus } from './phone/panel'
 import { stage } from './phone/screen'
 import { setupToolbar, showConnection } from './phone/toolbar'
 import { setupViews } from './phone/views'
-import { acceptReading, glanceFor, parseReading } from './primer/model'
+import { mockActive, mockLine } from './primer/mock'
+import { acceptReading, glanceFor, parseReading, primer } from './primer/model'
 import { onReading, setupPrimerPanel } from './primer/panel'
 import * as session from './session'
 import { dirty, glasses, hud, view } from './state'
@@ -113,13 +114,26 @@ link.on('primer', (m) => {
   if (!r) return
   const shown = acceptReading(r)
   onReading()
-  const line = glanceFor(r.move)
+  // During a mock exam the glasses show only its quiet countdown (refreshed below), never a move.
+  const line = mockActive(shown.mock) ? mockLine(shown.mock, Date.now()) : glanceFor(r.move)
   if (line) {
     hud.intent = line
     dirty.text = true
   }
   console.log('[codrawer] primer', shown.mode, shown.move?.kind ?? '-', shown.proof?.steps.length ?? 0, 'steps')
 })
+
+// The mock exam's countdown on the glasses: one text update a minute at most (ADR 006), and only
+// while a mock runs or just after it ends.
+setInterval(() => {
+  const m = primer.latest?.mock ?? null
+  if (!m || (!mockActive(m) && m.status !== 'awaiting_grading')) return
+  const line = mockLine(m, Date.now())
+  if (line && line !== hud.intent) {
+    hud.intent = line
+    dirty.text = true
+  }
+}, 15_000)
 
 // ── 3. Start: connect, draw, find the glasses ─────────────────────────────────────────────────
 

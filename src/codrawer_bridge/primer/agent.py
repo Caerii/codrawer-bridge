@@ -540,15 +540,19 @@ class PrimerAgent:
             )
 
     async def mock_stop(self) -> None:
-        if self.mock is not None and self.mock.status == "running":
-            self.mock.status = "abandoned"
+        """Abandon the running mock: nothing is graded; clients see the ``abandoned`` state once."""
+        m = self.mock
+        if m is not None and m.status == "running":
+            m.status = "abandoned"
             self._save_mock()
+            now = self.clock()
             out = self._message(
                 None,
                 policy.Move("notice", "Mock stopped. Nothing was graded.", "Mock stopped"),
                 self.store.load(self.learner_name),
-                self.clock(),
+                now,
             )
+            out["mock"] = mockmod.timer_block(m, now)
             self.mock = None
             await self.send(out)
 

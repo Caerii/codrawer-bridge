@@ -137,6 +137,10 @@
       #primer .pwatch .pdot { flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; border: 2px solid var(--muted); }
       #primer .pwatch.on .pdot { background: var(--live); border-color: var(--live); }
       #primer .pqueue li .pfine { display: block; margin-top: 2px; }
+      #primer .pclock { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+      #primer .pmockprob { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip); }
+      #primer .pmockprob.now { outline: 2px solid var(--accent); }
+      #primer .pscorecell { font-weight: 650; font-variant-numeric: tabular-nums; }
       #primer .psteps { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
       #primer .pstep { padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; outline: none; }
       #primer .pstep:hover, #primer .pstep:focus-visible { background: var(--chip); }
@@ -264,7 +268,7 @@
     <input id="replayFile" type="file" accept=".jsonl,.ndjson,application/x-ndjson,application/json,text/plain" hidden />
     <aside id="primer" aria-label="Proof panel" hidden>
       <div class="ptop">
-        <div class="ptabs" role="tablist"><button type="button" role="tab" data-tab="proof" aria-selected="true">Proof</button><button type="button" role="tab" data-tab="plan" aria-selected="false">Plan</button><button type="button" role="tab" data-tab="coach" aria-selected="false" title="Practice coach">Coach</button><button type="button" role="tab" data-tab="learner" aria-selected="false">Learner</button></div>
+        <div class="ptabs" role="tablist"><button type="button" role="tab" data-tab="proof" aria-selected="true">Proof</button><button type="button" role="tab" data-tab="plan" aria-selected="false">Plan</button><button type="button" role="tab" data-tab="coach" aria-selected="false" title="Practice coach">Coach</button><button type="button" role="tab" data-tab="mock" aria-selected="false" title="Putnam mock exam">Mock</button><button type="button" role="tab" data-tab="learner" aria-selected="false">Learner</button></div>
         <button class="icon pclose" type="button" aria-label="Close the Proof panel" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="pbody"></div>

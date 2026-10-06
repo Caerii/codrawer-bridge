@@ -22,6 +22,7 @@ import {
   setLearnerName,
   activeLearner,
 } from '../src/primer/model'
+import { mockActive, mockLine, parseMock } from '../src/primer/mock'
 
 const step = (n: number, latex: string, text: string, status: string, extra: Record<string, unknown> = {}) => ({
   n,
@@ -190,4 +191,31 @@ test('the coach view is parsed with its reasons, and kept when a reading has non
   assert.equal(merged.coach?.attempts, 3)
   assert.equal(moveHeading(merged.move!), 'The Primer says')
   assert.deepEqual(primerRequest('coach_on', 'nell', 1), { t: 'primer_request', what: 'coach_on', learner: 'nell', ts: 1 })
+})
+
+test('a mock exam is parsed, and the glasses line counts down quietly', () => {
+  const now = Date.UTC(2026, 9, 24, 15, 0)
+  const m = parseMock({
+    id: 'mock-20261024-1100',
+    status: 'running',
+    phase: 'session',
+    session: 2,
+    of: 4,
+    until: now + 46.2 * 60_000,
+    cursor: 3,
+    problems: [{ n: 1, id: 'squares_mod_4', title: 'Sums of two squares', statement: 'Prove that…' }],
+    fresh_page: true,
+  })!
+  assert.equal(mockActive(m), true)
+  assert.equal(mockLine(m, now), 'Mock S2/4 · 47 min · P3')
+  assert.equal(m.freshPage, true)
+  assert.equal(mockLine({ ...m, phase: 'break', session: 3 }, now), 'Break · S3 in 47 min')
+  const graded = parseMock({ status: 'graded', phase: 'done', report: { total: 64, max: 120, problems: [{ session: 1, n: 1, title: 'x', score: 8, band: 'minor_flaws', findings: ['a'] }] } })!
+  assert.equal(mockActive(graded), false)
+  assert.equal(mockLine(graded, now), 'Mock graded: 64/120 (estimate)')
+  assert.equal(graded.report?.problems[0].score, 8)
+  assert.equal(parseMock('nope'), null)
+  const r = parseReading({ t: 'primer', mock: { status: 'awaiting_grading', phase: 'done', grade_after: now } })!
+  assert.equal(mockLine(r.mock, now), 'Mock done · graded tomorrow morning')
+  assert.deepEqual(primerRequest('mock_problem', 'nell', 1, { n: 2 }), { t: 'primer_request', what: 'mock_problem', learner: 'nell', ts: 1, n: 2 })
 })

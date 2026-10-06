@@ -26,6 +26,8 @@
 // ── The reading ───────────────────────────────────────────────────────────────────────────────
 
 /** How a step stands: sound, a gap in rigor, wrong, or not legible enough to judge. */
+import { parseMock, type MockView } from './mock'
+
 export type StepStatus = 'ok' | 'gap' | 'error' | 'unclear'
 
 /** One logical step of the learner's proof, re-typeset. */
@@ -176,6 +178,8 @@ export interface Reading {
   learnerSummary: LearnerSummary | null
   plan: Plan | null
   coach: CoachView | null
+  /** A mock exam's state (primer/mock.ts), when one exists. */
+  mock: MockView | null
 }
 
 // ── Reading a message defensively ─────────────────────────────────────────────────────────────
@@ -329,6 +333,7 @@ export function parseReading(m: unknown): Reading | null {
     learnerSummary: summary,
     plan: parsePlan(o.plan),
     coach: parseCoach(o.coach),
+    mock: parseMock(o.mock),
   }
 }
 
@@ -358,6 +363,7 @@ export function acceptReading(r: Reading): Reading {
         learnerSummary: r.learnerSummary ?? prev.learnerSummary,
         plan: r.plan ?? prev.plan,
         coach: r.coach ?? prev.coach,
+        mock: r.mock ?? prev.mock,
       }
     : r
   primer.latest = merged
@@ -448,11 +454,11 @@ export function activeLearner(): string {
 
 // ── Requests ──────────────────────────────────────────────────────────────────────────────────
 
-export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off'
+export type RequestWhat = 'proof' | 'hint' | 'plan' | 'forget' | 'coach_on' | 'coach_off' | 'mock_start' | 'mock_problem' | 'mock_grade' | 'mock_stop' | 'mock_status'
 
 /** A `primer_request` for the active learner (or `learner`), stamped `ts` (Unix ms). */
-export function primerRequest(what: RequestWhat, learner = activeLearner(), ts = Date.now()) {
-  return { t: 'primer_request', what, learner: foldName(learner) || 'learner', ts }
+export function primerRequest(what: RequestWhat, learner = activeLearner(), ts = Date.now(), extra: Record<string, unknown> = {}) {
+  return { t: 'primer_request', what, learner: foldName(learner) || 'learner', ts, ...extra }
 }
 
 // ── Small facts the panel shows ───────────────────────────────────────────────────────────────

@@ -8,6 +8,8 @@
  *             formal check's honest status, and the Primer's next move; buttons ask for a reading
  *             or the next hint and save the LaTeX document
  *   Plan      the weeks to the exam, the current week picked out, and the problem queue
+ *   Mock      a Putnam mock exam: start one, the countdown, the session's problems (the text
+ *             fallback when agent ink is off), which problem is being written, and the report
  *   Coach     the practice coach: whether it is watching (and the switch), its last nudge, the
  *             next problems and the weak spots it found, each with the reason it gives
  *   Learner   the learner's name (who the requests are for), mastery, misconceptions seen, what is
@@ -25,6 +27,7 @@
  * `trust: false`; nothing from the wire becomes markup.
  */
 import { link } from '../link'
+import { mockLine } from './mock'
 import { stage } from '../phone/screen'
 import { shareOrDownload, stampedName } from '../phone/share'
 import {
@@ -47,7 +50,7 @@ const panel = document.getElementById('primer') as HTMLElement
 const body = panel.querySelector('.pbody') as HTMLDivElement
 const tabs = Array.from(panel.querySelectorAll<HTMLButtonElement>('.ptabs button[data-tab]'))
 
-type Tab = 'proof' | 'plan' | 'coach' | 'learner'
+type Tab = 'proof' | 'plan' | 'mock' | 'coach' | 'learner'
 let tab: Tab = 'proof'
 /** The step whose strokes are picked out on the stage, or 0. */
 let marked = 0
@@ -119,6 +122,9 @@ function ask(what: RequestWhat) {
     forget: 'Asked the desktop to delete the file…',
     coach_on: 'Asked the coach to start watching…',
     coach_off: 'Asked the coach to stop watching…',
+    mock_start: 'Starting a mock exam…',
+    mock_grade: 'Asked the Primer to grade the mock now…',
+    mock_stop: 'Stopping the mock…',
   }
   say(ok ? (asked[what] ?? 'Asked…') : 'Not connected to a router')
 }
@@ -257,6 +263,65 @@ function planButton(): HTMLElement {
   return a
 }
 
+function renderMock(r: Reading | null): HTMLElement[] {
+  const out: HTMLElement[] = []
+  const m = r?.mock ?? null
+  const now = Date.now()
+  if (!m || m.status === 'abandoned') {
+    out.push(h('p', 'ptext', 'A mock exam runs like the 2026 Putnam: four 90-minute sessions of three problems, with breaks of 15 minutes, about 1 h 45 and 15 minutes. The Primer stays quiet until it grades the write-ups the next morning.'))
+    const mocks = (r?.plan?.weeks ?? []).map((w) => w.mock).filter((d): d is string => !!d)
+    if (mocks.length) out.push(h('p', 'pfine', `Scheduled mocks: ${mocks.join(', ')}`))
+    const a = h('div', 'pactions')
+    a.append(button('Start a mock now', () => ask('mock_start'), 'go'))
+    out.push(a)
+    return out
+  }
+  out.push(h('div', 'pclock', mockLine(m, now) || 'Mock'))
+  if (m.status === 'running' && m.phase === 'session') {
+    if (m.freshPage) out.push(h('p', 'pnotice', 'Turn to a fresh page: the problems will be written there.'))
+    for (const p of m.problems) {
+      const box = h('div', `pmockprob${p.n === m.cursor ? ' now' : ''}`)
+      box.append(h('div', 'plabel', `Problem ${p.n} · ${p.title}`))
+      box.append(h('div', 'ptext', p.statement))
+      const pick = button(p.n === m.cursor ? 'Writing this one' : 'Write this one', () => link.send(primerRequest('mock_problem', undefined, undefined, { n: p.n })))
+      pick.disabled = p.n === m.cursor
+      box.append(pick)
+      out.push(box)
+    }
+    out.push(h('p', 'pfine', 'Or type /p 1, /p 2, /p 3 on the keyboard. Ink is collected for the problem you are writing.'))
+  } else if (m.status === 'running') {
+    out.push(h('p', 'ptext', 'Break. Pens down: ink drawn now is not collected.'))
+  }
+  if (m.status === 'awaiting_grading') {
+    const when = m.gradeAfter ? new Date(m.gradeAfter).toLocaleString() : 'tomorrow morning'
+    out.push(h('p', 'ptext', `All four sessions are done. The write-ups are graded at ${when}.`))
+  }
+  if (m.report) {
+    out.push(h('div', 'pscore', `Estimated total ${Math.round(m.report.total)}/${Math.round(m.report.max)}`))
+    out.push(h('div', 'pfine', 'Estimates by the Primer, Putnam-style (0–10 per problem), not official grades.'))
+    const ol = h('ol', 'psteps')
+    for (const p of m.report.problems) {
+      const li = h('li', `pstep ${p.score >= 8 ? 'ok' : p.score >= 1 ? 'gap' : 'error'}`)
+      const top = h('div', 'pstephead')
+      top.append(h('span', 'pnum', `S${p.session}·P${p.n}`))
+      top.append(h('span', 'pscorecell', `${Math.round(p.score)}/10`))
+      top.append(h('span', 'ptext', p.title))
+      li.append(top)
+      if (p.rigor) li.append(h('div', 'pline', `Rigor: ${p.rigor}`))
+      if (p.exposition) li.append(h('div', 'pline', `Exposition: ${p.exposition}`))
+      if (p.findings.length) li.append(h('div', 'pnote', p.findings.join(' · ')))
+      ol.append(li)
+    }
+    out.push(ol)
+  }
+  const a = h('div', 'pactions')
+  if (m.status === 'running') a.append(button('Stop mock', () => ask('mock_stop')))
+  if (m.status === 'running' || m.status === 'awaiting_grading') a.append(button('Grade now', () => ask('mock_grade')))
+  if (m.status === 'graded') a.append(button('Start another mock', () => ask('mock_start'), 'go'))
+  out.push(a)
+  return out
+}
+
 function renderCoach(r: Reading | null): HTMLElement[] {
   const out: HTMLElement[] = []
   const c = r?.coach
@@ -390,7 +455,7 @@ function renderLearner(r: Reading | null): HTMLElement[] {
 function render() {
   const r = primer.latest
   for (const b of tabs) b.setAttribute('aria-selected', String(b.dataset.tab === tab))
-  const parts = tab === 'proof' ? renderProof(r) : tab === 'plan' ? renderPlan(r) : tab === 'coach' ? renderCoach(r) : renderLearner(r)
+  const parts = tab === 'proof' ? renderProof(r) : tab === 'plan' ? renderPlan(r) : tab === 'mock' ? renderMock(r) : tab === 'coach' ? renderCoach(r) : renderLearner(r)
   const coachTab = tabs.find((b) => b.dataset.tab === 'coach')
   if (coachTab) coachTab.textContent = r?.coach?.watching ? 'Coach ●' : 'Coach'
   if (notice) parts.push(h('div', 'pnotice', notice))
@@ -469,7 +534,7 @@ export function setupPrimerPanel() {
     if (e.key === 'Escape') setPanelOpen(false)
   })
   const want = new URLSearchParams(location.search).get('panel')
-  if (want === 'proof' || want === 'plan' || want === 'coach' || want === 'learner') {
+  if (want === 'proof' || want === 'plan' || want === 'mock' || want === 'coach' || want === 'learner') {
     tab = want
     setPanelOpen(true)
   }

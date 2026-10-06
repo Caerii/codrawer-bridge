@@ -763,3 +763,24 @@ def test_live_recognizer_sends_the_selection_and_page_and_parses_the_reply(monke
     assert seen["fallbacks"] == "default" and "never to complete" in seen["system"]
     assert doc.source == "live:claude-opus-5-5" and doc.received_text == "L1: Claim"
     assert doc.findings[0].id == "sqrt2_no_lowest_terms"
+
+
+def test_a_stopped_mock_is_not_graded_and_tutoring_resumes(tmp_path):
+    sent: list[dict] = []
+
+    async def send(m: dict) -> None:
+        sent.append(m)
+
+    agent = PrimerAgent(send, learner="x", mode="offline", store=LearnerStore(tmp_path))
+
+    async def go():
+        await agent.handle({"t": "primer_request", "what": "mock_start", "scale": 0.001})
+        assert sent[-1]["mock"]["status"] == "running" and len(sent[-1]["mock"]["problems"]) == 3
+        await agent.handle({"t": "primer_request", "what": "mock_stop"})
+        assert sent[-1]["mock"]["status"] == "abandoned" and agent.mock is None
+        for m in load_recording(FIXTURES / "sqrt2_flawed.jsonl"):
+            await agent.handle(m)
+        await agent.handle({"t": "primer_request", "what": "proof"})
+        assert sent[-1]["move"]["kind"] == "socratic"
+
+    asyncio.run(go())
