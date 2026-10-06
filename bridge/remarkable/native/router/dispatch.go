@@ -93,7 +93,8 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 			s.broadcastLocked(mustJSON(strokeDelete{"stroke_delete", gone, m.Ts}), c)
 		}
 		s.mu.Unlock()
-	case "key", "cursor", "doc", "dock_action":
+	case "key", "cursor", "doc",
+		"primer", "primer_request", "dock_action", "dock_entries", "dock_query": // relayed as sent (ADR 010)
 		s.mu.Lock()
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()
