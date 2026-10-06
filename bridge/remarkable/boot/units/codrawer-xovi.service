@@ -1,0 +1,15 @@
+# XOVI at boot, guarded (xovi.sh): once per boot, after xochitl has settled, start xochitl with the
+# codrawer-layer extension, watch it 60 s and go back to stock by itself if it is unstable.
+# Installed into /run/systemd/system by boot.sh at every boot and started with --no-block after
+# the bridge: nothing waits for it, nothing is ordered after it, and the bridge never depends on
+# it. Kill switch: /home/root/codrawer/XOVI_DISABLED (boot.sh xovi off). Logs: journalctl -u codrawer-xovi.
+[Unit]
+Description=codrawer: XOVI (codrawer-layer in xochitl), started after boot with a crash guard
+RequiresMountsFor=/home/root
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /home/root/codrawer/current/xovi.sh boot
+# the wait for a settled xochitl (up to 300 s) plus the 60 s watch
+TimeoutStartSec=600

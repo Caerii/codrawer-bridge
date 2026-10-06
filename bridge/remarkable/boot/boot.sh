@@ -8,6 +8,8 @@
 #   activate <ver>    verify releases/<ver>, switch to it, health-check 60 s, roll back on failure
 #   rollback          switch current and previous, restart
 #   ack-os            forget the "OS changed" notice (after the app showed it)
+#   xovi on|off       XOVI at boot (xovi.sh): off = stock xochitl now + kill switch XOVI_DISABLED;
+#                     on = remove the kill switch and start XOVI under xovi.sh's gates
 #
 # Layout (docs/investigations/durable-install.md §6.1):
 #   /home/root/codrawer/{bridge.env,release.pub,DISABLED?,state/,current,previous,releases/<ver>/}
@@ -23,11 +25,15 @@
 #     60 s is rolled back by itself.
 #   - The bridge gates fragile features (the page watcher) on the OS version being one this
 #     release was tested on (compat.conf), which start exports as CODRAWER_OS_TESTED (§6.6).
+#   - XOVI (the codrawer-layer extension inside xochitl) is optional and never in the boot path:
+#     start brings the bridge up first, then only asks systemd, without waiting, to run the
+#     codrawer-xovi unit, whose xovi.sh has its own gates and crash guard.
 set -u
 ROOT=/home/root/codrawer
 REL=$(cd "$(dirname "$0")" && pwd)
 STATE=$ROOT/state
 UNITS="codrawer-bluetooth.service codrawer-bridge.service"
+XOVI_UNIT=codrawer-xovi.service # not in UNITS: stop and restart must never touch xochitl
 mkdir -p "$STATE"
 
 # os_version: the reMarkable release (IMG_VERSION, e.g. 3.29.0.149), else the Codex base version.
@@ -61,8 +67,8 @@ start() {
   # files copied from Windows (scp) arrive without the executable bit; every path through start
   # (first install, activate, rollback, boot) must be able to run them
   chmod +x "$REL/codrawer_bridge_native" "$REL/codrawer_bridge_rs" "$REL"/*.sh 2> /dev/null || true
-  for u in $UNITS; do
-    cp "$REL/units/$u" "/run/systemd/system/$u"
+  for u in $UNITS $XOVI_UNIT; do
+    [ -f "$REL/units/$u" ] && cp "$REL/units/$u" "/run/systemd/system/$u"
   done
   systemctl daemon-reload
   # A deliberate start (boot, activate, rollback) clears systemd's crash-loop limit, which would
@@ -70,6 +76,9 @@ start() {
   systemctl reset-failed $UNITS 2> /dev/null || true
   # --no-block: this runs inside the stub unit's start at boot; never wait on boot ordering
   systemctl --no-block restart $UNITS
+  # XOVI after the bridge, once per boot: `start` on a oneshot that already ran is a no-op, so an
+  # activate or rollback does not restart xochitl. xovi.sh decides whether XOVI runs at all.
+  [ -f "$REL/units/$XOVI_UNIT" ] && systemctl --no-block start "$XOVI_UNIT"
   echo "codrawer $(version_of "$REL") started (OS $os, tested=$tested)"
 }
 
@@ -111,6 +120,7 @@ doctor() {
   echo "engine=$(sed -n 's/^ENGINE=//p' "$ROOT/bridge.env" 2>/dev/null | tail -n 1 | grep . || echo go) (rust binary $([ -e "$ROOT/current/codrawer_bridge_rs" ] && echo present || echo absent))"
   for u in $UNITS; do echo "${u%.service}=$(systemctl is-active "$u" 2>/dev/null)"; done
   echo "healthy=$(healthy && echo 1 || echo 0)"
+  if [ -f "$ROOT/current/xovi.sh" ]; then sh "$ROOT/current/xovi.sh" status; else echo "xovi=payload missing"; fi
 }
 
 # rollback [--no-check]: swap current and previous, restart, and (unless --no-check, as when
@@ -179,5 +189,11 @@ case "${1:-}" in
   activate) activate "${2:?version}" ;;
   rollback) rollback ;;
   ack-os) rm -f "$STATE/os_changed" ;;
-  *) echo "usage: boot.sh start|stop|doctor|activate <version>|rollback|ack-os" >&2; exit 2 ;;
+  xovi)
+    case "${2:-}" in
+      on | off) sh "$REL/xovi.sh" "$2" ;;
+      *) echo "usage: boot.sh xovi on|off" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "usage: boot.sh start|stop|doctor|activate <version>|rollback|ack-os|xovi on|off" >&2; exit 2 ;;
 esac

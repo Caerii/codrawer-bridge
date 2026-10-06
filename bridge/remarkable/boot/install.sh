@@ -76,9 +76,12 @@ case "$MODE" in
     status
     ;;
   --remove)
-    systemctl stop "$STUB" codrawer-bluetooth.service codrawer-bridge.service 2>/dev/null || true
+    # stopping codrawer-xovi ends its guard only; a running XOVI stays until the next reboot
+    # (`boot.sh xovi off` first returns xochitl to stock at once)
+    systemctl stop "$STUB" codrawer-bluetooth.service codrawer-bridge.service codrawer-xovi.service 2>/dev/null || true
     with_rootfs drop_stub
-    rm -f "/run/systemd/system/codrawer-bluetooth.service" "/run/systemd/system/codrawer-bridge.service"
+    rm -f /run/systemd/system/codrawer-bluetooth.service /run/systemd/system/codrawer-bridge.service \
+      /run/systemd/system/codrawer-xovi.service
     systemctl daemon-reload
     echo "codrawer stub removed (files in $ROOT kept)"
     ;;
