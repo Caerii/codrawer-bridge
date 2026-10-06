@@ -46,7 +46,7 @@ export interface Inbound {
   stroke_begin: { id: string; layer?: string; brush?: string; ts?: unknown; color?: unknown; author?: string }
   /** pts: [x, y, pressure, t] each. */
   stroke_pts: { id: string; pts?: number[][] }
-  stroke_end: { id: string }
+  stroke_end: { id: string; ts?: unknown }
   ai_stroke_begin: { id: string; brush?: string }
   ai_stroke_pts: { id: string; pts?: number[][] }
   ai_stroke_end: { id: string }

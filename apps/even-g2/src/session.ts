@@ -67,9 +67,14 @@ export function onStrokeBegin(m: Inbound['stroke_begin']) {
   stage.setPointer(null) // the ink itself shows the pen now
 }
 
-/** `stroke_pts`: live ink for the loupe now; the canvas surface follows. */
+/**
+ * `stroke_pts`: live ink for the loupe now; the canvas surface follows. The tablet's eraser cuts
+ * ink as its points arrive (strokes.ts, erase.ts): the stage repaints the region it changed, and
+ * the glasses redraw like they do for ink.
+ */
 export function onStrokePoints(m: Inbound['stroke_pts']) {
-  store.points(m.id, m.pts || [], 'user')
+  const erased = store.points(m.id, m.pts || [], 'user')
+  if (erased) stage.erased(erased)
   stage.touch()
   ink.lastAt = performance.now()
   dirty.loupe = true
@@ -78,7 +83,7 @@ export function onStrokePoints(m: Inbound['stroke_pts']) {
 
 /** `stroke_end`: the glasses canvas may be resent once the writing pauses. */
 export function onStrokeEnd(m: Inbound['stroke_end']) {
-  store.end(m.id)
+  store.end(m.id, typeof m.ts === 'number' ? m.ts : undefined)
   stage.touch()
   ink.active = false
   ink.lastAt = performance.now()

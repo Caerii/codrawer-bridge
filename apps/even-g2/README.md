@@ -71,6 +71,8 @@ WebView bridge as base64 (2x faster than the SDK's default number array even in 
 | `frame_ms` / `canvas_ms` | `60` / `1200` | per-container push floors (with a loupe the canvas refreshes at `stroke_end`) |
 | `ai=1` | `0` | show the AI ghost layer |
 | `binarize=0` | `1` | keep antialiased grey (compresses worse) |
+| `eraser=<px>` | `28.8` | the tablet eraser's radius in page px: ink this close to its path is cut live, as xochitl cuts it (the Marker's eraser end at default zoom; `erase.ts`) |
+| `erase=0` | `1` | no erase prediction: erased ink stays until the tablet saves the page |
 | `bench=1` | | on-device benchmark: rebuilds the page per config and reports min/median ms in the HUD and console; `bench=0` returns |
 
 The HUD status line shows `L<ms>/<count> · C<ms>/<count>`: round trip and pushes per container.
@@ -173,6 +175,7 @@ text and hands them to the glasses at the pace the link allows (ADR 006).
 | `actions.ts` | the app's verbs (follow/fit, emphasis, zoom, AI layer, new drawing, layout switches) |
 | `loop.ts` | the render loop |
 | `strokes.ts` | stroke store (with each live point's time), rasterizer, loupe camera, PNG/Gray encoders |
+| `erase.ts` | pure: the tablet eraser's model (radius from xochitl's thickness, cut masks) and the grid that finds the ink near it |
 | `timelapse.ts`, `recording.ts` | pure: timelapse pacing (stroke order, time mapping) and the recorder format pick; the session recording's bounded log and JSONL |
 | `glasses/layout.ts` | container sets for the canvas / text / edit layouts, menu ids |
 | `glasses/page.ts` | create / rebuild / retry the page, layout switches, `?probe=1`, stale-copy release |

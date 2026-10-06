@@ -16,7 +16,9 @@
  * - As on the stage, finished strokes accumulate on a transparent ink layer (painted once each, in
  *   drawing order, so erasers cut what came before) and strokes still being drawn are repainted on
  *   a live layer every frame; a frame is the page colour, the ink, the live layer and a small
- *   "codrawer" wordmark in the corner.
+ *   "codrawer" wordmark in the corner. History is painted as it happened: strokes whole (the
+ *   store's erase masks are the end state, erase.ts), and the tablet's eraser cutting the ink
+ *   layer as it moves, not only once it lifts.
  * - The canvas is 1080 × 1440 (the page aspect at Paper Pro resolution ÷ 1.5), or 720 × 960 on a
  *   device that reports 2 GB of memory or less; even sizes, as H.264 needs.
  *
@@ -74,7 +76,7 @@ function snapshot(): Stroke[] {
   return store
     .all()
     .filter((s) => s.pts.length > 0 && (s.layer !== 'ai' || stage.showAi) && !(s.fromPage && ERASER_TOOLS.has(s.tool ?? '')))
-    .map((s) => ({ ...s, pts: s.pts.slice(), times: s.times?.slice() }))
+    .map((s) => ({ ...s, pts: s.pts.slice(), times: s.times?.slice(), gone: undefined, goneCount: undefined }))
 }
 
 /**
@@ -104,7 +106,7 @@ class FramePainter {
     const ink = this.ink.getContext('2d')!
     // finished strokes join the ink layer in drawing order, so an eraser cuts only what came before
     while (this.committed < strokes.length && plan.strokes[this.committed].end <= t) {
-      stage.paintPage(ink, [strokes[this.committed]], this.theme)
+      stage.paintPage(ink, [strokes[this.committed]], this.theme, true)
       this.committed++
     }
     const live = this.live.getContext('2d')!
@@ -114,9 +116,13 @@ class FramePainter {
       const p = plan.strokes[i]
       if (p.start > t) break // starts are in drawing order
       const n = revealedPoints(p, t)
-      if (n > 0) partial.push(n === strokes[i].pts.length ? strokes[i] : { ...strokes[i], pts: strokes[i].pts.slice(0, n), done: false })
+      if (n === 0) continue
+      const s = n === strokes[i].pts.length ? strokes[i] : { ...strokes[i], pts: strokes[i].pts.slice(0, n), done: false }
+      // an eraser cuts the ink as it moves (repainting its prefix cuts nothing new)
+      if (s.brush === 'eraser') stage.paintPage(ink, [s], this.theme, true)
+      else partial.push(s)
     }
-    if (partial.length) stage.paintPage(live, partial, this.theme)
+    if (partial.length) stage.paintPage(live, partial, this.theme, true)
 
     const { width: w, height: h } = this.canvas
     const ctx = this.canvas.getContext('2d')!

@@ -18,6 +18,7 @@
  * left off. (The shared document keeps its own storage: doc/document.ts.)
  */
 import type { Highlight, ViewMode } from './strokes'
+import { DEFAULT_ERASE_RADIUS } from './erase'
 import type { PageMode } from './glasses/layout'
 
 const params = new URLSearchParams(location.search)
@@ -185,6 +186,20 @@ export const INITIAL_WIDE_FIT = cfg('wide', '0') === '1'
 export const INITIAL_HIGHLIGHT: Highlight = (cfg('highlight', 'all') as Highlight) || 'all'
 /** Follow window width as a fraction of the page width (`?window=`). */
 export const INITIAL_WINDOW = Number(cfg('window', '0.22')) || 0.22
+/**
+ * The tablet eraser's radius in page px (`?eraser=`, 2..400): ink within it of the eraser's path
+ * is cut as the eraser moves. 28.8 is the Marker's eraser end at the tablet's default zoom,
+ * measured on a Paper Pro page (erase.ts, docs/investigations/native-erase.md). xochitl divides
+ * the eraser by the zoom, so a page erased while zoomed in needs a smaller value.
+ */
+export const ERASE_RADIUS = ((v) => (v >= 2 && v <= 400 ? v : DEFAULT_ERASE_RADIUS))(Number(cfg('eraser', String(DEFAULT_ERASE_RADIUS))))
+
+/**
+ * Erase prediction (`?erase=0` turns it off): with it, the tablet's eraser cuts ink on every
+ * client as it moves; without it, erased ink stays until the tablet saves the page.
+ */
+export const PREDICT_ERASE = cfg('erase', '1') !== '0'
+
 /** Show the AI ghost layer (`?ai=1`; toggled from the menu and remembered). */
 export const SHOW_AI = cfg('ai', '0') !== '0'
 

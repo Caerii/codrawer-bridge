@@ -47,6 +47,11 @@ Fields:
 - `id`: stroke id (string, unique within a session)
 - `layer`: `"user"` (AI may also use same shape with `"ai"` but current server treats AI separately)
 - `brush`: client hint (e.g. `"pen"`, `"eraser"`). Rendering/erase behavior is **client-side**.
+  `"eraser"` is the tablet's eraser end. xochitl cuts the lines it passes over (it never stores the
+  eraser), so clients do the same as its points arrive: every point of the tablet's earlier ink
+  (layer `user`) within the eraser radius of its path goes, splitting lines; other layers are not
+  cut. The radius is 28.8 page px plus the ink's half width at the tablet's default zoom
+  (`docs/investigations/native-erase.md`, `apps/even-g2/src/erase.ts`).
 - `color` (optional): client hint (e.g. `"#00ff88"`). Input events do not provide UI-selected color; set it via client/bridge config.
 - `ts`: ms timestamp
 
@@ -147,6 +152,9 @@ router also uses it as the page's **base**: on a `page` it drops recorded live s
 `?replay=0` sources get no replay. Clients do the same with their own copy. They replace
 earlier snapshot strokes with the new snapshot, keep live strokes whose `stroke_begin.ts > rev`,
 and on a different `page`/`doc` clear the view (AI layer included) and show the new page.
+xochitl commits a stroke (ink or erase) when the pen lifts, so the Even G2 client also keeps a
+live stroke that has not ended or whose `stroke_end.ts > rev` (a save taken while the pen was
+down), and applies kept eraser strokes again to the new snapshot.
 
 ### `key` (keyboard bridge → server → broadcast)
 

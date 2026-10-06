@@ -16,7 +16,7 @@
 import type { EvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { StrokeStore, type RasterOptions } from './strokes'
 import type { PageMode } from './glasses/layout'
-import { IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WIDE_FIT, INITIAL_WINDOW, PAGE_ASPECT, SHOW_AI } from './config'
+import { ERASE_RADIUS, IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITIAL_WIDE_FIT, INITIAL_WINDOW, PAGE_ASPECT, PREDICT_ERASE, SHOW_AI } from './config'
 
 /**
  * The session's page: every stroke we know of, on its layer (user, peer, ai). Written by the
@@ -24,6 +24,8 @@ import { IMG_H, IMG_W, INITIAL_HIGHLIGHT, INITIAL_MODE, INITIAL_PAGE_MODE, INITI
  * renderer (the glasses frames, the phone stage).
  */
 export const store = new StrokeStore()
+store.eraseRadius = ERASE_RADIUS
+store.predictErase = PREDICT_ERASE
 
 /**
  * How the glasses canvas frames the page (the canvas container's raster options). The ring and
