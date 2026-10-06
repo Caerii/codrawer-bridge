@@ -18,6 +18,18 @@ so the hand can yield while the user writes (ADR 009 §2, the write-back guard).
 centred on the page, y down from the top); :meth:`PageModel.selection_box` converts it with the
 page size. A box whose coordinates all lie in [-0.5, 1.5] is taken as already normalized (the
 rule primer/agent.py uses).
+
+**Live pen strokes are in screen coordinates, not page coordinates.** The bridge reads the
+digitizer (bridge/remarkable/rust/src/pen.rs) and normalizes it to the screen; it does not know
+xochitl's zoom or scroll. At the default view the two coincide, which is why live ink and
+snapshots agree on the glasses. On a zoomed or scrolled page they do not: request 6 of the first
+live day (2026-10-06) lassoed fresh writing at page y 0.92–0.96 on a view zoomed to 0.75, its
+live strokes sat at screen y 0.69–0.72, and the selection came out empty. The dock tells us the
+view: next to the page ``bbox`` it sends ``view_bbox``, the same rectangle in screen pixels
+(1620 × 2160), and the two give the zoom and the offset (:class:`View`). The tablet's own
+strokes that arrived live (layer ``user``, not yet in a snapshot) are kept in screen coordinates
+and mapped through the latest view on every read; strokes from snapshots, agents and our own
+ink are page coordinates already.
 """
 
 from __future__ import annotations
@@ -35,6 +47,46 @@ ERASERS = ("eraser", "erase_area")
 Box = tuple[float, float, float, float]
 
 
+@dataclass(frozen=True)
+class View:
+    """
+    xochitl's view of the page: screen pixel = ``zoom`` · page pixel (x from the page's left
+    edge) + ``(dx, dy)``. The screen is ``screen_w`` × ``screen_h`` pixels (Paper Pro portrait).
+    """
+
+    zoom: float = 1.0
+    dx: float = 0.0
+    dy: float = 0.0
+    screen_w: float = PAGE_W
+    screen_h: float = PAGE_H
+
+    @staticmethod
+    def from_boxes(
+        bbox: list[float], view_bbox: list[float], page_w: float = PAGE_W
+    ) -> View | None:
+        """The view that maps the dock's page ``bbox`` (scene units) onto its ``view_bbox``."""
+        try:
+            bx0, by0, bx1, by1 = (float(v) for v in bbox)
+            vx0, vy0, vx1, vy1 = (float(v) for v in view_bbox)
+        except (TypeError, ValueError):
+            return None
+        if abs(bx1 - bx0) > 1e-3:
+            zoom = (vx1 - vx0) / (bx1 - bx0)
+        elif abs(by1 - by0) > 1e-3:
+            zoom = (vy1 - vy0) / (by1 - by0)
+        else:
+            return None
+        if not 0.05 < zoom < 20:
+            return None
+        return View(zoom, vx0 - zoom * (bx0 + page_w / 2), vy0 - zoom * by0)
+
+    def to_page(self, u: float, v: float, page_w: float, page_h: float) -> tuple[float, float]:
+        """A screen-normalized point as a normalized page point."""
+        x = (u * self.screen_w - self.dx) / self.zoom
+        y = (v * self.screen_h - self.dy) / self.zoom
+        return x / page_w, y / page_h
+
+
 def _now_ms() -> float:
     return time.time() * 1000
 
@@ -50,6 +102,7 @@ class Stroke:
     live: bool = False
     begin_ts: float | None = None
     ended: bool = True
+    screen: bool = False  # pts are screen-normalized (the tablet's pen, live): map through a View
 
     def bbox(self) -> Box:
         xs = [p[0] for p in self.pts] or [0.0]
@@ -73,6 +126,7 @@ class PageModel:
         self.pen_down: set[str] = set()  # user-layer strokes begun and not ended
         self.last_user_ink_ms = 0.0  # local clock, last user point or begin
         self.version = 0  # bumps on every page change (for waiters)
+        self.view = View()  # the latest view the dock told us about (identity until then)
 
     # ── Input ──────────────────────────────────────────────────────────────────────────────
 
@@ -96,6 +150,7 @@ class PageModel:
                 live=True,
                 begin_ts=float(ts) if isinstance(ts, (int, float)) else None,
                 ended=False,
+                screen=layer == "user",
             )
             if layer != "ai":
                 self.pen_down.add(sid)
@@ -164,9 +219,41 @@ class PageModel:
 
     # ── Views ──────────────────────────────────────────────────────────────────────────────
 
+    def set_view(self, msg: dict[str, Any]) -> None:
+        """Take the view from a ``dock_action`` that carries ``bbox`` and ``view_bbox``."""
+        if isinstance(msg.get("bbox"), list) and isinstance(msg.get("view_bbox"), list):
+            v = View.from_boxes(msg["bbox"], msg["view_bbox"], self.w)
+            if v is not None:
+                self.view = v
+
+    def _in_page(self, s: Stroke) -> Stroke:
+        if not s.screen:
+            return s
+        pts = []
+        for p in s.pts:
+            x, y = self.view.to_page(p[0], p[1], self.w, self.h)
+            pts.append([x, y, p[2] if len(p) >= 3 else 0.5])
+        return Stroke(
+            id=s.id,
+            layer=s.layer,
+            tool=s.tool,
+            pts=pts,
+            live=True,
+            begin_ts=s.begin_ts,
+            ended=s.ended,
+        )
+
     def ink(self, include_ai: bool = True) -> list[Stroke]:
-        """Every stroke with points; the agent layer only when ``include_ai``."""
-        return [s for s in self.strokes.values() if s.pts and (include_ai or s.layer != "ai")]
+        """Every stroke with points, in page coordinates; the agent layer only if ``include_ai``."""
+        return [
+            self._in_page(s)
+            for s in self.strokes.values()
+            if s.pts and (include_ai or s.layer != "ai")
+        ]
+
+    def live_user(self) -> int:
+        """Strokes from the tablet's pen not yet in a snapshot."""
+        return sum(1 for s in self.strokes.values() if s.screen and s.pts)
 
     def user_active(self, now_ms: float | None = None, quiet_ms: float = 300.0) -> bool:
         """The user's pen is down, or drew within ``quiet_ms``."""

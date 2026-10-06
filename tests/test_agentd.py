@@ -345,3 +345,99 @@ def test_agent_status_thinking_then_done_in_scene_units(tmp_path):
         assert rec.error and not [m for m in sent if m["t"].startswith("stroke_")]
 
     asyncio.run(go())
+
+
+# ── request 6 (2026-10-06): a zoomed view, unsaved writing, a selection at the bottom edge ──
+
+#: The dock_action of request 6: the page box and the same box on the screen (view zoomed 0.75).
+REQ6_BBOX = [-505.3759765625, 1988.9564208984375, -36.85017776489258, 2081.544189453125]
+REQ6_VIEW = [430.968017578125, 1491.717315673828, 782.3623666763306, 1561.1581420898438]
+
+
+def test_a_stroke_seen_only_live_on_a_zoomed_view_is_in_the_selection_render():
+    from io import BytesIO
+
+    from PIL import Image
+
+    from codrawer_bridge.agentd import render
+    from codrawer_bridge.agentd.page import View
+
+    m = PageModel()
+    m.observe(page_msg([], rev=1000))
+    view = View.from_boxes(REQ6_BBOX, REQ6_VIEW)
+    assert view is not None and abs(view.zoom - 0.75) < 1e-3 and abs(view.dy) < 0.5
+    # the user writes a word inside the box; the pen reports screen coordinates
+    page_pts = [(-450 + 40 * i, 2030 + (i % 2) * 20) for i in range(8)]  # scene units
+    screen = [
+        [(0.75 * (x + 810) + view.dx) / 1620, (0.75 * y + view.dy) / 2160, 0.5, 2000 + i]
+        for i, (x, y) in enumerate(page_pts)
+    ]
+    m.observe({"t": "stroke_begin", "id": "u1", "layer": "user", "ts": 2000})
+    m.observe({"t": "stroke_pts", "id": "u1", "pts": screen})
+    m.observe({"t": "stroke_end", "id": "u1", "ts": 2010})
+    box = m.to_norm(REQ6_BBOX)
+    assert m.selected(box) == []  # without the view, the live stroke is somewhere else
+    m.set_view({"bbox": REQ6_BBOX, "view_bbox": REQ6_VIEW})
+    sel = m.selected(box)
+    assert [s.id for s in sel] == ["u1"]
+    x, y = sel[0].pts[0][:2]
+    assert abs(x * 1620 - (page_pts[0][0] + 810)) < 0.5 and abs(y * 2160 - page_pts[0][1]) < 0.5
+    png = render.render_region(sel, [], render.region_with_margin(box))
+    assert Image.open(BytesIO(png)).getextrema()[0] == 0  # ink, not a blank picture
+
+
+def test_an_empty_selection_is_never_sent_to_the_model(tmp_path):
+    from codrawer_bridge.agentd.service import Agentd, Config
+
+    async def go():
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="on", save_wait_s=0.3))
+        sent: list[dict] = []
+        asked: list[str] = []
+
+        async def send(msg):
+            sent.append(msg)
+            return True
+
+        async def ask(text, timeout_s=90.0):
+            asked.append(text)
+            raise AssertionError("the model must not be asked")
+
+        a.send = send  # type: ignore[method-assign]
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        a.handle(page_msg([]))
+        rec = await a.answer(
+            {
+                "t": "dock_action",
+                "id": "ask_selection",
+                "doc": "d",
+                "page": "p1",
+                "bbox": REQ6_BBOX,
+                "view_bbox": REQ6_VIEW,
+                "items": 16,
+                "source": "selection",
+            }
+        )
+        assert rec.error == "empty selection" and not asked
+        assert not [m for m in sent if m["t"].startswith("stroke_")]  # no dots, no answer
+        glances = [m["move"]["glance"] for m in sent if m["t"] == "primer"]
+        assert glances[-1].startswith("Couldn't see that selection")
+        st = [m for m in sent if m["t"] == "agent_status"]
+        assert [m["state"] for m in st] == ["thinking", "done"] and st[-1]["ok"] is False
+
+    asyncio.run(go())
+
+
+def test_place_for_a_selection_at_the_bottom_edge_stays_on_the_page():
+    sel = (305, 1989, 773, 2082)  # request 6, page units from the left edge
+    strokes = [hline(305, 773, 2030), hline(310, 760, 2060)]
+    occ = Occupancy(strokes, W, H, height=H + 600)
+    blocks = [Block(700, 260, scale=1.0), Block(450, 170, scale=0.65)]
+    p = place(occ, blocks, sel, page_bottom=H)
+    assert p is not None
+    assert p.y + p.block.h <= H - 70  # inside the page and its bottom margin
+    assert p.side in ("right", "left", "above")
+    assert not ink_in(strokes, p.rect, grow=36)
+    # nothing fits within reach: no placement (the glasses only), rather than far away
+    crowd = [hline(150, 1550, y) for y in range(100, 2100, 40) if not 400 <= y <= 700]
+    occ2 = Occupancy(crowd + strokes, W, H)
+    assert place(occ2, [Block(450, 170)], sel, page_bottom=H, max_gap=300) is None

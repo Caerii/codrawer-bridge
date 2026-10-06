@@ -223,6 +223,14 @@ Fields: `id` the entry's id (`status` is answered on the tablet and never sent; 
 `bbox` `[x0, y0, x1, y1]` as xochitl signalled it (`SceneController.areaSelected`, scene units,
 x centred) and `items`, the number of selected items. Clients resolve the selected strokes from
 their `page` snapshot (strokes with points inside `bbox` after the conversion `x = (x_rm + w/2)/w`).
+It may also carry `view_bbox`, the same rectangle in screen pixels (1620 × 2160), plus
+`contains_stroke`, `contains_image` and `selected_ms_ago`. The two boxes give xochitl's zoom and
+scroll, which clients need for strokes that arrived only live: the bridge's pen strokes are
+normalized to the screen, not the page, so on a zoomed or scrolled view they must be mapped
+(`page = (screen − offset) / zoom`; `src/codrawer_bridge/agentd/page.py`, `View`) before they
+can be compared with `bbox`. A selection's strokes may not be in the snapshot yet (xochitl saves
+6–10 s after a pause). `source` names the injection: `dock` for the toolbar dock, `selection`
+for the lasso's own selection toolbar.
 `goto_accepted` (with `result`, the extension's reply) says the user tapped a `goto` offer and the
 tablet went there.
 

@@ -17,7 +17,11 @@ Messages sent while the link is down wait for it up to ``send_wait_s`` and are t
    a static pending mark. They stay (native ink cannot be taken back by the router); the answer
    starts right after them, so they read as its lead-in.
 2. *The page.* If the request names a page other than the snapshot's, wait up to 5 s for the
-   page watcher's snapshot of it.
+   page watcher's snapshot of it. The dock's ``view_bbox`` sets the view through which the
+   pen's live strokes (screen coordinates) are mapped onto the page (page.py). If the lasso
+   finds fewer strokes than the dock's ``items`` (writing not yet saved), wait for the next
+   snapshot, up to 15 s. If it still finds nothing, the model is not asked: the glasses say
+   "Couldn't see that selection — try again" and nothing is written.
 3. *The picture.* ``ask_selection``: the lasso's box with a margin (render.py), the selected
    strokes black. ``ask_page``: the whole page. The PNG goes to the state directory, which lies
    under the terminal's working directory so Claude Code can Read it (ADR 002).
@@ -32,7 +36,8 @@ Messages sent while the link is down wait for it up to ``send_wait_s`` and are t
 7. *The record.* One JSON line in ``requests.jsonl``.
 
 With agent ink off (``--ink off``, or ``auto`` reading the tablet's setting over SSH), or when no
-free space fits the answer, or when ``packages/hand`` cannot run, step 5 is skipped and the
+free space on the page fits the answer within ~33 mm of the selection (placement.py keeps the
+block on the page), or when ``packages/hand`` cannot run, step 5 is skipped and the
 answer is text only. A timeout or failure writes a short note instead of an answer: "couldn't
 answer" in ink after the dots (if there are dots), and on the glasses.
 
@@ -79,6 +84,7 @@ class Config:
     ssh: str = ""  # root@<tablet> for --ink auto
     thinking: str = "dots"  # dots | overlay | none: the pending mark (agent_status is always sent)
     timeout_s: float = 90.0
+    save_wait_s: float = 15.0  # how long to wait for a save when the selection is short
     open_timeout_s: float = 60.0
     send_wait_s: float = 30.0
     include_ai: bool = False
@@ -114,6 +120,10 @@ class Record:
     note: str = ""
     error: str = ""
     status_box: tuple[float, float, float, float] | None = None  # page units, last agent_status
+    view: list[float] | None = None  # zoom, dx, dy of the tablet's view (page.py View)
+    live_user: int = 0  # the tablet's pen strokes not yet in a snapshot, at the request
+    items: int = 0  # how many items the lasso held (dock_action)
+    waited_s: float = 0.0  # waiting for the tablet to save the selection
 
 
 class Agentd:
@@ -294,21 +304,35 @@ class Agentd:
             await self._glasses(f"Thinking about {what}…", f"Claude is reading {what}…")
             await self._wait_page(rec.page)
             m = self.model
+            m.set_view(msg)  # live pen strokes are in screen coordinates (page.py)
             W, H = m.w, m.h
             sel_box = m.selection_box(msg) if kind == "ask_selection" else None
             rec.bbox = list(msg["bbox"]) if isinstance(msg.get("bbox"), list) else None
+            rec.view = [round(m.view.zoom, 4), round(m.view.dx, 1), round(m.view.dy, 1)]
+            rec.live_user = m.live_user()
+            if not self.cfg.dry_run:
+                box0 = sel_box or m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
+                await self._status(rec, "thinking", placement.to_pu(box0, W, H))
             if sel_box is not None:
-                selected = m.selected(sel_box)
+                selected = await self._selection(msg, sel_box, rec)
                 anchor = sel_box
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
+            if not selected:
+                # never ask about (or answer) an empty picture
+                rec.error = "empty selection" if sel_box is not None else "empty page"
+                what = "that selection" if sel_box is not None else "anything on this page"
+                await self._glasses(
+                    f"Couldn't see {what} — try again", f"Couldn't see {what}. Try again."
+                )
+                return rec
             rec.ink = await self.ink_enabled()
             prefer = None
             if not self.cfg.dry_run:
                 spot = self._reserve(anchor) if rec.ink else None
-                status_box = spot.rect if spot is not None else placement.to_pu(anchor, W, H)
-                await self._status(rec, "thinking", status_box)
+                if spot is not None:
+                    await self._status(rec, "thinking", spot.rect)
                 if spot is not None and self.cfg.thinking == "dots":
                     await self._dots(spot, run)
                     prefer = (spot.x + DOTS_PU, spot.y)
@@ -322,7 +346,7 @@ class Agentd:
                 context = [
                     s
                     for s in m.ink(include_ai=self.cfg.include_ai)
-                    if s not in selected and render.intersects(s, region)
+                    if s.id not in {t.id for t in selected} and render.intersects(s, region)
                 ]
                 png = render.render_region(selected, context, region, W, H)
                 rec.region = [round(v, 4) for v in region]
@@ -374,6 +398,30 @@ class Agentd:
                 await self._status(rec, "done", rec.status_box)
             self._log(rec)
 
+    async def _selection(self, msg: dict[str, Any], box: Box, rec: Record) -> list:
+        """
+        The strokes inside the lasso's ``box``. The dock says how many items it selected
+        (``items``); while fewer strokes are found (writing not yet saved and not seen live),
+        wait for the next ``page`` snapshot, up to ``save_wait_s`` (xochitl saves 6–10 s after a
+        pause).
+        """
+        m = self.model
+        want = int(msg.get("items") or 0) if msg.get("contains_stroke", True) else 0
+        selected = m.selected(box)
+        t0 = time.monotonic()
+        saves = 0  # snapshots seen while waiting: one is enough unless nothing was found
+        while (not selected or (len(selected) < want and not saves)) and (
+            time.monotonic() - t0 < self.cfg.save_wait_s
+        ):
+            v = m.version
+            while m.version == v and time.monotonic() - t0 < self.cfg.save_wait_s:
+                await asyncio.sleep(0.2)
+            saves += m.version != v
+            selected = m.selected(box)
+        rec.waited_s = round(time.monotonic() - t0, 2) if time.monotonic() - t0 > 0.3 else 0.0
+        rec.items = want
+        return selected
+
     def _reserve(self, anchor: Box) -> placement.Placement | None:
         """A spot near ``anchor`` for a typical answer (three lines, ~80 mm), before it is known."""
         m = self.model
@@ -384,7 +432,13 @@ class Agentd:
             )
             for s in self.cfg.scales
         ]
-        return placement.place(occ, typical, placement.to_pu(anchor, m.w, m.h))
+        return placement.place(
+            occ,
+            typical,
+            placement.to_pu(anchor, m.w, m.h),
+            page_bottom=_page_bottom(m),
+            max_gap=MAX_GAP_PU,
+        )
 
     async def _dots(self, spot: placement.Placement, run: str) -> None:
         """The static pending mark: three dots at the reserved spot, on the first baseline."""
@@ -462,9 +516,11 @@ class Agentd:
             placement.to_pu(anchor, m.w, m.h),
             prefer=prefer,
             clearance=30.0 if prefer else 36.0,
+            page_bottom=_page_bottom(m),
+            max_gap=MAX_GAP_PU,
         )
         if spot is None:
-            rec.note = "no free space near the selection: text only"
+            rec.note = "no free space near the selection: glasses only"
             return
         lay = lays[spot.block.layout]
         origin = lay.origin_for((spot.x, spot.y), spot.block.scale, m.w, m.h)
@@ -572,6 +628,18 @@ DRY_RUN_ANSWER = (
     "Nice line of thought. Check the second step: the sign flips when you move the term across, "
     "so the last line should read minus. The rest holds."
 )
+
+
+#: The farthest an answer may sit from what it answers, page units (~33 mm); farther away it
+#: would read as unrelated ink, so the answer goes to the glasses only.
+MAX_GAP_PU = 300.0
+
+
+def _page_bottom(m: PageModel) -> float:
+    """How far down the page reaches, page units: its height, or the lowest ink if the user
+    has already written further down a page extended by scrolling."""
+    box = m.ink_box(include_ai=True)
+    return max(m.h, box[3] * m.h if box else m.h)
 
 
 def _ink_height(m: PageModel) -> float:
