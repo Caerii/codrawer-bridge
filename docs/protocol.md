@@ -23,8 +23,8 @@ This protocol is **stroke-native**: the bridge sends raw stroke events; the serv
   `NATIVE_AGENT_INK=1` on the tablet, the bridge also commits each finished ai stroke as real
   xochitl ink on the open page, on a layer named `codrawer: agent` (ADR 009; the codrawer-layer
   XOVI extension): it saves into the notebook and the user can undo it. The bridge forwards only
-  `layer:"ai"`, caps it (32 strokes in progress, 4000 points per stroke, 40 strokes then 15 per
-  second) and maps `color` (`#rrggbb[aa]`) and `brush`/`tool` to xochitl's ARGB and pens.
+  `layer:"ai"`, caps it (32 strokes in progress, 4000 points per stroke, 60 strokes then 30 per
+  second by default, `AGENT_INK_RATE`/`AGENT_INK_BURST` in bridge.env; ADR 003) and maps `color` (`#rrggbb[aa]`) and `brush`/`tool` to xochitl's ARGB and pens.
 
 ## Routers
 

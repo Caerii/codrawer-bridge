@@ -46,7 +46,7 @@ A reply to something the user wrote or typed on the tablet comes back as ink on 
 - Opt-in: `NATIVE_AGENT_INK` is off by default; the user turns it on (bridge.env today, the dock's
   "Agent ink on/off" next).
 - Caps in the bridge: only `layer:"ai"`; 32 strokes in progress, 4000 points per stroke, a token
-  bucket of 40 strokes refilled at 15 per second. Caps in the extension: 64 strokes per message,
+  bucket of 60 strokes refilled at 30 per second (15 and 40 until 2026-10-07; ADR 003). Caps in the extension: 64 strokes per message,
   page-range coordinates, ink tools only (no eraser, highlighter or selection).
 - The write-back guard: nothing is committed while the user's pen or finger is on the page.
 - Anyone who can join the session with its pairing code can send agent ink; the code is the trust

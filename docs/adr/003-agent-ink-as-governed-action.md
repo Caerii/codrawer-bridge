@@ -30,6 +30,14 @@ Rules, carried over from the codrawer protocol and the SIG Pager:
   and writes an `audit_events` row with `provenance=codrawer`, the turn id and the agent id.
 - The router validates geometry (normalized range, point count caps, stroke count caps per
   turn) before broadcasting; oversized replies are truncated with a note.
+- On the tablet, the bridge that commits agent ink into xochitl (Go `agentink`, Rust
+  `agent_ink.rs`) also rate-caps it: a token bucket refilled at 30 strokes a second with a burst
+  of 60; a stroke over the cap is dropped and counted, so a runaway agent cannot fill a
+  notebook. Raised from 15 a second (burst 40) on 2026-10-07 because the user asked for very
+  fast write-back, agentd's "very fast" hand, about 14.4 strokes a second, which ran into the old
+  cap. The cap is one bucket for all agent ink on the tablet, set in its `bridge.env` with
+  `AGENT_INK_RATE` (1..200 a second) and `AGENT_INK_BURST` (1..400); a bad value keeps the
+  default. Points may lie anywhere on a long, scrolled page (y up to 40000 page units).
 
 ## Consequences
 

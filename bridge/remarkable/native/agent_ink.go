@@ -206,7 +206,8 @@ func (c *pageCache) get() agentink.Page {
 
 // agentInkForever connects, serves one connection until it fails, and reconnects.
 func agentInkForever(path string, msgs <-chan []byte, actions chan<- []byte, link *inkLink, pages *pageCache, debug bool) {
-	fwd := &agentink.Forwarder{}
+	per, burst := agentink.RateFromEnv(os.Getenv("AGENT_INK_RATE"), os.Getenv("AGENT_INK_BURST"))
+	fwd := &agentink.Forwarder{PerSecond: per, Burst: burst}
 	var mu sync.Mutex // pages is read by the reader goroutine (actions) and this one (ink)
 	page := func() agentink.Page { mu.Lock(); defer mu.Unlock(); return pages.get() }
 	backoff := time.Second
