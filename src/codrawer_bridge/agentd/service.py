@@ -63,10 +63,13 @@ from typing import Any
 
 from . import hand as handmod
 from . import placement, prompt, render
+from .aio import within
+from .claude_stream import ClaudePool
 from .page import Box, PageModel
 from .queue import REPLACED, PageQueue
 from .stream import InkStream
 from .terminal import Reply, Terminal
+from .threads import ThreadStore
 
 log = logging.getLogger("agentd")
 
@@ -81,6 +84,9 @@ class Config:
     term_token: str = "sig-glasses"
     term_cwd: str = ""  # the repository: the state directory (logs, images) lives under it
     agent_cwd: str = ""  # Claude Code's working directory (default term_cwd); empty is faster
+    backend: str = "even-terminal"  # claude-stream (warm claude -p processes) | even-terminal
+    model: str = "claude-haiku-4-5-20251001"  # for claude-stream
+    pool: int = 1  # asks answered at once (claude-stream keeps one more process warm as a spare)
     state_dir: str = ""
     persona: str = "archivist"
     color: str = "#3a6ea5"
@@ -131,6 +137,9 @@ class Record:
     waited_s: float = 0.0  # waiting for the tablet to save the selection
     status_note: str = ""  # the one line the dock's status row shows at `done` (protocol.md)
     retry_of: dict[str, Any] | None = None  # the failed first turn, when it was retried
+    thread: int = 0  # earlier exchanges on this page sent with the ask (threads.py)
+    seen: str = ""  # the model's transcription of the selection (its SEEN line; never inked)
+    image_bytes: int = 0  # the PNG sent
     chunks: list[dict[str, Any]] = field(default_factory=list)  # what was written, chunk by chunk
 
 
@@ -161,7 +170,15 @@ class Agentd:
             # one session per even-terminal: a Haiku terminal must not resume the Opus session
             self.state / f"state-{_slug(cfg.term_url)}.json",
         )
-        self._turn = asyncio.Lock()  # one terminal turn at a time
+        self._turn = asyncio.Lock()  # one even-terminal turn at a time (its sessions slow down)
+        self.claude = (
+            ClaudePool(self.agent_cwd, size=cfg.pool + 1, model=cfg.model)
+            if cfg.backend == "claude-stream"
+            else None
+        )
+        self._asks = asyncio.Semaphore(max(1, cfg.pool))  # asks in their model turn at once
+        self.threads = ThreadStore(self.state)  # the page thread and the memory toggle
+        self._reserved: dict[int, Box] = {}  # in-flight asks' answer blocks (page units)
         self._ws = None
         self._connected = asyncio.Event()
         self._n = self._last_n()
@@ -184,6 +201,8 @@ class Agentd:
         import websockets
 
         self._spawn(self._warm())
+        if self.claude is not None:
+            self.claude.fill()  # warm Claude Code processes before the first ask
         backoff = 2.0
         while until is None or not until.is_set():
             try:
@@ -204,6 +223,7 @@ class Agentd:
                     self._connected.set()
                     backoff = 2.0
                     log.info("joined %s", self.cfg.ws)
+                    self._spawn(self._dock_entries())
                     self._spawn(self._end_orphans())
                     async for raw in ws:
                         try:
@@ -244,7 +264,7 @@ class Agentd:
         for _ in range(2):
             if self._ws is None:
                 try:
-                    await asyncio.wait_for(self._connected.wait(), self.cfg.send_wait_s)
+                    await within(self._connected.wait(), self.cfg.send_wait_s)
                 except TimeoutError:
                     return False
             try:
@@ -258,11 +278,17 @@ class Agentd:
 
     def handle(self, msg: dict[str, Any]) -> None:
         self.model.observe(msg)
+        if msg.get("t") == "dock_query":
+            self._spawn(self._dock_entries())
+            return
         if msg.get("t") != "dock_action":
             return
         aid = msg.get("id")
         if aid == "agent_ink":
             self._ink_checked = 0.0  # the user toggled it: read the setting again next time
+            return
+        if aid in (MEMORY_ID, FORGET_ID):
+            self._spawn(self._on_memory_entry(msg))
             return
         if aid not in ASK_IDS:
             return
@@ -279,7 +305,10 @@ class Agentd:
         if last is not None and now - last < DEBOUNCE_S:
             log.info("dock_action %s %.1f s after the same tap: one ask", aid, now - last)
             return
-        key = f"{msg.get('doc') or self.model.doc}/{msg.get('page') or self.model.page}"
+        # one line per question: different selections (and the page) run side by side, the same
+        # selection asked again replaces itself (queue.py); self._asks bounds the model turns
+        page = f"{msg.get('doc') or self.model.doc}/{msg.get('page') or self.model.page}"
+        key = f"{page}|{sig}"
         ahead = self.queue.submit(key, lambda: self.answer(msg, received), sig=sig)
         log.info(
             "dock_action %s on %s (%s)",
@@ -294,6 +323,41 @@ class Agentd:
                     "One at a time: still answering the previous question.",
                 )
             )
+
+    async def _dock_entries(self) -> None:
+        """Announce agentd's own dock entries (protocol.md ``dock_entries``): memory and forget."""
+        on = self.threads.memory
+        await self.send(
+            {
+                "t": "dock_entries",
+                "owner": "agentd",
+                "entries": [
+                    {
+                        "id": MEMORY_ID,
+                        "label": "Memory: page thread" if on else "Memory: off",
+                        "badge": "on" if on else "off",
+                        "hint": "Asks on the same page follow on from each other",
+                    },
+                    {"id": FORGET_ID, "label": "Forget this page's thread"},
+                ],
+            }
+        )
+
+    async def _on_memory_entry(self, msg: dict[str, Any]) -> None:
+        if msg.get("id") == MEMORY_ID:
+            self.threads.memory = not self.threads.memory
+            on = self.threads.memory
+            note = "Memory on: asks on a page follow its thread" if on else "Memory off"
+            await self._dock_entries()
+        else:
+            doc, page = (
+                str(msg.get("doc") or self.model.doc),
+                str(msg.get("page") or self.model.page),
+            )
+            gone = self.threads.forget(doc, page)
+            note = "Forgot this page's thread" if gone else "This page had no thread"
+        log.info("dock %s: %s", msg.get("id"), note)
+        await self._glasses(note, note)
 
     def _spawn(self, coro) -> None:
         t = asyncio.ensure_future(coro)
@@ -375,20 +439,20 @@ class Agentd:
             rec.ink = await self.ink_enabled()
             if sel_box is not None:
                 # where the answer will go, and the overlay at once (before any wait for a save)
-                reserved = await self._reserve(sel_box)
+                reserved = await self._reserve(sel_box, rec.n)
                 if reserved is not None and not self.cfg.dry_run:
                     await self._status(rec, "thinking", reserved[0].rect)
                 selected = await self._selection(msg, sel_box, rec)
                 # the larger of the lasso's box and its strokes' bounds (the box can be smaller)
                 anchor = _union(sel_box, _bounds(selected)) if selected else sel_box
                 if anchor != sel_box:
-                    reserved = await self._reserve(anchor)
+                    reserved = await self._reserve(anchor, rec.n)
                     if reserved is not None and not self.cfg.dry_run:
                         await self._status(rec, "thinking", reserved[0].rect)
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
-                reserved = await self._reserve(anchor)
+                reserved = await self._reserve(anchor, rec.n)
                 if reserved is not None and not self.cfg.dry_run:
                     await self._status(rec, "thinking", reserved[0].rect)
             if not selected:
@@ -444,9 +508,17 @@ class Agentd:
                 img = self.agent_cwd / img.name  # and where Claude Code may Read it
                 img.write_bytes(png)
             rec.image, rec.n_strokes = self._rel(img), len(selected)
+            thread = self.threads.get(rec.doc or m.doc, rec.page or m.page)
+            rec.thread = len(thread)
             ask = prompt.Ask(
-                kind=kind, image=rec.image, n_strokes=len(selected), region=sel_box, title=m.title
+                kind=kind,
+                image=None if self.claude is not None else rec.image,  # attached: no Read
+                n_strokes=len(selected),
+                region=sel_box,
+                title=m.title,
+                thread=[(e.seen, e.answer) for e in thread],
             )
+            rec.image_bytes = len(png)
             rec.prompt = prompt.build_prompt(ask)
             if self.cfg.dry_run:
                 print(f"\n--- dry run: request {n} ({kind}) ---\nimage: {img}\n{rec.prompt}\n---")
@@ -467,24 +539,24 @@ class Agentd:
                     since,
                     _page_bottom(m),
                 )
-            async with self._turn:
+            # the stream sees the answer only: the reply's first line is the SEEN transcription
+            on_text = (lambda t: stream.feed(prompt.answer_so_far(t))) if stream else None
+            async with self._asks:
                 t_turn = time.monotonic()
-                reply = await self.terminal.ask(
-                    rec.prompt, self.cfg.timeout_s, on_text=stream.feed if stream else None
-                )
+                reply = await self._turn_once(rec.prompt, png, self.cfg.timeout_s, on_text)
                 left = self.cfg.timeout_s - (time.monotonic() - t_turn)
                 if reply.error and not (stream and stream.written) and left > RETRY_MIN_S:
-                    # a failed turn (e.g. "[ede_diagnostic] … stop_reason=tool_use") is retried
-                    # once, on a fresh session (terminal.py starts one after any failure)
-                    log.info("request %d: %s; retrying on a fresh session", n, reply.error[:80])
+                    # a failed turn (e.g. "[ede_diagnostic] … stop_reason=tool_use", a dead or
+                    # silent process) is retried once, on a fresh session or process
+                    log.info("request %d: %s; retrying afresh", n, reply.error[:80])
                     first = reply
-                    reply = await self.terminal.ask(
-                        rec.prompt, left, on_text=stream.feed if stream else None
-                    )
+                    reply = await self._turn_once(rec.prompt, png, left, on_text)
                     rec.retry_of = {k: v for k, v in asdict(first).items() if k != "text"}
             rec.reply = {k: v for k, v in asdict(reply).items() if k != "text"}
             rec.reply["raw"] = reply.text
-            text = prompt.clean_answer(reply.text) if reply.text and not reply.error else ""
+            seen, answer_raw = prompt.split_seen(reply.text or "")
+            rec.seen = seen
+            text = prompt.clean_answer(answer_raw) if answer_raw and not reply.error else ""
             if not text:
                 rec.error = reply.error or "empty answer"
                 rec.status_note = "Couldn't answer just now - try again"
@@ -497,10 +569,11 @@ class Agentd:
                     await stream.finish("couldn't answer just now" if dangling else "")
                 return rec
             rec.answer = text
+            self.threads.add(rec.doc or m.doc, rec.page or m.page, seen, text)
             # 6. the glasses
             await self._glasses(text, text)
             if stream is not None:
-                await stream.finish(reply.text)
+                await stream.finish(answer_raw)
                 if stream.stopped and not rec.status_note:
                     rec.status_note = "Ran out of room - the rest is on your glasses"
             elif not rec.ink:
@@ -518,10 +591,18 @@ class Agentd:
             log.exception("request %d failed", n)
             return rec
         finally:
+            self._reserved.pop(rec.n, None)  # its block is ink now, or free again
             # every request ends its overlay, answered or not (an orphan spins for 120 s)
             if rec.status_box is not None:
                 await self._status(rec, "done", rec.status_box)
             self._log(rec)
+
+    async def _turn_once(self, text: str, png: bytes, timeout_s: float, on_text) -> Reply:
+        """One model turn on the configured backend (claude_stream.py, or terminal.py)."""
+        if self.claude is not None:
+            return await self.claude.ask(text, png, timeout_s, on_text)
+        async with self._turn:
+            return await self.terminal.ask(text, timeout_s, on_text=on_text)
 
     async def _selection(self, msg: dict[str, Any], box: Box, rec: Record) -> list:
         """
@@ -548,7 +629,7 @@ class Agentd:
         return selected
 
     async def _reserve(
-        self, anchor: Box
+        self, anchor: Box, owner: int | None = None
     ) -> tuple[placement.Placement, float, handmod.Metrics] | None:
         """
         A block near ``anchor`` for an answer not yet written: sized for ``TYPICAL_CHARS``
@@ -572,7 +653,9 @@ class Agentd:
                 blocks.append(
                     placement.Block(w=w_mm * s / mm + dots_w, h=h_mm * s / mm, layout=i, scale=s)
                 )
-        occ = placement.Occupancy([s.pts for s in m.ink()], m.w, m.h, height=_ink_height(m))
+        occ = placement.Occupancy(
+            [s.pts for s in m.ink()] + self.others_blocks(owner), m.w, m.h, height=_ink_height(m)
+        )
         spot = placement.place(
             occ,
             blocks,
@@ -583,7 +666,19 @@ class Agentd:
         )
         if spot is None:
             return None
+        if owner is not None:
+            self._reserved[owner] = spot.rect  # other asks now plan around it (no await since)
         return spot, self._widths(a[0], dots_w)[spot.block.layout], met
+
+    def others_blocks(self, owner: int | None) -> list[list[list[float]]]:
+        """The other in-flight asks' reserved blocks, as filled 'strokes' for an Occupancy."""
+        m = self.model
+        return [
+            row
+            for k, r in self._reserved.items()
+            if k != owner
+            for row in placement.fill_strokes(r, m.w, m.h)
+        ]
 
     def _widths(self, left_pu: float, dots_w: float) -> list[float]:
         """
@@ -754,7 +849,11 @@ STALE_TAP_S = 10.0
 DEBOUNCE_S = 1.5
 
 #: A failed turn is retried only with at least this much of the timeout left (seconds).
-RETRY_MIN_S = 30.0
+RETRY_MIN_S = 10.0
+
+#: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
+MEMORY_ID = "agentd_memory"
+FORGET_ID = "agentd_forget"
 
 
 def _bounds(strokes) -> Box:

@@ -75,6 +75,23 @@ class Placement:
         return (x0 / self.page_w, y0 / self.page_h, x1 / self.page_w, y1 / self.page_h)
 
 
+def fill_strokes(
+    rect: Box, page_w: float, page_h: float, step: float = 8.0
+) -> list[list[list[float]]]:
+    """
+    A rectangle (page units) as horizontal 'strokes' (normalized points) close enough together to
+    mark every Occupancy cell inside it: how a block reserved for an answer still being thought
+    about counts as occupied for other answers.
+    """
+    x0, y0, x1, y1 = rect
+    rows = []
+    y = y0
+    while y <= y1:
+        rows.append([[x0 / page_w, y / page_h], [x1 / page_w, y / page_h]])
+        y += step
+    return rows
+
+
 def to_pu(box: Box, page_w: float, page_h: float) -> Box:
     return (box[0] * page_w, box[1] * page_h, box[2] * page_w, box[3] * page_h)
 
