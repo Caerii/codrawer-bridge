@@ -75,6 +75,7 @@ class Reply:
     read_start_s: float | None = None  # the model asked to Read the image
     read_end_s: float | None = None  # the image was read; the answer is being thought out
     new_session: bool = False
+    tokens_in: int | None = None  # input tokens of the turn, when the backend says
     done_s: float | None = None
     cost_usd: float | None = None
     tools: list[str] = field(default_factory=list)

@@ -217,6 +217,15 @@ class ClaudeProcess:
                 out.ok = ev.get("subtype") == "success" and not ev.get("is_error")
                 out.text = str(ev.get("result") or acc).strip()
                 out.cost_usd = ev.get("total_cost_usd")
+                u = ev.get("usage") or {}
+                out.tokens_in = sum(
+                    int(u.get(k) or 0)
+                    for k in (
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    )
+                )
                 if not out.ok:
                     out.error = f"claude: {ev.get('subtype')}: {out.text[:160]}"
                 return out

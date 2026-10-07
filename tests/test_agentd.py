@@ -638,6 +638,45 @@ REQ6_BBOX = [-505.3759765625, 1988.9564208984375, -36.85017776489258, 2081.54418
 REQ6_VIEW = [430.968017578125, 1491.717315673828, 782.3623666763306, 1561.1581420898438]
 
 
+def test_the_selection_is_rendered_large_crisp_and_with_true_widths():
+    from io import BytesIO
+
+    from PIL import Image
+
+    from codrawer_bridge.agentd import render
+    from codrawer_bridge.agentd.page import Stroke
+
+    def word(x0, y0, width_frac, n=40, h=30.0):
+        """A zigzag 'word' (page units) with xochitl widths ``width_frac`` of the page width."""
+        pts = [[(x0 + 8 * i) / W, (y0 + (h if i % 2 else 0)) / H, 0.5] for i in range(n)]
+        return Stroke(id=f"w{x0}", pts=pts, widths=[width_frac] * n)
+
+    thin, broad = word(300, 400, 0.0012), word(300, 500, 0.006)
+    box = (290 / W, 390 / H, 630 / W, 540 / H)
+    region = render.region_with_margin(box)
+    s = render.scale_for([thin, broad], region)
+    assert render.MIN_UPSCALE <= s <= render.MAX_UPSCALE  # at least twice the page's resolution
+    img = Image.open(BytesIO(render.render_region([thin, broad], [], region)))
+    assert max(img.size) <= render.MAX_SIDE
+    assert img.size[0] >= (region[2] - region[0]) * W * 2 - 1  # native x2 or more
+    grey = sum(1 for v in img.getdata() if 0 < v < 255)
+    assert grey > 100  # antialiased edges, not 1-bit
+    px = img.load()
+
+    def ink_rows(y_pu: float) -> int:
+        """How many pixel rows are dark in the column through a stroke at page height y."""
+        x = round(((300 + 8 * 5) / W - region[0]) * W * s)
+        y_mid = round((y_pu / H - region[1]) * H * s)
+        return sum(
+            1 for y in range(y_mid - 40, y_mid + 40) if 0 <= y < img.size[1] and px[x, y] < 128
+        )
+
+    assert ink_rows(400 + 15) < ink_rows(500 + 15)  # the broad pen draws broader
+    # a huge region still fits the cap
+    big = render.render_region([thin], [], (0.0, 0.0, 1.0, 1.0))
+    assert max(Image.open(BytesIO(big)).size) <= render.MAX_SIDE
+
+
 def test_a_stroke_seen_only_live_on_a_zoomed_view_is_in_the_selection_render():
     from io import BytesIO
 
