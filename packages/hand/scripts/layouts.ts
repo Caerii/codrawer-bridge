@@ -12,7 +12,10 @@
  * Output, one JSON object on stdout:
  *
  *     {"persona":"archivist","layouts":[{"width":50,"bbox":[x0,y0,x1,y1],"duration":12345,
- *       "strokes":[{"down":120,"up":410,"pts":[[x,y,p,t],…]},…]},…]}
+ *       "strokes":[{"line":0,"down":120,"up":410,"pts":[[x,y,p,t],…]},…]},…]}
+ *
+ * `pitch` (mm, optional) sets the distance between baselines for this request; `line` is each
+ * stroke's line, so the caller can check that lines do not collide.
  *
  * With `--serve` it stays running and answers one request per line ({@link serve}): starting
  * Node and compiling TypeScript costs ~1 s, which a warm worker pays once.
@@ -24,7 +27,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { persona as byId, PERSONAS } from '../src/persona'
+import { definePersona, persona as byId, PERSONAS } from '../src/persona'
 import { simulate } from '../src/simulate'
 
 interface Request {
@@ -32,14 +35,21 @@ interface Request {
   persona?: string
   seed?: number
   widths?: number[]
+  /** line pitch, mm (baseline to baseline); default: the persona's own lineSpacing x capHeight */
+  pitch?: number
 }
 
 const r3 = (v: number) => Math.round(v * 1e3) / 1e3
 
 /** One request's answer (the object described above). */
 function answer(req: Request): { persona: string; layouts: unknown[] } {
-  const p = byId(req.persona ?? 'archivist')
-  if (!p) throw new Error(`unknown persona ${req.persona}; one of ${PERSONAS.map((q) => q.id).join(', ')}`)
+  const base = byId(req.persona ?? 'archivist')
+  if (!base) throw new Error(`unknown persona ${req.persona}; one of ${PERSONAS.map((q) => q.id).join(', ')}`)
+  // a requested pitch becomes the persona's lineSpacing (in cap heights) for this layout only
+  const p =
+    req.pitch && req.pitch > 0
+      ? definePersona({ ...base, letters: { ...base.letters, lineSpacing: req.pitch / base.letters.capHeight } })
+      : base
   const layouts = (req.widths?.length ? req.widths : [80]).map((width) => {
     const res = simulate(req.text, p, { seed: req.seed ?? 1, width })
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
@@ -52,6 +62,7 @@ function answer(req: Request): { persona: string; layouts: unknown[] } {
       bbox: res.strokes.length ? [r3(x0), r3(y0), r3(x1), r3(y1)] : [0, 0, 0, 0],
       duration: Math.round(res.duration),
       strokes: res.strokes.map((s) => ({
+        line: res.words[s.word]?.line ?? 0,
         down: Math.round(s.down),
         up: Math.round(s.up),
         pts: s.pts.map(([x, y, pr, t]) => [r3(x), r3(y), r3(pr), Math.round(t)]),

@@ -50,6 +50,7 @@ those), and our own strokes (ids starting ``agentd_``; the router does not echo 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import math
@@ -225,6 +226,11 @@ class Agentd:
                     backoff = 2.0
                     log.info("joined %s", self.cfg.ws)
                     self._spawn(self._dock_entries())
+                    self._spawn(
+                        self.send(
+                            {"t": "settings", "agent": "agentd", "state": self.settings_state()}
+                        )
+                    )
                     self._spawn(self._end_orphans())
                     async for raw in ws:
                         try:
@@ -279,6 +285,9 @@ class Agentd:
 
     def handle(self, msg: dict[str, Any]) -> None:
         self.model.observe(msg)
+        if msg.get("t") == "settings" and isinstance(msg.get("set"), dict):
+            self._spawn(self._apply_settings(msg["set"]))
+            return
         if msg.get("t") == "dock_query":
             self._spawn(self._dock_entries())
             return
@@ -290,6 +299,11 @@ class Agentd:
             return
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
+            return
+        if aid in (SIZE_ID, SPACING_ID):
+            key, order = ("text_size", SIZES) if aid == SIZE_ID else ("spacing", SPACINGS)
+            now = self.setting(key)
+            self._spawn(self._apply_settings({key: order[(order.index(now) + 1) % len(order)]}))
             return
         if aid == MODEL_ID:
             self._spawn(self._on_model_entry())
@@ -344,6 +358,16 @@ class Agentd:
                     },
                     {"id": FORGET_ID, "label": "Forget this page's thread"},
                     {
+                        "id": SIZE_ID,
+                        "label": f"Text size: {self.setting('text_size')}",
+                        "badge": self.setting("text_size"),
+                    },
+                    {
+                        "id": SPACING_ID,
+                        "label": f"Spacing: {self.setting('spacing')}",
+                        "badge": self.setting("spacing"),
+                    },
+                    {
                         "id": MODEL_ID,
                         "label": f"Model: {self.speed} ({_model_name(self.model_id)})",
                         "badge": self.speed,
@@ -352,6 +376,56 @@ class Agentd:
                 ],
             }
         )
+
+    def setting(self, key: str) -> str:
+        """A user setting with a fixed set of values (SETTINGS), from settings.json."""
+        values, default = SETTINGS[key]
+        v = self.threads.setting(key, default)
+        return v if v in values else default
+
+    @property
+    def scales(self) -> list[float]:
+        """The scales placement may choose from, by the text-size setting (TEXT_SIZE)."""
+        k = TEXT_SIZE[self.setting("text_size")]
+        return [round(s * k, 3) for s in self.cfg.scales]
+
+    def effective_metrics(self, met: handmod.Metrics) -> handmod.Metrics:
+        """
+        The persona's metrics with the line pitch the spacing setting asks for (LINE_PITCH):
+        ``compact`` is 1.25 times a line's ink height (ascender top to descender bottom),
+        ``normal`` the persona's own leading, ``airy`` 1.25 times that.
+        """
+        ink = met.descent - met.ascent
+        pitch = {
+            "compact": 1.25 * ink,
+            "normal": met.pitch,
+            "airy": 1.25 * met.pitch,
+        }[self.setting("spacing")]
+        return dataclasses.replace(met, pitch=max(pitch, ink + 0.5))
+
+    def settings_state(self) -> dict[str, Any]:
+        return {
+            "text_size": self.setting("text_size"),
+            "spacing": self.setting("spacing"),
+            "memory": self.threads.memory,
+            "model": self.speed,
+        }
+
+    async def _apply_settings(self, changes: dict[str, Any]) -> None:
+        """Apply ``settings`` from the dock or another surface (protocol.md), then announce."""
+        for key, value in changes.items():
+            if key in SETTINGS and value in SETTINGS[key][0]:
+                self.threads.set_setting(key, value)
+            elif key == "memory" and isinstance(value, bool):
+                self.threads.memory = value
+            elif key == "model" and value in ("careful", "fast") and value != self.speed:
+                await self._on_model_entry()
+        state = self.settings_state()
+        log.info("settings: %s", state)
+        await self.send({"t": "settings", "agent": "agentd", "state": state})
+        await self._dock_entries()
+        note = f"Text {state['text_size']}, spacing {state['spacing']}"
+        await self._glasses(note, note)
 
     @property
     def speed(self) -> str:
@@ -672,7 +746,7 @@ class Agentd:
         """
         m = self.model
         try:
-            met = await self.hand.metrics(self.cfg.persona)
+            met = self.effective_metrics(await self.hand.metrics(self.cfg.persona))
         except handmod.HandUnavailable:
             return None
         dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
@@ -682,7 +756,7 @@ class Agentd:
         for i, w_mm in enumerate(self._widths(a[0], dots_w)):
             lines = math.ceil(TYPICAL_CHARS * met.mm_per_char / w_mm) + 1
             h_mm = -met.ascent + (lines - 1) * met.pitch + met.descent + 1.0
-            for s in self.cfg.scales:
+            for s in self.scales:
                 blocks.append(
                     placement.Block(w=w_mm * s / mm + dots_w, h=h_mm * s / mm, layout=i, scale=s)
                 )
@@ -887,6 +961,22 @@ RETRY_MIN_S = 10.0
 #: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
 MEMORY_ID = "agentd_memory"
 MODEL_ID = "agentd_model"
+SIZE_ID = "agentd_text_size"
+SPACING_ID = "agentd_spacing"
+
+#: The user's layout settings: the values each may take (in the dock's tap order) and its default.
+#: Compact spacing is the default because the user asked for answers that fit a more compact space
+#: (2026-10-07); separate_lines (hand.py) guarantees its lines never touch.
+SIZES = ("small", "medium", "large")
+SPACINGS = ("compact", "normal", "airy")
+SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
+    "text_size": (SIZES, "medium"),
+    "spacing": (SPACINGS, "compact"),
+}
+
+#: Text size presets as factors on the scales placement chooses from (Config.scales): medium is
+#: today's size (the Archivist's 5.4 mm capitals at scale 1, x-height about 3.6 mm).
+TEXT_SIZE = {"small": 0.7, "medium": 1.0, "large": 1.3}
 FORGET_ID = "agentd_forget"
 
 

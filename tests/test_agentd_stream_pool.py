@@ -181,7 +181,7 @@ def _tap(x0: float, y0: float, x1: float, y1: float) -> dict:
 
 
 class _Hand:
-    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7):
+    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None):
         from codrawer_bridge.agentd.hand import Layout
 
         return [
@@ -354,3 +354,85 @@ def test_the_model_toggle_switches_careful_and_fast(tmp_path, monkeypatch):
 
     asyncio.run(go())
     assert made == ["claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"]
+
+
+# ── text size and line spacing ───────────────────────────────────────────────────────────────
+
+
+def test_size_and_spacing_settings_cycle_persist_and_label(tmp_path):
+    from codrawer_bridge.agentd import service
+
+    async def go():
+        a, sent = _agent(tmp_path)
+        assert a.setting("text_size") == "medium" and a.setting("spacing") == "compact"
+        a.handle({"t": "dock_action", "id": service.SIZE_ID, "doc": "d", "page": "p1"})
+        a.handle({"t": "dock_action", "id": service.SPACING_ID, "doc": "d", "page": "p1"})
+        await asyncio.sleep(0.05)
+        assert a.setting("text_size") == "large" and a.setting("spacing") == "normal"
+        entries = {e["id"]: e for e in [m for m in sent if m["t"] == "dock_entries"][-1]["entries"]}
+        assert entries[service.SIZE_ID]["label"] == "Text size: large"
+        assert entries[service.SPACING_ID]["label"] == "Spacing: normal"
+        # the same from another surface: a settings message
+        a.handle({"t": "settings", "set": {"text_size": "small", "spacing": "airy", "bogus": 1}})
+        await asyncio.sleep(0.05)
+        state = [m for m in sent if m["t"] == "settings"][-1]["state"]
+        assert state["text_size"] == "small" and state["spacing"] == "airy"
+        b, _ = _agent(tmp_path)  # kept across a restart
+        assert b.setting("text_size") == "small" and b.setting("spacing") == "airy"
+        await a.claude.close()
+        await b.claude.close()
+
+    asyncio.run(go())
+
+
+def test_text_size_scales_the_block_and_compact_spacing_shrinks_it(tmp_path):
+    async def go():
+        a, _ = _agent(tmp_path)
+        box = (0.18, 0.13, 0.33, 0.18)
+        out = {}
+        for size, spacing in (
+            ("medium", "normal"),
+            ("medium", "compact"),
+            ("small", "compact"),
+            ("large", "compact"),
+        ):
+            a.threads.set_setting("text_size", size)
+            a.threads.set_setting("spacing", spacing)
+            a._reserved.clear()
+            spot, width_mm, met = await a._reserve(box)
+            out[(size, spacing)] = (spot.block.h / spot.block.scale, spot.block.scale, met.pitch)
+        await a.claude.close()
+        return out
+
+    out = asyncio.run(go())
+    assert out[("medium", "compact")][2] < out[("medium", "normal")][2]  # tighter lines
+    assert out[("medium", "compact")][0] < out[("medium", "normal")][0]  # a shorter block
+    # the chosen scale follows the preset (placement picks among the preset's scales)
+    assert out[("small", "compact")][1] <= 0.7 + 1e-9 < out[("large", "compact")][1]
+
+
+@pytest.mark.parametrize("persona", ["archivist", "sketcher", "elder", "mathematician", "teacher"])
+def test_compact_lines_never_collide(persona):
+    """Property: at the compact pitch, no line's ink comes within LINE_GAP_MM of the next's."""
+    from codrawer_bridge.agentd.hand import HandUnavailable, HandWorker, line_bands, separate_lines
+    from codrawer_bridge.agentd.stream import LINE_GAP_MM
+
+    text = "Gyp jagged quips; fly by. Quickly judge the gyroscope! Hypothesis: pygmy jaguars glow."
+
+    async def go():
+        w = HandWorker()
+        try:
+            met = await w.metrics(persona)
+        except HandUnavailable:
+            pytest.skip("packages/hand is not installed")
+        compact = 1.25 * (met.descent - met.ascent)
+        for seed in (1, 2, 3, 4):
+            lay = (await w.layouts(text, persona, (70.0,), seed=seed, pitch=compact))[0]
+            lay = separate_lines(lay, LINE_GAP_MM)
+            bands = line_bands(lay)
+            assert len(bands) >= 3
+            for n in sorted(bands)[:-1]:
+                assert bands[n + 1][0] >= bands[n][1] + LINE_GAP_MM - 1e-6, (persona, seed, n)
+        await w.close()
+
+    asyncio.run(go())

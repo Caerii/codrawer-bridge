@@ -668,6 +668,33 @@ the page as agent ink), `ask_page` (a reading of the page), `ask_selection` (a r
 strokes inside the lasso's `bbox`), `grade_page` and `grade_selection` (the same, marked up in red
 pen). All routers relay the three messages as they are.
 
+codrawer-agentd (`src/codrawer_bridge/agentd`) announces its own entries with `"owner":"agentd"`,
+on every join and on `dock_query`, and again when one of its settings changes: `agentd_memory`
+("Memory: page thread" / "Memory: off"), `agentd_forget` ("Forget this page's thread"),
+`agentd_text_size` ("Text size: small|medium|large"), `agentd_spacing` ("Spacing:
+compact|normal|airy") and `agentd_model` ("Model: careful (Sonnet)" / "Model: fast (Haiku)"); each
+has the value as its `badge`. A tap cycles the setting.
+
+### `settings` (any surface → agentd → all)
+
+agentd's user settings, so the phone or the glasses can show and change what the dock does:
+
+```json
+{"t":"settings","set":{"text_size":"large","spacing":"compact"}}
+{"t":"settings","agent":"agentd","state":{"text_size":"large","spacing":"compact","memory":true,"model":"careful"}}
+```
+
+A message with `set` asks for changes (`text_size`: `small` | `medium` | `large`, the answer's
+handwriting at 0.7, 1 or 1.3 times today's size; `spacing`: `compact` | `normal` | `airy`, the line
+pitch at 1.25 times a line's ink height, the hand's own leading, or 1.25 times that; `memory`:
+`true` | `false`; `model`: `careful` | `fast`); unknown keys and values are ignored. agentd answers
+every change, and announces on every join, with `state`, the settings in force. They are kept in
+agentd's `settings.json`. Defaults: `medium`, `compact` (the user asked for answers that fit a
+more compact space; lines are moved apart just enough when one line's descenders would come within
+0.8 mm of the next line's ascenders), memory on, `careful`. The Go and Rust routers relay only
+listed types: `settings` needs adding to their lists (as `agent_status` was) before another
+surface can reach agentd through the tablet's router.
+
 ## Compatibility notes
 
 - The server is a **router**; it does not render and should not send full canvas state.
