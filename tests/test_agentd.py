@@ -754,16 +754,39 @@ def test_an_empty_selection_is_never_sent_to_the_model(tmp_path):
     asyncio.run(go())
 
 
-def test_place_for_a_selection_at_the_bottom_edge_stays_on_the_page():
+def test_the_answer_never_starts_above_the_selections_ink_bottom():
+    sel = (200, 380, 700, 450)
+    base = [hline(200, 700, 400), hline(220, 680, 440)]
+    pages = [
+        base,  # empty below
+        base + [hline(150, 1550, y) for y in range(500, 900, 40)],  # ink just below, right free?
+        base + [hline(150, 1550, y) for y in range(300, 1400, 40)],  # rows everywhere near
+        base + [box_stroke(740, 100, 1560, 900)],  # a drawing on the right
+    ]
+    for strokes in pages:
+        occ = Occupancy(strokes, W, H, height=3 * H)
+        p = place(occ, [Block(500, 120), Block(350, 90, scale=0.65)], sel, page_bottom=3 * H)
+        assert p is not None and p.side in ("below", "right")
+        assert p.y >= 450 or (p.side == "right" and p.y == 380)  # below, or beside, tops aligned
+        assert not ink_in(strokes, p.rect, grow=24)
+    # rows below and nothing beside: the first free band further down, left-aligned
+    rows = base + [hline(240, 1550, y) for y in range(500, 1300, 40)]  # the margin stays clear
+    p = place(Occupancy(rows, W, H, height=3 * H), [Block(500, 120)], sel, page_bottom=3 * H)
+    assert p.side == "below" and p.y > 1280 and p.x == 200
+    assert placement.leader(Occupancy(rows, W, H), sel, p.rect, 60) is not None
+
+
+def test_place_for_a_selection_at_the_bottom_edge_goes_below_as_the_page_grows():
     sel = (305, 1989, 773, 2082)  # request 6, page units from the left edge
     strokes = [hline(305, 773, 2030), hline(310, 760, 2060)]
     occ = Occupancy(strokes, W, H, height=H + 600)
     blocks = [Block(700, 260, scale=1.0), Block(450, 170, scale=0.65)]
-    p = place(occ, blocks, sel, page_bottom=H)
-    assert p is not None
-    assert p.y + p.block.h <= H - 70  # inside the page and its bottom margin
-    assert p.side in ("right", "left", "above")
-    assert not ink_in(strokes, p.rect, grow=24)  # placement's clearance
+    # the page grows downward (service.py passes the bridge's limit): below, at full size
+    p = place(occ, blocks, sel, page_bottom=1.5 * H)
+    assert p is not None and p.side == "below" and p.block.scale == 1.0
+    assert p.y == 2082 + placement.BELOW_GAP and p.x == 305
+    # a page that cannot grow: never above or left of it; nothing rather than that
+    assert place(occ, blocks, sel, page_bottom=H) is None
     # nothing fits within reach: no placement (the glasses only), rather than far away
     crowd = [hline(150, 1550, y) for y in range(100, 2100, 40) if not 400 <= y <= 700]
     occ2 = Occupancy(crowd + strokes, W, H)

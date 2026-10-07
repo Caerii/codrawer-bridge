@@ -1,9 +1,10 @@
 """
 Where the answer goes: free space near what the user asked about, never across existing ink.
 
-**The rule** (ADR 009 §1, "Placement"): a reply is written beside the ink it answers, in the
-margin or below it, keeping clear of every stroke already on the page (the user's and earlier
-agent ink alike); never across ink. This module turns that into a search.
+**The rule** (ADR 009 §1, "Placement"): a reply is written under the ink it answers, keeping
+clear of every stroke already on the page (the user's and earlier agent ink alike); never across
+ink, never above it ("replies should probably be below, not above, the selected area", the user,
+2026-10-07). This module turns that into a search.
 
 **Occupancy.** The page is rasterised into square cells (``cell`` page units, 12 by default:
 about 1.3 mm on a Paper Pro, whose page is 1620 × 2160 units over 179.6 × 239.5 mm). Every
@@ -13,22 +14,22 @@ bounding-box test would not). A summed-area table answers "is this rectangle, gr
 clearance, free?" in constant time.
 
 **Candidates.** The caller offers blocks: the answer laid out at a few wrap widths and scales
-(hand.py), each a ``(w, h)`` in page units. Every block is tried at every position on a coarse
-grid inside the page's margins, and each free position gets a cost:
+(hand.py), each a ``(w, h)`` in page units, tried largest scale first (writing should be its true
+size when it can), then shortest. :func:`place` takes the first that is free, in three tiers:
 
-- the gap between the block and the anchor (the selection, or the page's ink for ``ask_page``);
-- where it sits: directly **below** the anchor first, as the user asked on 2026-10-06 ("the
-  response should be underneath the selection"); then right of it, left of it, above it. A
-  block that overlaps the anchor is never a candidate, even where the lasso's box is empty;
-- below, its left edge should meet the anchor's left edge, about one line (``below_gap``)
-  under the anchor's bottom; to the right or left, its top should meet the anchor's top;
-- a smaller scale costs a little (writing should be its true size when it can);
-- with ``prefer`` (the pending mark's spot), the distance from it, so the answer starts there.
+1. **below**: the block's top ``BELOW_GAP`` under the anchor's bottom (the selection, or the
+   page's ink for ``ask_page``), its left edge on the anchor's, or shifted sideways within that
+   band when ink is in the way (the only "left" there is);
+2. **right**, tops aligned, when ink lies just below and the whole block fits beside the anchor;
+3. the first free band **further down**, scanning past the ink in between, left-aligned again.
+   The page grows downward (to the bridge's ``max_page_y``), so there is always room below.
+   :func:`leader` then draws a short curved arrow from the selection to the block.
 
-The block never leaves the page (``page_bottom``, :func:`place`), and never sits farther than
-``max_gap`` from the anchor. The cheapest wins. Units: page units throughout (x from the left
-edge, not centred), converted to normalized coordinates only at the edges (:func:`to_pu`,
-:class:`Placement` ``norm``).
+Never above, never left of the anchor. A block that overlaps the anchor is never a candidate,
+even where the lasso's box is empty. ``prefer`` (a spot chosen already) and :func:`place_at` (the
+tablet's proposed spot) are tried as-is first, under the same rules. Units: page units throughout
+(x from the left edge, not centred), converted to normalized coordinates only at the edges
+(:func:`to_pu`, :class:`Placement` ``norm``).
 """
 
 from __future__ import annotations
@@ -164,8 +165,8 @@ class Occupancy:
         return self.count(x0 - clearance, y0 - clearance, x1 + clearance, y1 + clearance) == 0
 
 
-#: Extra cost by side (page units): a reply is looked for under the question first.
-SIDE_COST = {"below": 0.0, "right": 120.0, "left": 280.0, "above": 320.0}
+#: The gap between the anchor's right edge and a block beside it (tier 2), page units.
+RIGHT_GAP = 48.0
 
 #: The gap between the anchor's ink bottom and the first line's glyph tops (the block's top: its
 #: height starts at the hand's ascent), page units: 36 is 4 mm, about half a ruled line. It was 80
@@ -195,6 +196,11 @@ def _side(rect: Box, anchor: Box) -> tuple[str, float, float]:
     return "inside", gap, 0.0
 
 
+def _size_order(blocks: list[Block]) -> list[Block]:
+    """Largest scale first, then the shortest (widest) block: true size and few lines."""
+    return sorted(blocks, key=lambda b: ((1.0 - b.scale) * 300.0 + b.h * 0.25, -b.w))
+
+
 def place(
     occ: Occupancy,
     blocks: list[Block],
@@ -209,50 +215,72 @@ def place(
     page_top: float = 0.0,
 ) -> Placement | None:
     """
-    The cheapest free position for any of ``blocks`` (module docstring), or None when none fits.
+    The first free position for any of ``blocks``, by the tiers of the module docstring, or None
+    when none fits.
 
     ``anchor`` is in page units. ``margins`` are left, top, right, bottom in page units (the left
-    one is wide: xochitl's toolbar covers the page's left edge while it is open). The block stays
-    on the page: its bottom edge at most ``page_bottom`` (default the page's height; a page the
-    user has already extended by writing further down passes that extent) less the bottom margin.
-    Never past it, since a reply below the page's end would be off screen or would grow the page.
-    So a selection at the bottom edge gets its answer beside it (right, then left), above it, or
-    smaller, before anywhere else. With ``max_gap``, a block farther than that from the anchor
-    counts as not fitting (the caller then answers on the glasses only). ``page_top`` (page
-    units) keeps the block below the top of the screen when the user has scrolled down; the
-    caller passes the screen's bottom as ``page_bottom`` then (xochitl grows the page there).
+    one is wide: xochitl's toolbar covers the page's left edge while it is open). The block's
+    bottom edge stays above ``page_bottom`` (default the page's height) less the bottom margin:
+    the caller passes how far the page may grow (service.py, the bridge's ``max_page_y``).
+    ``page_top`` (page units) keeps the block below the top of the screen when the user has
+    scrolled down. With ``max_gap``, tier 3 looks no farther than that below the anchor.
     """
     ml, mt, mr, mb = margins
     mt += page_top
     W = occ.page_w
     bottom = (page_bottom if page_bottom is not None else occ.page_h) - mb
-    best: Placement | None = None
-    for b in blocks:
-        if b.w > W - ml - mr or b.h > bottom - mt:
-            continue
-        scale_cost = (1.0 - b.scale) * 300.0 + b.h * 0.25
-        # the ideal spot first (under the anchor, left edges aligned, one line down), then a grid
-        ideal = (min(max(anchor[0], ml), W - mr - b.w), anchor[3] + BELOW_GAP)
-        grid = (
-            (x, y) for y in _steps(mt, bottom - b.h, step) for x in _steps(ml, W - mr - b.w, step)
+    ax0, ay0, ax1, ay1 = anchor
+    order = [b for b in _size_order(blocks) if b.w <= W - ml - mr]
+
+    def fits(b: Block, x: float, y: float) -> bool:
+        if x < ml or y < mt or x + b.w > W - mr or y + b.h > bottom:
+            return False
+        return _side((x, y, x + b.w, y + b.h), anchor)[0] != "inside" and occ.free(
+            (x, y, x + b.w, y + b.h), clearance
         )
-        for x, y in [ideal, *grid]:
-            if y < mt or y + b.h > bottom or x < ml or x + b.w > W - mr:
-                continue
-            rect = (x, y, x + b.w, y + b.h)
-            side, gap, misalign = _side(rect, anchor)
-            if side == "inside" or (side == "below" and y - anchor[3] < BELOW_GAP * 0.6):
-                continue  # never over the selection; below, at least most of a line clear
-            if max_gap is not None and gap > max_gap:
-                continue
-            cost = gap + SIDE_COST[side] + (1.0 if side == "below" else 0.35) * misalign
-            cost += scale_cost
-            if prefer is not None:
-                # the spot was chosen already (by these same rules, when it was reserved): stay
-                cost = scale_cost + 3.0 * math.hypot(x - prefer[0], y - prefer[1])
-            if (best is None or cost < best.cost) and occ.free(rect, clearance):
-                best = Placement(b, x, y, side, cost, occ.page_w, occ.page_h)
-    return best
+
+    def at(b: Block, x: float, y: float, side: str) -> Placement:
+        return Placement(b, x, y, side, 0.0, occ.page_w, occ.page_h)
+
+    def band(y: float) -> Placement | None:
+        """
+        A block at height ``y``: any block left-aligned with the anchor first (a narrower one
+        beats a wider one pushed sideways), else the nearest sideways shift that fits.
+        """
+        home = max(ax0, ml)
+        for b in order:
+            if fits(b, home, y):
+                return at(b, home, y, "below")
+        for b in order:
+            xs = sorted(_steps(ml, W - mr - b.w, step), key=lambda x: abs(x - home))
+            for x in [min(home, W - mr - b.w), *xs]:
+                if fits(b, x, y):
+                    return at(b, x, y, "below")
+        return None
+
+    if prefer is not None:  # a spot chosen already, by these same rules: stay there if it holds
+        px, py = prefer
+        for b in order:
+            side = _side((px, py, px + b.w, py + b.h), anchor)[0]
+            if side in ("below", "right") and fits(b, px, py):
+                return at(b, px, py, side)
+    # 1. directly below, at the gap
+    y1 = max(ay1 + BELOW_GAP, mt)
+    if (p := band(y1)) is not None:
+        return p
+    # 2. right of the anchor, tops aligned, the whole block beside it
+    for b in order:
+        x, y = ax1 + RIGHT_GAP, max(ay0, mt)
+        if fits(b, x, y):
+            return at(b, x, y, "right")
+    # 3. the first free band further down, past the ink in between
+    reach = bottom if max_gap is None else min(bottom, ay1 + max_gap)  # the block's top, at most
+    y = y1 + step
+    while y <= reach:
+        if (p := band(y)) is not None:
+            return p
+        y += step
+    return None
 
 
 def place_at(
@@ -268,26 +296,70 @@ def place_at(
     page_top: float = 0.0,
 ) -> Placement | None:
     """
-    The first of ``blocks`` (largest scale first, then widest) whose top-left at ``at`` (page
-    units) obeys every rule :func:`place` applies: free of ink by ``clearance``, inside the margins
-    and the page, never over the anchor, within ``max_gap`` of it. None when none does: the caller
-    then lets :func:`place` choose. This is how the tablet's proposed spot (where its thinking
-    doodle already is) is honoured, so the answer starts where the user is already looking.
+    The first of ``blocks`` (in :func:`place`'s size order) whose top-left at ``at`` (page units)
+    obeys every rule :func:`place` applies: free of ink by ``clearance``, inside the margins and
+    the page, below the anchor or right of it (never over it, above it or left of it), within
+    ``max_gap`` of it. None when none does: the caller then lets :func:`place` choose. This is how
+    the tablet's proposed spot (where its thinking doodle already is) is honoured, so the answer
+    starts where the user is already looking.
     """
     ml, mt, mr, mb = margins
     mt += page_top
     bottom = (page_bottom if page_bottom is not None else occ.page_h) - mb
     x, y = at
-    for b in sorted(blocks, key=lambda b: (-b.scale, -b.w)):
+    for b in _size_order(blocks):
         rect = (x, y, x + b.w, y + b.h)
         if x < ml or y < mt or rect[2] > occ.page_w - mr or rect[3] > bottom:
             continue
         side, gap, _ = _side(rect, anchor)
-        if side == "inside" or (max_gap is not None and gap > max_gap):
+        if side not in ("below", "right") or (max_gap is not None and gap > max_gap):
             continue
         if occ.free(rect, clearance):
             return Placement(b, x, y, side, 0.0, occ.page_w, occ.page_h)
     return None
+
+
+def leader(
+    occ: Occupancy, anchor: Box, rect: Box, line_pu: float, clearance: float = 8.0
+) -> list[tuple[float, float]] | None:
+    """
+    A short curved arrow from under ``anchor`` to the block ``rect`` (page units), when the block
+    sits more than two lines (``line_pu``) below the anchor: tier 3 put it past other ink, and
+    the eye needs the way. The curve runs down the left of both, bowing out, and returns its
+    points (the shaft, then the head's two barbs as one stroke: shaft end, barb, end, barb).
+    None when no arrow is needed, or when its path would cross ink (then the gap speaks alone).
+    """
+    ax0, _, _, ay1 = anchor
+    bx0, by0 = rect[0], rect[1]
+    if by0 - ay1 <= 2 * line_pu:
+        return None
+    sx, sy = ax0 - 16, ay1 + 10
+    ex, ey = bx0 - 18, by0 + min(line_pu, rect[3] - by0) * 0.5
+    cx, cy = min(sx, ex) - 50, (sy + ey) / 2
+    pts = []
+    n = max(8, int(abs(ey - sy) / 24))
+    for k in range(n + 1):
+        t = k / n
+        pts.append(
+            (
+                (1 - t) ** 2 * sx + 2 * (1 - t) * t * cx + t * t * ex,
+                (1 - t) ** 2 * sy + 2 * (1 - t) * t * cy + t * t * ey,
+            )
+        )
+    if min(p[0] for p in pts) < 20:
+        return None
+    for px, py in pts[1:-1]:
+        if not occ.free((px, py, px, py), clearance):
+            return None
+    # the head: two barbs 16 units long, 30 degrees either side of the final tangent
+    tx, ty = ex - pts[-2][0], ey - pts[-2][1]
+    norm = math.hypot(tx, ty) or 1.0
+    tx, ty = tx / norm, ty / norm
+    barbs = []
+    for sgn in (1, -1):
+        c, s_ = math.cos(math.radians(150)), sgn * math.sin(math.radians(150))
+        barbs.append((ex + 16 * (tx * c - ty * s_), ey + 16 * (tx * s_ + ty * c)))
+    return pts + [barbs[0], (ex, ey), barbs[1]]
 
 
 def _steps(lo: float, hi: float, step: float):

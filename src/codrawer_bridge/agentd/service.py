@@ -694,7 +694,7 @@ class Agentd:
                     spot.block.scale,
                     metrics,
                     since,
-                    _page_bottom(m, self.cfg.max_page_y),
+                    _grow_bottom(m, self.cfg.max_page_y),
                 )
             # the stream sees the answer only: the reply's first line is the SEEN transcription
             on_text = (lambda t: stream.feed(prompt.answer_so_far(t))) if stream else None
@@ -815,15 +815,12 @@ class Agentd:
         occ = placement.Occupancy(
             [s.pts for s in m.ink()] + self.others_blocks(owner), m.w, m.h, height=_ink_height(m)
         )
-        rules = dict(
-            page_bottom=_page_bottom(m, self.cfg.max_page_y),
-            page_top=_page_top(m),
-            max_gap=MAX_GAP_PU,
-        )
+        # below, always: the page grows downward to the bridge's limit (placement.py, tiers)
+        rules = dict(page_bottom=_grow_bottom(m, self.cfg.max_page_y), page_top=_page_top(m))
         spot = None
         if at is not None:  # the tablet's proposal: its top-left, if a block fits there
             spot = placement.place_at(
-                occ, blocks, placement.to_pu(anchor, m.w, m.h), at[:2], **rules
+                occ, blocks, placement.to_pu(anchor, m.w, m.h), at[:2], max_gap=MAX_GAP_PU, **rules
             )
         if spot is None:
             spot = placement.place(occ, blocks, placement.to_pu(anchor, m.w, m.h), **rules)
@@ -1121,6 +1118,14 @@ def _page_bottom(m: PageModel, max_y: float | None = None) -> float:
     visible = (v.screen_h - v.dy) / v.zoom
     bottom = max(m.h, box[3] * m.h if box else m.h, visible)
     return min(bottom, max_y * m.h) if max_y else bottom
+
+
+def _grow_bottom(m: PageModel, max_y: float | None = None) -> float:
+    """
+    How far down an answer may go, page units: the bridge's limit (``max_y`` page heights), as
+    xochitl grows the page when ink arrives there; without a limit, :func:`_page_bottom`.
+    """
+    return max_y * m.h if max_y else _page_bottom(m)
 
 
 def _page_top(m: PageModel) -> float:
