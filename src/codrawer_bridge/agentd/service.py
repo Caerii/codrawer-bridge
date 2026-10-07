@@ -383,11 +383,17 @@ class Agentd:
         v = self.threads.setting(key, default)
         return v if v in values else default
 
-    @property
-    def scales(self) -> list[float]:
-        """The scales placement may choose from, by the text-size setting (TEXT_SIZE)."""
+    def scales_for(self, met: handmod.Metrics) -> list[float]:
+        """
+        The scales placement may choose from, by the text-size setting (TEXT_SIZE), leaving out
+        any that would write lowercase letters under MIN_XHEIGHT_MM (the largest always stays).
+        """
         k = TEXT_SIZE[self.setting("text_size")]
-        return [round(s * k, 3) for s in self.cfg.scales]
+        scales = [round(s * k, 3) for s in self.cfg.scales]
+        if met.x_height > 0:
+            legible = [s for s in scales if met.x_height * s >= MIN_XHEIGHT_MM]
+            scales = legible or scales[:1]
+        return scales
 
     def effective_metrics(self, met: handmod.Metrics) -> handmod.Metrics:
         """
@@ -758,13 +764,15 @@ class Agentd:
         mm = placement.MM_PER_PU
         blocks = []
         a = placement.to_pu(anchor, m.w, m.h)
-        for i, w_mm in enumerate(self._widths(a[0], dots_w)):
-            lines = math.ceil(TYPICAL_CHARS * met.mm_per_char / w_mm) + 1
+        # measures are on the page (mm): smaller writing fills the same width with more words
+        # per line, rather than becoming a narrow column
+        combos = [(p, s) for p in self._widths(a[0], dots_w) for s in self.scales_for(met)]
+        for i, (page_mm, s) in enumerate(combos):
+            lines = math.ceil(TYPICAL_CHARS * met.mm_per_char * s / page_mm) + 1
             h_mm = -met.ascent + (lines - 1) * met.pitch + met.descent + 1.0
-            for s in self.scales:
-                blocks.append(
-                    placement.Block(w=w_mm * s / mm + dots_w, h=h_mm * s / mm, layout=i, scale=s)
-                )
+            blocks.append(
+                placement.Block(w=page_mm / mm + dots_w, h=h_mm * s / mm, layout=i, scale=s)
+            )
         occ = placement.Occupancy(
             [s.pts for s in m.ink()] + self.others_blocks(owner), m.w, m.h, height=_ink_height(m)
         )
@@ -780,7 +788,8 @@ class Agentd:
             return None
         if owner is not None:
             self._reserved[owner] = spot.rect  # other asks now plan around it (no await since)
-        return spot, self._widths(a[0], dots_w)[spot.block.layout], met
+        page_mm, s = combos[spot.block.layout]
+        return spot, page_mm / s, met  # the hand's wrap width is at scale 1
 
     def others_blocks(self, owner: int | None) -> list[list[list[float]]]:
         """The other in-flight asks' reserved blocks, as filled 'strokes' for an Occupancy."""
@@ -794,7 +803,7 @@ class Agentd:
 
     def _widths(self, left_pu: float, dots_w: float) -> list[float]:
         """
-        Wrap widths to try, mm at scale 1: first the comfortable measure that fits between the
+        Measures to try, mm on the page: first the comfortable measure that fits between the
         selection's left edge and the page's right margin (capped at ``MAX_MEASURE_MM``, never
         under ``MIN_MEASURE_MM``: a selection near the right edge shifts the block left, as
         placement may), then the configured ones. Not the selection's own width: a narrow lasso
@@ -972,16 +981,21 @@ SPACING_ID = "agentd_spacing"
 #: The user's layout settings: the values each may take (in the dock's tap order) and its default.
 #: Compact spacing is the default because the user asked for answers that fit a more compact space
 #: (2026-10-07); separate_lines (hand.py) guarantees its lines never touch.
-SIZES = ("small", "medium", "large")
+SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smallest to largest
 SPACINGS = ("compact", "normal", "airy")
 SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
     "spacing": (SPACINGS, "compact"),
 }
 
-#: Text size presets as factors on the scales placement chooses from (Config.scales): medium is
-#: today's size (the Archivist's 5.4 mm capitals at scale 1, x-height about 3.6 mm).
-TEXT_SIZE = {"small": 0.7, "medium": 1.0, "large": 1.3}
+#: Text size presets as factors on the scales placement chooses from (Config.scales, 1, 0.8 and
+#: 0.65): medium is the original size (the Archivist's x-height 3.52 mm at scale 1).
+TEXT_SIZE = {"micro": 0.42, "tiny": 0.55, "small": 0.7, "medium": 1.0, "large": 1.3}
+
+#: The smallest lowercase the hand may write, mm: the tablet's pen is ~0.22 mm wide, and below
+#: ~1.5 mm an x-height's counters (a, e, o) fill in. At scale 1 the Archivist's x-height is
+#: 3.52 mm, so micro (0.42) writes only at its largest scale (1.48 mm), tiny at two (1.93, 1.55).
+MIN_XHEIGHT_MM = 1.45
 FORGET_ID = "agentd_forget"
 
 

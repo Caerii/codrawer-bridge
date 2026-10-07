@@ -436,3 +436,51 @@ def test_compact_lines_never_collide(persona):
         await w.close()
 
     asyncio.run(go())
+
+
+def test_size_presets_cycle_smallest_to_largest_and_stay_legible(tmp_path):
+    from codrawer_bridge.agentd import service
+    from codrawer_bridge.agentd.hand import Metrics
+
+    async def go():
+        a, _ = _agent(tmp_path)
+        seen = []
+        for _ in range(len(service.SIZES) + 1):
+            seen.append(a.setting("text_size"))
+            a.handle({"t": "dock_action", "id": service.SIZE_ID, "doc": "d", "page": "p1"})
+            await asyncio.sleep(0.02)
+        await a.claude.close()
+        met = Metrics(mm_per_char=4.7, pitch=11.4, ascent=-5.7, descent=1.7, x_height=3.52)
+        scales = {}
+        for size in service.SIZES:
+            a.threads.set_setting("text_size", size)
+            scales[size] = a.scales_for(met)
+        return seen, scales
+
+    seen, scales = asyncio.run(go())
+    assert seen == ["medium", "large", "micro", "tiny", "small", "medium"]  # wraps
+    for size, ss in scales.items():
+        assert ss and all(3.52 * s >= service.MIN_XHEIGHT_MM or len(ss) == 1 for s in ss), size
+    assert scales["micro"] == [0.42] and len(scales["tiny"]) == 2 and len(scales["medium"]) == 3
+
+
+def test_smaller_text_keeps_a_comfortable_width(tmp_path):
+    from codrawer_bridge.agentd import placement
+
+    async def go():
+        a, _ = _agent(tmp_path)
+        box = (0.18, 0.13, 0.33, 0.18)
+        out = {}
+        for size in ("medium", "tiny"):
+            a.threads.set_setting("text_size", size)
+            a._reserved.clear()
+            spot, width_mm, _ = await a._reserve(box)
+            out[size] = (spot.block.w, spot.block.h, spot.block.scale, width_mm)
+        await a.claude.close()
+        return out
+
+    out = asyncio.run(go())
+    (wm, hm, sm, _), (wt, ht, st, text_t) = out["medium"], out["tiny"]
+    assert st < sm and ht < hm  # smaller writing, a shorter block
+    assert wt >= 0.9 * wm  # but as wide on the page: more words a line, not a narrow column
+    assert abs(text_t * st - wt * placement.MM_PER_PU) < 1.0  # the hand wraps at that width

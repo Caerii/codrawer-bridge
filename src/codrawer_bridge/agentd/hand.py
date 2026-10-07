@@ -184,6 +184,7 @@ class Metrics:
     pitch: float
     ascent: float
     descent: float
+    x_height: float = 0.0  # lowercase height (0: not measured)
 
 
 class HandWorker:
@@ -271,6 +272,7 @@ class HandWorker:
             pitch=max(1.0, x2.bbox_mm[3] - x1.bbox_mm[3]),
             ascent=one.bbox_mm[1],
             descent=one.bbox_mm[3],
+            x_height=-(await self.layouts("xxxx", persona, (1000.0,)))[0].bbox_mm[1],
         )
         self._metrics[persona] = m
         return m

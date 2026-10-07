@@ -681,7 +681,7 @@ pen). All routers relay the three messages as they are.
 codrawer-agentd (`src/codrawer_bridge/agentd`) announces its own entries with `"owner":"agentd"`,
 on every join and on `dock_query`, and again when one of its settings changes: `agentd_memory`
 ("Memory: page thread" / "Memory: off"), `agentd_forget` ("Forget this page's thread"),
-`agentd_text_size` ("Text size: small|medium|large"), `agentd_spacing` ("Spacing:
+`agentd_text_size` ("Text size: micro|tiny|small|medium|large"), `agentd_spacing` ("Spacing:
 compact|normal|airy") and `agentd_model` ("Model: careful (Sonnet)" / "Model: fast (Haiku)"); each
 has the value as its `badge`. A tap cycles the setting.
 
@@ -694,8 +694,9 @@ agentd's user settings, so the phone or the glasses can show and change what the
 {"t":"settings","agent":"agentd","state":{"text_size":"large","spacing":"compact","memory":true,"model":"careful"}}
 ```
 
-A message with `set` asks for changes (`text_size`: `small` | `medium` | `large`, the answer's
-handwriting at 0.7, 1 or 1.3 times today's size; `spacing`: `compact` | `normal` | `airy`, the line
+A message with `set` asks for changes (`text_size`: `micro` | `tiny` | `small` | `medium` |
+`large`, the answer's handwriting at 0.42, 0.55, 0.7, 1 or 1.3 times the original size, never with
+lowercase under 1.45 mm; `spacing`: `compact` | `normal` | `airy`, the line
 pitch at 1.25 times a line's ink height, the hand's own leading, or 1.25 times that; `memory`:
 `true` | `false`; `model`: `careful` | `fast`); unknown keys and values are ignored. agentd answers
 every change, and announces on every join, with `state`, the settings in force. They are kept in
