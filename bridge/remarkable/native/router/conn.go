@@ -16,6 +16,7 @@ package router
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -104,8 +105,8 @@ func (s *session) releaseHeld(c *client) {
 }
 
 // leave unregisters c. Strokes it was drawing will never get their stroke_end, so they are ended
-// for everyone; if it was asked for a document snapshot, the next writer is asked instead. It
-// returns the remaining client count.
+// for everyone; if it was asked for a document snapshot, the next writer is asked instead; the
+// dock entries it announced are withdrawn for it. It returns the remaining client count.
 func (s *session) leave(c *client) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,6 +119,16 @@ func (s *session) leave(c *client) int {
 			st.ended = true
 			s.broadcastLocked(mustJSON(map[string]string{"t": "stroke_end", "id": id}), c)
 		}
+	}
+	// Its dock entries go with it: the tablet's bridge drops them from dock.json, so the dock
+	// never offers what nobody answers.
+	owners := make([]string, 0, len(c.dockOwners))
+	for o := range c.dockOwners {
+		owners = append(owners, o)
+	}
+	sort.Strings(owners)
+	for _, o := range owners {
+		s.broadcastLocked(mustJSON(map[string]any{"t": "dock_entries", "owner": o, "entries": []any{}}), c)
 	}
 	return len(s.clients)
 }

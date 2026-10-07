@@ -10,6 +10,8 @@ package router
 //	stroke_delete          forget the strokes the sender may delete, relay those ids
 //	key, cursor, doc       relay
 //	dock_action            relay (a tap in the tablet's injected dock, sent by the bridge)
+//	dock_entries           relay; the sender is remembered as that owner's, and when it leaves
+//	                       an empty list is sent for each owner it announced (conn.go leave)
 //	typer_note             relay (what a typed reply lost, from the bridge)
 //	typer_config           relay; the latest acknowledgement (ok:true, from the bridge) is kept
 //	                       and replayed to joiners, so every client shows the current speed
@@ -41,6 +43,9 @@ type envelope struct {
 	Doc   string   `json:"doc"`  // page: the open document's id
 	Page  string   `json:"page"` // page: the open page's id
 	OK    *bool    `json:"ok"`   // typer_config: present on the bridge's acknowledgement
+	// dock_entries: whose entries, and the list (kept raw; an empty list withdraws them)
+	Owner   string            `json:"owner"`
+	Entries []json.RawMessage `json:"entries"`
 }
 
 // strokeDelete is a stroke_delete re-encoded with only the ids the router accepted, when it
@@ -98,9 +103,14 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 		}
 		s.mu.Unlock()
 	case "key", "cursor", "doc", "typer_note",
-		"primer", "primer_request", "dock_action", "dock_entries", "dock_query", "goto", "agent_status", // as sent (ADR 010; protocol.md)
+		"primer", "primer_request", "dock_action", "dock_query", "goto", "agent_status", // as sent (ADR 010; protocol.md)
 		"mark_seen", "mark_ask", "mark_define", "mark_invoke", "mark_feedback", "mark_query", "marks": // personal marks (protocol.md)
 		s.mu.Lock()
+		s.broadcastLocked(raw, c)
+		s.mu.Unlock()
+	case "dock_entries":
+		s.mu.Lock()
+		c.ownDockLocked(m.Owner, len(m.Entries) > 0)
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()
 	case "typer_config":

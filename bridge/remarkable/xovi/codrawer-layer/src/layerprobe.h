@@ -6,8 +6,8 @@
 // xochitl reports it selected, add the lines, then select the user's layer again. While our layer
 // is selected the user's next stroke would land on it (xochitl picks a stroke's layer at pen-up:
 // `onStrokeCompleted: controller.addDrawingLine(stroke)` in the extracted QML, 00f9bf52 line 791),
-// so the chain waits for an 800 ms pen gap and gives the layer back at the next pen-down
-// (ink.cpp, kPenGapMs). There is no Line API with a layer argument on 3.29.0.149 (only SceneItems
+// so the chain waited for an 800 ms pen gap and gave the layer back at the next pen-down (since
+// this probe's answer, ink.h keeps the window to the few tens of ms the scene needs). There is no Line API with a layer argument on 3.29.0.149 (only SceneItems
 // have layer-indexed slots: cloneAddAndSelectItems(int, …), moveSelectedItems(int, …)),
 // docs/investigations/native-multiplayer-layer.md.
 //

@@ -26,6 +26,25 @@ type client struct {
 	// replaying/held are guarded by the session's mutex, not c.mu (conn.go)
 	replaying bool
 	held      [][]byte
+	// dockOwners: the owners whose dock_entries this client announced and has not withdrawn
+	// (guarded by the session's mutex, like replaying); withdrawn for it when it leaves
+	dockOwners map[string]bool
+}
+
+// ownDockLocked records that c announced (has) or withdrew owner's dock entries. Session lock
+// held.
+func (c *client) ownDockLocked(owner string, has bool) {
+	if owner == "" {
+		return
+	}
+	if !has {
+		delete(c.dockOwners, owner)
+		return
+	}
+	if c.dockOwners == nil {
+		c.dockOwners = map[string]bool{}
+	}
+	c.dockOwners[owner] = true
 }
 
 // queue never blocks: a client whose queue is full is closed (it will reconnect and replay).

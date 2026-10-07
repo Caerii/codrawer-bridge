@@ -620,3 +620,24 @@ async fn non_owner_cannot_delete_user_ink() {
     let m = read(&mut late).await;
     assert!(m["t"] == "stroke_begin" && m["id"] == "u_1", "the refused delete removed u_1 anyway: {m}");
 }
+
+/// Go: TestDockEntriesWithdrawnWhenOwnerLeaves. An agent's dock entries are relayed; when it
+/// leaves, an empty list goes out for each owner it still had, and not for one it withdrew.
+#[tokio::test]
+async fn dock_entries_withdrawn_when_owner_leaves() {
+    let srv = new_server().await;
+    let mut tablet = dial(&srv, "s1").await;
+    let mut agent = dial(&srv, "s1").await;
+    send(&mut agent, r#"{"t":"dock_entries","owner":"agentd","entries":[{"id":"agentd_memory","label":"Memory: off","badge":"off"}]}"#).await;
+    let m = read(&mut tablet).await;
+    assert!(m["t"] == "dock_entries" && m["owner"] == "agentd", "got {m}");
+    send(&mut agent, r#"{"t":"dock_entries","owner":"other","entries":[{"id":"x","label":"X"}]}"#).await;
+    read(&mut tablet).await;
+    send(&mut agent, r#"{"t":"dock_entries","owner":"other","entries":[]}"#).await;
+    read(&mut tablet).await;
+    let _ = agent.close(None).await;
+    let m = read(&mut tablet).await;
+    assert!(m["t"] == "dock_entries" && m["owner"] == "agentd", "want agentd's withdrawn: {m}");
+    assert_eq!(m["entries"].as_array().map(|a| a.len()), Some(0), "want an empty list: {m}");
+    expect_quiet(&mut tablet, Duration::from_millis(150)).await; // "other" was withdrawn already
+}

@@ -41,6 +41,7 @@ struct Injection {
     bool after = false;
     bool onSelection = false;  // when=selection: made right after a lasso, not by the 2 s tick
     bool inert = false;  // inert=1: taps are logged, never sent (a new button's first rollout)
+    QString inside;      // inside=<match>: only matches below an item matching this (inject_conf.h)
     QPointer<QQuickItem> item;
     Relay *relay = nullptr;
     int failures = 0;
@@ -55,14 +56,17 @@ QList<Injection> &injections() {
 // ---------------------------------------------------------------------------------------------
 // What the injected UI shows.
 
-// The configured or built-in entries.
-QVariantList baseEntries() {
+// /run/codrawer/dock.json, parsed (an empty object when absent or not JSON).
+QJsonObject dockJson() {
     QFile f(QString::fromLatin1(kDockJson));
-    if (f.open(QIODevice::ReadOnly)) {
-        const QJsonDocument d = QJsonDocument::fromJson(f.read(1 << 16));
-        const QJsonArray a = d.object().value(QStringLiteral("entries")).toArray();
-        if (!a.isEmpty()) return a.toVariantList();
-    }
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return QJsonDocument::fromJson(f.read(1 << 16)).object();
+}
+
+// The configured (`entries` in dock.json) or built-in entries.
+QVariantList baseEntries(const QJsonObject &dock) {
+    const QJsonArray a = dock.value(QStringLiteral("entries")).toArray();
+    if (!a.isEmpty()) return a.toVariantList();
     auto e = [](const char *id, const char *label) {
         return QVariantMap{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("label"), QString::fromLatin1(label)}};
     };
@@ -70,9 +74,45 @@ QVariantList baseEntries() {
             e("ask_page", "Ask about this page"), e("ask_selection", "Ask about selection")};
 }
 
+constexpr int kMaxEntries = 12;  // rows in the panel at most (112 px each: the screen's height)
+
+// The agents' entries (`owners` in dock.json: the bridge keeps each owner's latest dock_entries
+// there and drops an owner when it disconnects or sends an empty list; docs/protocol.md) merged
+// below the base ones, owners in name order. An agent's entry with an id already shown updates
+// that row's label, badge and hint instead of adding a second row.
+QVariantList withOwners(QVariantList base, const QJsonObject &owners) {
+    QStringList names = owners.keys();
+    names.sort();
+    for (const QString &owner : names) {
+        for (const QJsonValue &v : owners.value(owner).toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString id = o.value(QStringLiteral("id")).toString();
+            const QString label = o.value(QStringLiteral("label")).toString();
+            if (id.isEmpty() || label.isEmpty()) continue;
+            QVariantMap e{{QStringLiteral("id"), id}, {QStringLiteral("label"), label}, {QStringLiteral("owner"), owner}};
+            for (const char *k : {"badge", "hint"}) {
+                const QJsonValue x = o.value(QLatin1String(k));
+                if (!x.isUndefined() && !x.isNull()) e.insert(QLatin1String(k), x.toVariant());
+            }
+            bool merged = false;
+            for (QVariant &b : base) {
+                QVariantMap m = b.toMap();
+                if (m.value(QStringLiteral("id")).toString() != id) continue;
+                for (auto it = e.constBegin(); it != e.constEnd(); ++it) m.insert(it.key(), it.value());
+                b = m;
+                merged = true;
+                break;
+            }
+            if (!merged && base.size() < kMaxEntries) base << e;
+        }
+    }
+    return base;
+}
+
 // The entries, with a pending "Go to …?" offer first (navigate.h).
 QVariantList dockEntries() {
-    QVariantList l = baseEntries();
+    const QJsonObject dock = dockJson();
+    QVariantList l = withOwners(baseEntries(dock), dock.value(QStringLiteral("owners")).toObject());
     const QString offer = offerLabel();
     if (!offer.isEmpty()) l.prepend(QVariantMap{{QStringLiteral("id"), QStringLiteral("goto_offer")}, {QStringLiteral("label"), offer}});
     return l;
@@ -180,13 +220,42 @@ void dockAction(const QString &source, const QString &id) {
 // ---------------------------------------------------------------------------------------------
 // Creating an injection.
 
-bool createInjection(Injection &in) {
+// Whether `item` has an ancestor among `outer`.
+bool below(QQuickItem *item, const QList<QQuickItem *> &outer) {
+    for (QQuickItem *a = item ? item->parentItem() : nullptr; a; a = a->parentItem())
+        if (outer.contains(a)) return true;
+    return false;
+}
+
+// The items `in.match` finds (its `^` not yet applied), only those below an `in.inside` match
+// when that is set (it need not be visible yet: the menu may still be fading in).
+QList<QQuickItem *> targets(const Injection &in) {
     QString spec = in.match;
-    const bool up = spec.endsWith(QLatin1Char('^'));
-    if (up) spec.chop(1);
-    const QList<QQuickItem *> found = matchItems(spec);
+    if (spec.endsWith(QLatin1Char('^'))) spec.chop(1);
+    QList<QQuickItem *> found = matchItems(spec);
+    if (in.inside.isEmpty()) return found;
+    const QList<QQuickItem *> outer = matchItems(in.inside);
+    QList<QQuickItem *> out;
+    for (QQuickItem *f : found)
+        if (below(f, outer)) out << f;
+    return out;
+}
+
+// Our item is where it belongs: below an `inside` match (or, without one, visible). xochitl
+// destroys the selection menu when the lasso goes, and ours with it.
+bool inPlace(const Injection &in) {
+    if (!in.item) return false;
+    if (in.inside.isEmpty()) return in.item->isVisible();
+    const QList<QQuickItem *> outer = matchItems(in.inside);
+    return below(in.item, outer);
+}
+
+bool createInjection(Injection &in) {
+    const bool up = in.match.endsWith(QLatin1Char('^'));
+    const QList<QQuickItem *> found = targets(in);
     if (found.isEmpty()) {
-        logLine(QStringLiteral("inject %1: nothing matches %2; nothing created").arg(in.name, in.match));
+        logLine(QStringLiteral("inject %1: nothing matches %2%3; nothing created")
+                    .arg(in.name, in.match, in.inside.isEmpty() ? QString() : QStringLiteral(" inside ") + in.inside));
         return false;
     }
     if (found.size() > 1) logLine(QStringLiteral("inject %1: %2 items match %3; using the first visible").arg(in.name).arg(found.size()).arg(in.match));
@@ -275,6 +344,7 @@ void injectCommand(const QStringList &w) {
     in.after = spec.after;
     in.onSelection = spec.onSelection;
     in.inert = spec.inert;
+    in.inside = QString::fromStdString(spec.inside);
     if (!spec.complete()) {
         logLine(QStringLiteral("inject: needs name= parent= qml="));
         return;
@@ -290,13 +360,32 @@ void uninjectCommand(const QStringList &w) {
     else logLine(QStringLiteral("uninject %1: no such injection").arg(name));
 }
 
+// After every settled lasso; every step is logged (inject_conf.h selectionStep). An item of ours
+// left anywhere but in the live menu is replaced or removed, never taken as "already made": in
+// 220ba8e one left in another menu made every later lasso skip silently.
 void createSelectionInjections() {
     for (Injection &in : injections()) {
-        if (!in.onSelection || in.item) continue;
-        QString spec = in.match;
-        if (spec.endsWith(QLatin1Char('^'))) spec.chop(1);
-        if (matchItems(spec).isEmpty()) continue;
-        createInjection(in);
+        if (!in.onSelection) continue;
+        const bool have = !in.item.isNull();
+        const injectconf::SelectionStep step = injectconf::selectionStep(have, inPlace(in), !targets(in).isEmpty());
+        QString where;
+        if (have && in.item->parentItem()) where = QStringLiteral(" (ours in %1)").arg(QString::fromLatin1(in.item->parentItem()->metaObject()->className()));
+        logLine(QStringLiteral("inject %1: lasso settled: %2%3").arg(in.name, QString::fromLatin1(injectconf::stepName(step)), where));
+        switch (step) {
+        case injectconf::SelectionStep::Keep:
+        case injectconf::SelectionStep::Wait:
+            break;
+        case injectconf::SelectionStep::Drop:
+            delete in.item.data();
+            break;
+        case injectconf::SelectionStep::Recreate:
+            delete in.item.data();
+            createInjection(in);
+            break;
+        case injectconf::SelectionStep::Create:
+            createInjection(in);
+            break;
+        }
     }
 }
 
@@ -335,7 +424,8 @@ void injectTick() {
             in.nextTry = now + (in.failures >= 10 ? 60000 : in.failures >= 3 ? 10000 : 0);
         }
     }
-    const qint64 dm = stat(kDockJson, &st) == 0 ? qint64(st.st_mtime) : 0;
+    // nanoseconds and size: the bridge may rewrite the file twice within a second
+    const qint64 dm = stat(kDockJson, &st) == 0 ? qint64(st.st_mtim.tv_sec) * 1000000000 + st.st_mtim.tv_nsec + st.st_size : 0;
     if (dm != dockMtime) {
         dockMtime = dm;
         for (Injection &in : injections()) refreshInjected(in);

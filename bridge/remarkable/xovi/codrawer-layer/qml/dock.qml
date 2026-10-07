@@ -201,12 +201,41 @@ Item {
                     width: rows.width
                     height: 112
                     color: rowTap.pressed ? "black" : "white"
+                    // an agent's badge (dock_entries `badge`): its text in an outlined pill at the
+                    // row's end; true shows "on"; false, "", "off" and none show nothing
+                    readonly property string badgeText: {
+                        const b = modelData.badge;
+                        if (b === true) return "on";
+                        if (typeof b !== "string" || b === "" || b === "off") return "";
+                        return b;
+                    }
+                    Rectangle {
+                        id: pill
+                        objectName: "codrawer-dock-badge"
+                        visible: parent.badgeText !== ""
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: parent.right
+                        anchors.rightMargin: 32
+                        width: visible ? pillText.implicitWidth + 32 : 0
+                        height: 48
+                        radius: 24
+                        color: rowTap.pressed ? "white" : "black"
+                        Text {
+                            id: pillText
+                            anchors.centerIn: parent
+                            text: parent.parent.badgeText
+                            font.family: "reMarkable Sans"
+                            font.pixelSize: 24
+                            font.weight: Font.Medium
+                            color: rowTap.pressed ? "black" : "white"
+                        }
+                    }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
-                        anchors.right: parent.right
+                        anchors.right: pill.visible ? pill.left : parent.right
                         anchors.leftMargin: 32
-                        anchors.rightMargin: 32
+                        anchors.rightMargin: pill.visible ? 16 : 32
                         text: modelData.label
                         elide: Text.ElideRight
                         font.family: "reMarkable Sans"

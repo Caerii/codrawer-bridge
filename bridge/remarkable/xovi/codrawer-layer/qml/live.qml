@@ -800,7 +800,10 @@ Item {
             }
             if (Object.keys(root.doodles).length === 0 && !root.anyLiveActive()) {
                 running = false;
+                // the next window starts from nothing (a count carried over once read 22 fps)
                 root.statsSince = 0;
+                root.framesDrawn = 0;
+                root.paintMs = 0;
             }
         }
     }
