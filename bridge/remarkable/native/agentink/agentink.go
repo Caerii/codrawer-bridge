@@ -19,7 +19,10 @@
 //   - Size caps: at most MaxOpen strokes in progress, MaxPoints points per stroke (a stroke over
 //     it is dropped whole, not truncated), and points must lie on or near the page.
 //   - A rate cap: a token bucket of Burst strokes refilled at PerSecond strokes per second. A
-//     stroke over the cap is dropped and counted, so a runaway agent cannot fill a notebook.
+//     stroke over the cap is dropped and counted, so a runaway agent cannot fill a notebook. The
+//     default, 30 a second with a burst of 60, leaves room for agentd's "very fast" hand (about
+//     14.4 strokes a second, asked for by the user 2026-10-07; ADR 003, governance); the
+//     tablet's bridge.env can set AGENT_INK_RATE and AGENT_INK_BURST (RateFromEnv).
 //
 // # Timing: replies write themselves in
 //
@@ -52,8 +55,8 @@ import (
 const (
 	DefaultMaxOpen   = 32
 	DefaultMaxPoints = 4000
-	DefaultBurst     = 40
-	DefaultPerSecond = 15.0
+	DefaultBurst     = 60
+	DefaultPerSecond = 30.0
 	// DefaultARGB is agent ink's colour when a stroke names none: a clear blue, distinct from the
 	// user's black ink and close to the viewers' ai blue.
 	DefaultARGB = 0xff1f6fe0
@@ -231,6 +234,19 @@ func (f *Forwarder) Handle(raw []byte, page Page) ([]byte, string) {
 		return Encode(m.ID, page.Page, ls), ""
 	}
 	return nil, ""
+}
+
+// RateFromEnv reads the rate cap's AGENT_INK_RATE (strokes a second) and AGENT_INK_BURST
+// (strokes) values; an empty, malformed or out-of-range value (rate 1..200, burst 1..400) gives
+// 0, which means the default.
+func RateFromEnv(rate, burst string) (perSecond float64, b int) {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(rate), 64); err == nil && v >= 1 && v <= 200 {
+		perSecond = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(burst)); err == nil && v >= 1 && v <= 400 {
+		b = v
+	}
+	return perSecond, b
 }
 
 // take spends one token of the rate cap.

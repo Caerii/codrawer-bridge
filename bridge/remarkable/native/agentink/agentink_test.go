@@ -1,6 +1,7 @@
 package agentink
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,31 @@ func TestRateCap(t *testing.T) {
 	now = now.Add(1100 * time.Millisecond)
 	if l, _ := one("d"); len(l) != 1 {
 		t.Fatalf("after a refill nothing was sent")
+	}
+}
+
+// The default cap admits agentd's "very fast" hand (about 14.4 strokes a second) for a long
+// answer: 300 strokes at 15 a second, none dropped; bridge.env can change it, and bad values
+// keep the default.
+func TestDefaultRateAdmitsAVeryFastHand(t *testing.T) {
+	now := time.Unix(1_790_000_000, 0)
+	f := &Forwarder{Now: func() time.Time { return now }}
+	for i := 0; i < 300; i++ {
+		id := "s" + strconv.Itoa(i)
+		feed(f, testPage, `{"t":"stroke_begin","id":"`+id+`","layer":"ai"}`,
+			`{"t":"stroke_pts","id":"`+id+`","pts":[[0.5,0.5]]}`, `{"t":"stroke_end","id":"`+id+`"}`)
+		now = now.Add(time.Second / 15)
+	}
+	if f.DroppedRate != 0 || f.Sent != 300 {
+		t.Fatalf("sent %d, dropped %d", f.Sent, f.DroppedRate)
+	}
+	if per, b := RateFromEnv("45", "90"); per != 45 || b != 90 {
+		t.Fatalf("env: %v %v", per, b)
+	}
+	for _, bad := range [][2]string{{"", ""}, {"fast", "x"}, {"0", "0"}, {"500", "1000"}} {
+		if per, b := RateFromEnv(bad[0], bad[1]); per != 0 || b != 0 {
+			t.Fatalf("%v gave %v %v", bad, per, b)
+		}
 	}
 }
 

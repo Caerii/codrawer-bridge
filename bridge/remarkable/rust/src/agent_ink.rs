@@ -20,7 +20,10 @@
 //!   them only to its own layer, "codrawer: agent", and only on the page on screen.
 //! - Size caps: at most `max_open` strokes in progress, `max_points` points per stroke (a stroke
 //!   over it is dropped whole), points on or near the page.
-//! - A rate cap: a token bucket of `burst` strokes refilled at `per_second` strokes per second.
+//! - A rate cap: a token bucket of `burst` strokes refilled at `per_second` strokes per second
+//!   (default 30 a second, burst 60: room for agentd's "very fast" hand, about 14.4 strokes a
+//!   second; ADR 003, governance). bridge.env can set AGENT_INK_RATE and AGENT_INK_BURST
+//!   ([`rate_from_env`]).
 //!
 //! # Coordinates
 //!
@@ -39,11 +42,19 @@ use serde_json::value::RawValue;
 /// Defaults for the caps (Go: `agentink.Default*`).
 pub const DEFAULT_MAX_OPEN: usize = 32;
 pub const DEFAULT_MAX_POINTS: usize = 4000;
-pub const DEFAULT_BURST: f64 = 40.0;
+pub const DEFAULT_BURST: f64 = 60.0;
 
 /// The lowest a point may be on a page, page units: a long, scrolled page (Go: `MaxPageY`).
 pub const MAX_PAGE_Y: f64 = 40000.0;
-pub const DEFAULT_PER_SECOND: f64 = 15.0;
+pub const DEFAULT_PER_SECOND: f64 = 30.0;
+
+/// The rate cap from AGENT_INK_RATE (strokes a second, 1..200) and AGENT_INK_BURST (strokes,
+/// 1..400); an empty, malformed or out-of-range value keeps the default (Go: `RateFromEnv`).
+pub fn rate_from_env(rate: Option<&str>, burst: Option<&str>) -> (f64, f64) {
+    let per = rate.and_then(|s| s.trim().parse::<f64>().ok()).filter(|v| (1.0..=200.0).contains(v)).unwrap_or(DEFAULT_PER_SECOND);
+    let b = burst.and_then(|s| s.trim().parse::<u32>().ok()).filter(|v| (1..=400).contains(v)).map(f64::from).unwrap_or(DEFAULT_BURST);
+    (per, b)
+}
 /// Agent ink's colour when a stroke names none: a clear blue, distinct from the user's black.
 pub const DEFAULT_ARGB: u32 = 0xff1f_6fe0;
 
@@ -960,7 +971,9 @@ async fn forever(
 ) {
     use std::sync::atomic::Ordering;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let mut fwd = Forwarder::default();
+    let (per_second, burst) =
+        rate_from_env(std::env::var("AGENT_INK_RATE").ok().as_deref(), std::env::var("AGENT_INK_BURST").ok().as_deref());
+    let mut fwd = Forwarder { per_second, burst, ..Forwarder::default() };
     let mut backoff = Duration::from_secs(1);
     let mut logged = false;
     let mut msgs_open = true;
@@ -1253,6 +1266,25 @@ mod tests {
         assert_eq!(one(&mut f, "c", t0), 0);
         assert_eq!(f.dropped_rate, 1);
         assert_eq!(one(&mut f, "d", t0 + Duration::from_millis(1100)), 1);
+    }
+
+    /// Go: TestDefaultRateAdmitsAVeryFastHand.
+    #[test]
+    fn default_rate_admits_a_very_fast_hand() {
+        let mut f = Forwarder::default();
+        let t0 = Instant::now();
+        let mut sent = 0;
+        for i in 0..300u64 {
+            let b = format!(r#"{{"t":"stroke_begin","id":"s{i}","layer":"ai"}}"#);
+            let p = format!(r#"{{"t":"stroke_pts","id":"s{i}","pts":[[0.5,0.5]]}}"#);
+            let e = format!(r#"{{"t":"stroke_end","id":"s{i}"}}"#);
+            sent += feed(&mut f, &page(), t0 + Duration::from_millis(i * 1000 / 15), &[&b, &p, &e]).0.len();
+        }
+        assert_eq!((sent, f.dropped_rate), (300, 0));
+        assert_eq!(rate_from_env(Some("45"), Some("90")), (45.0, 90.0));
+        for (r, b) in [(None, None), (Some("fast"), Some("x")), (Some("0"), Some("0")), (Some("500"), Some("1000"))] {
+            assert_eq!(rate_from_env(r, b), (DEFAULT_PER_SECOND, DEFAULT_BURST));
+        }
     }
 
     #[test]
