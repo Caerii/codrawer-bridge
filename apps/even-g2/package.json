@@ -1,6 +1,6 @@
 {
   "name": "codrawer-even-g2",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Even Realities G2 view of a codrawer-bridge session (Even Hub web app)",
   "type": "module",
