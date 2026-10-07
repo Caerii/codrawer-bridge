@@ -330,6 +330,37 @@ def test_a_second_ask_after_the_debounce_replaces_the_first(tmp_path, monkeypatc
     asyncio.run(go())
 
 
+def test_images_go_to_the_agent_cwd(tmp_path):
+    from codrawer_bridge.agentd.service import Agentd, Config
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go():
+        cwd = tmp_path / "agent-cwd"
+        a = Agentd(
+            Config(ws="ws://x", term_cwd=str(tmp_path / "repo"), agent_cwd=str(cwd), ink="off")
+        )
+        a.hand = _FakeHand()
+        prompts: list[str] = []
+
+        async def send(msg):
+            return True
+
+        async def ask(text, timeout_s=90.0, on_text=None):
+            prompts.append(text)
+            return Reply(text="ok.", ok=True)
+
+        a.send = send  # type: ignore[method-assign]
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
+        a.handle(page_msg([word]))
+        rec = await a.answer({**TAP, "ts": _now_ms()})
+        assert a.terminal.cwd == str(cwd.resolve())
+        assert (cwd / rec.image).exists() and f"`{rec.image}`" in prompts[0]
+        assert rec.image == f"req-{rec.n}.png"  # relative to Claude Code's working directory
+
+    asyncio.run(go())
+
+
 def test_a_failed_turn_is_retried_once(tmp_path):
     from codrawer_bridge.agentd.terminal import Reply
 

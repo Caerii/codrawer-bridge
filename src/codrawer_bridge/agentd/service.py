@@ -79,7 +79,8 @@ class Config:
     token: str = ""
     term_url: str = "http://127.0.0.1:3456"
     term_token: str = "sig-glasses"
-    term_cwd: str = ""
+    term_cwd: str = ""  # the repository: the state directory (logs, images) lives under it
+    agent_cwd: str = ""  # Claude Code's working directory (default term_cwd); empty is faster
     state_dir: str = ""
     persona: str = "archivist"
     color: str = "#3a6ea5"
@@ -145,12 +146,18 @@ class Agentd:
             else self.term_cwd / ".codrawer" / "agentd"
         )
         self.state.mkdir(parents=True, exist_ok=True)
+        # Claude Code's working directory, where the images it Reads go. An empty directory
+        # outside any repository loads no project context into every turn (CLAUDE.md is read
+        # from the working directory and its parents): measured 2026-10-06 on Haiku with
+        # thinking off, a turn took ~23 s there against ~27 s in the repository.
+        self.agent_cwd = Path(cfg.agent_cwd).resolve() if cfg.agent_cwd else self.term_cwd
+        self.agent_cwd.mkdir(parents=True, exist_ok=True)
         self.model = PageModel()
         self.queue = PageQueue(on_error=lambda e: log.exception("request failed", exc_info=e))
         self.terminal = Terminal(
             cfg.term_url,
             cfg.term_token,
-            str(self.term_cwd),
+            str(self.agent_cwd),
             # one session per even-terminal: a Haiku terminal must not resume the Opus session
             self.state / f"state-{_slug(cfg.term_url)}.json",
         )
@@ -186,9 +193,10 @@ class Agentd:
                     open_timeout=self.cfg.open_timeout_s,
                     # a router restart (the tablet's bridge hosts it) leaves a half-open socket;
                     # 2026-10-06 the old 20 s / 40 s keepalive took 54 s to notice, and the
-                    # taps made meanwhile reached nobody
-                    ping_interval=5,
-                    ping_timeout=10,
+                    # taps made meanwhile reached nobody; 5 s / 10 s dropped a slow-to-answer
+                    # tablet Wi-Fi twice in 15 minutes
+                    ping_interval=10,
+                    ping_timeout=20,
                     max_size=2**25,
                 ) as ws:
                     self._ws = ws
@@ -326,7 +334,7 @@ class Agentd:
 
     def _rel(self, path: Path) -> str:
         try:
-            return path.relative_to(self.term_cwd).as_posix()
+            return path.relative_to(self.agent_cwd).as_posix()
         except ValueError:
             return path.as_posix()
 
@@ -431,7 +439,10 @@ class Agentd:
                 rec.region = [round(v, 4) for v in region]
             else:
                 png = render.render_page(selected, W, H)
-            img.write_bytes(png)
+            img.write_bytes(png)  # kept with the log
+            if self.agent_cwd != self.term_cwd:
+                img = self.agent_cwd / img.name  # and where Claude Code may Read it
+                img.write_bytes(png)
             rec.image, rec.n_strokes = self._rel(img), len(selected)
             ask = prompt.Ask(
                 kind=kind, image=rec.image, n_strokes=len(selected), region=sel_box, title=m.title

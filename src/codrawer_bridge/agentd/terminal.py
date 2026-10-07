@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -105,6 +106,7 @@ class Terminal:
         self._last_id = 0  # the last event id this client has read in its session
         self._open_turn = False  # the last turn was accepted before its `result` arrived
         self._tainted = False  # the last turn timed out, was interrupted or failed: start afresh
+        self._used: set[str] = {self.session_id} if self.session_id else set()  # sessions we had
         self.max_turns = max_turns
         self._turns = self._load_turns()
 
@@ -156,6 +158,42 @@ class Terminal:
         )
         data = r.json() if r.status_code == 200 else {}
         return list(data.get("messages") or []), str(data.get("state") or "")
+
+    async def _new_session_id(
+        self, c: httpx.AsyncClient, since: float, wait_s: float = 20.0
+    ) -> str:
+        """
+        The session our prompt just created, when even-terminal did not say: the newest listed
+        session in our working directory, created after ``since`` (Unix s, less 2 s of clock
+        slack), that this client has not used before. "" if none appears within ``wait_s``.
+        """
+        from datetime import datetime
+
+        want = os.path.normcase(os.path.abspath(self.cwd))
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            r = await c.get(
+                f"{self.url}/api/sessions",
+                params={"provider": self.provider},
+                headers=self._headers(),
+            )
+            best: tuple[float, str] | None = None
+            for s in (r.json().get("sessions") if r.status_code == 200 else None) or []:
+                try:
+                    ts = datetime.fromisoformat(
+                        str(s["timestamp"]).replace("Z", "+00:00")
+                    ).timestamp()
+                except (KeyError, ValueError):
+                    continue
+                same_dir = os.path.normcase(os.path.abspath(str(s.get("cwd") or ""))) == want
+                sid = str(s.get("id") or "")
+                if same_dir and sid and sid not in self._used and ts >= since - 2:
+                    if best is None or ts > best[0]:
+                        best = (ts, sid)
+            if best is not None:
+                return best[1]
+            await asyncio.sleep(0.5)
+        return ""
 
     async def _interrupt(self) -> None:
         """Stop the session's running turn (best effort)."""
@@ -217,11 +255,17 @@ class Terminal:
                     if code >= 300:  # the session is gone: start a new one
                         self.session_id, after = "", 0
                 if not self.session_id:
+                    posted_at = time.time()
                     code, data = await self._post(c, "/api/prompt", {"text": text, "cwd": self.cwd})
+                    if code < 300 and isinstance(data, dict) and not data.get("sessionId"):
+                        # even-terminal answers 202 before a slow new session has its id (seen
+                        # 2026-10-06: the turn ran, the reply said sessionId ""); find it
+                        data["sessionId"] = await self._new_session_id(c, posted_at)
                     if code >= 300 or not isinstance(data, dict) or not data.get("sessionId"):
                         out.error = f"prompt failed ({code}): {str(data)[:120]}"
                         return out
                     self.session_id, self._turns = str(data["sessionId"]), 0
+                    self._used.add(self.session_id)
                     out.new_session = True
                 out.posted_s = round(time.monotonic() - t0, 3)
                 self._turns += 1
