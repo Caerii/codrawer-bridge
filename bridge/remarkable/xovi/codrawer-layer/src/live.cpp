@@ -4,6 +4,7 @@
 #include "log.h"
 #include "paths.h"
 #include "qtmeta.h"
+#include "spot.h"
 #include "toolfollow.h"
 
 #include <QtCore/QCoreApplication>
@@ -29,7 +30,6 @@ namespace {
 constexpr const char *kLiveQml = "/home/root/xovi/exthome/codrawer-layer/live.qml";
 constexpr int kRemoveAfterMs = 250;   // after the commit: the native line is on screen by then
 constexpr int kForgetAfterMs = 15000; // a stroke whose commit never reports goes anyway
-constexpr double kLineGap = 36;       // page units below the selected ink where its answer begins (agentd's BELOW_GAP)
 
 qint64 &lastAgentStatusAt() {
     static qint64 t = 0;
@@ -236,19 +236,22 @@ void liveOp(const QJsonObject &o) {
     }
 }
 
-void liveLocalThinking(const QRectF &selection) {
-    QQuickItem *item = overlay();
+QRectF liveProposedSpot(const QRectF &ink) {
     QQuickItem *v = visibleView();
     const QVariant tv = viewTransform(v);
-    if (!item || !tv.isValid()) return;
-    QRectF spot;  // page units
-    if (selection.isValid() && !selection.isEmpty()) {
-        // where agentd puts the answer: the ink's left edge, 36 page units below its bottom
-        spot = QRectF(selection.left(), selection.bottom() + kLineGap, std::max(selection.width(), 600.0), 200);
-    } else {
-        // the whole page was asked about: a third of the way down the screen, centred
-        spot = tv.value<QTransform>().inverted().mapRect(QRectF(v->width() / 2 - 300, v->height() / 3, 600, 200));
+    if (ink.isValid() && !ink.isEmpty()) {
+        const spot::Rect r = spot::answerSpot({ink.left(), ink.top(), ink.right(), ink.bottom()});
+        return QRectF(QPointF(r.x0, r.y0), QPointF(r.x1, r.y1));
     }
+    if (!tv.isValid()) return QRectF();
+    // the whole page was asked about: a third of the way down the screen, centred
+    return tv.value<QTransform>().inverted().mapRect(QRectF(v->width() / 2 - 300, v->height() / 3, 600, 200));
+}
+
+void liveLocalThinking(const QRectF &spot) {
+    if (!spot.isValid()) return;
+    QQuickItem *item = overlay();
+    if (!item) return;
     invoke(item, "thinkPending", {spot.x(), spot.y(), spot.width(), spot.height(), QStringLiteral("pen")});
 }
 

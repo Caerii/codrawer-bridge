@@ -224,7 +224,7 @@ Fields: `id` the entry's id (`status` is answered on the tablet and never sent; 
 x centred) and `items`, the number of selected items. Clients resolve the selected strokes from
 their `page` snapshot (strokes with points inside `bbox` after the conversion `x = (x_rm + w/2)/w`).
 It may also carry `view_bbox`, the same rectangle in screen pixels (1620 × 2160), plus
-`contains_stroke`, `contains_image` and `selected_ms_ago`. The two boxes give xochitl's zoom and
+`contains_stroke`, `contains_image` and `selected_ms_ago`; and, from the extension after fd891d9, `spot` (the answer block the tablet proposes, page units `[x0,y0,x1,y1]`: the ink's left edge, 36 below its bottom; codrawer-layer `src/spot.h`) and `ink` (the selected ink's bounds, when known). agentd should write at `spot` unless it collides or does not fit. The two boxes give xochitl's zoom and
 scroll, which clients need for strokes that arrived only live: the bridge's pen strokes are
 normalized to the screen, not the page, so on a zoomed or scrolled view they must be mapped
 (`page = (screen − offset) / zoom`; `src/codrawer_bridge/agentd/page.py`, `View`) before they
