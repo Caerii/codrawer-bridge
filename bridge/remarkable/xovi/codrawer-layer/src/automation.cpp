@@ -83,7 +83,7 @@ void autoRequest(const QJsonObject &req, std::function<void(QJsonObject)> reply)
         return;
     }
     if (autoInputRequest(cmd, req, answer)) return;
-    fail(QStringLiteral("unknown command (state, find, wait_for, resume, grab, tap, long_press, swipe, tap_item, tool, open, goto, goto_doc, folder, text_insert, text_read)"));
+    fail(QStringLiteral("unknown command (state, find, wait_for, resume, grab, hit, tap, long_press, swipe, tap_item, tool, open, goto, goto_doc, folder, text_insert, text_read)"));
 }
 
 // Serves one client (either listener) until it closes or sends a line over 64 KiB.

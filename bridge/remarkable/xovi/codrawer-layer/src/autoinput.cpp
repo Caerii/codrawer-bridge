@@ -138,6 +138,14 @@ bool autoInputRequest(const QString &cmd, const QJsonObject &req, std::function<
     auto pt = [&req](const char *kx, const char *ky) { return QPointF(req.value(QLatin1String(kx)).toDouble(), req.value(QLatin1String(ky)).toDouble()); };
     if (cmd == QLatin1String("grab")) {
         grab(req, answer);
+    } else if (cmd == QLatin1String("hit")) {
+        // read-only: the chain of items under a point, outermost first (what a pen or finger there
+        // meets); the pen guard check after an agent answer (scripts/dev/pentest.py)
+        QQuickWindow *w = mainWindow();
+        if (!w) return fail(QStringLiteral("no window")), true;
+        QJsonArray names;
+        for (const std::string &n : namesAt(w, pt("x", "y"))) names << QString::fromStdString(n);
+        answer(QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("items"), names}});
     } else if (cmd == QLatin1String("tap")) {
         autoGesture(pt("x", "y"), pt("x", "y"), 80, answer);
     } else if (cmd == QLatin1String("long_press")) {

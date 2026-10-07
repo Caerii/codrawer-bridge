@@ -26,6 +26,7 @@ struct ToolFollow {
     Relay *relay = nullptr;  // one per handler followed; deleted (disconnecting) on loss
     bool penDown = false;  // the write-back guard: between gestureStarted and gestureEnded
     qint64 penDownSince = 0;
+    qint64 penUpAt = 0;  // the last gestureEnded (nowMs), 0 before any
 };
 
 ToolFollow &toolFollow() {
@@ -117,6 +118,7 @@ void followPen(QObject *pen, QQuickItem *view) {
     });
     tf.relay->on(pen, Relay::signalNamed(pen, "gestureEnded"), [](void **) {
         toolFollow().penDown = false;
+        toolFollow().penUpAt = nowMs();
         for (auto &l : penListeners()) l(false);
     });
     tf.relay->on(pen, Relay::signalNamed(pen, "destroyed"), [](void **) {
@@ -175,5 +177,10 @@ bool userTouching() {
 }
 
 QByteArray toolLine() { return toolFollow().last; }
+
+qint64 msSincePenUp() {
+    const qint64 up = toolFollow().penUpAt;
+    return up == 0 ? (1LL << 40) : nowMs() - up;
+}
 
 }  // namespace cdl

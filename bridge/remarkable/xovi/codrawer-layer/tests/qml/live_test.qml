@@ -27,6 +27,7 @@ Item {
     property var live: null
     property var answer: []
     property int framesAtPause: -1
+    property int idleCount: 0
 
     function find(item, name) {
         if (item.objectName === name) return item;
@@ -47,18 +48,16 @@ Item {
         return pts;
     }
 
-    Component {
-        id: liveComponent
-        Loader { anchors.fill: parent; source: Qt.resolvedUrl("../../qml/live.qml") }
-    }
-    property var loader: null
+    // created straight into `stage` (the view), unsized, as the extension parents it into the
+    // DocumentView without resizing it
+    property var liveComponent: Qt.createComponent(Qt.resolvedUrl("../../qml/live.qml"))
 
     function startStyle() {
-        if (loader) loader.destroy();
-        loader = liveComponent.createObject(stage);
-        live = loader.item;
+        if (live) live.destroy();
+        live = liveComponent.createObject(stage);
         if (!live) return;
         live.note.connect(function(t) { top.notes.push(t); });
+        live.idle.connect(function() { top.idleCount += 1; });
         tick = 0;
         // the selection: a 200 x 160 box at (500, 600) view px
         live.thinkStart(500, 600, 200, 160, styles[styleIndex]);
@@ -96,17 +95,30 @@ Item {
             }
             if (t === 32) L.liveAdd("a1", top.answer.slice(15, 40), 4, "#1f6fe0");
             if (t === 33) L.liveEnd("a1");
+            if (t === 25 || t === 35) {
+                // the pen guard while active: nothing takes input, the root covers nothing, and
+                // the canvas covers only what is drawn, never the whole page
+                const c = top.find(L, "codrawer-live-canvas");
+                top.check(!L.enabled && !c.enabled, style + ": the overlay takes no input");
+                top.check(L.width === 0 && L.height === 0, style + ": the root covers nothing");
+                top.check(c.visible && c.width > 0 && c.width < 800 && c.height < 800, style + ": the canvas covers only the drawing (" + c.width + "x" + c.height + ")");
+                top.check(!(c.x <= 1500 && 1500 < c.x + c.width && c.y <= 2000 && 2000 < c.y + c.height), style + ": the far page is uncovered");
+            }
             if (t === 52) {
                 top.check(L.think === null, style + ": thinking ended after the hand-off");
                 const s = L.strokes["a1"];
                 top.check(s && s.idx === s.pts.length - 1, style + ": the stroke played to its end");
                 L.liveRemove("a1");
                 top.check(L.strokes["a1"] === undefined, style + ": removed after the commit");
+                // idle: everything hidden, and the extension told (it destroys the overlay)
+                const c = top.find(L, "codrawer-live-canvas");
+                top.check(top.idleCount === top.styleIndex + 1, style + ": idle signalled once");
+                top.check(!c.visible && c.width === 0, style + ": idle leaves nothing over the page");
             }
             if (top.captureDir !== "" && t <= 55) {
-                const canvas = top.find(L, "codrawer-live-canvas");
+                // the whole view, as the overlay now spans only what it draws
                 const path = top.captureDir + "/" + style + "-" + ("00" + t).slice(-3) + ".png";
-                canvas.grabToImage(function(r) { r.saveToFile(path); });
+                stage.grabToImage(function(r) { r.saveToFile(path); });
             }
             if (t === 58) {
                 top.styleIndex += 1;
@@ -117,9 +129,9 @@ Item {
     }
 
     function finish() {
-        const mode = live && live.penRegion ? "native" : "fallback";
+        const mode = live && live.animRegion ? "native" : "fallback";
         check(notes.some(function(n) { return n.indexOf("hand-off") >= 0; }), "notes report the hand-off");
-        if (failures.length) console.log("live_test: FAIL " + mode + ": " + failures.join("; "));
+        if (failures.length) console.log("live_test: FAIL " + mode + ": " + failures.join("; ") + " NOTES " + notes.slice(0, 12).join(" / "));
         else console.log("live_test: PASS (" + mode + ") notes: " + notes.length);
         Qt.quit();
     }

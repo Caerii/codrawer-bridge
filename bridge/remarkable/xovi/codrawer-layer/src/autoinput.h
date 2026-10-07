@@ -19,6 +19,7 @@
 // # Commands (each answers one JSON object)
 //
 //   grab x y w h               grab.h
+//   hit x y                    read-only: the items under a point (objectName, class), outermost first
 //   tap x y                    press, 80 ms, release
 //   long_press x y [ms]        ms clamped to 300..5000 (default 800)
 //   swipe x0 y0 x1 y1 [ms]     ms clamped to 50..5000 (default 300)

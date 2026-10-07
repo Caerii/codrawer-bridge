@@ -14,6 +14,7 @@
 #include <QtCore/QTimer>
 #include <QtGui/QTransform>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -45,6 +46,10 @@ QList<InkJob> &inkQueue() {
     return q;
 }
 bool inkBusy = false;
+bool pumpScheduled = false;
+qint64 lastCommitAt = 0;
+constexpr qint64 kPenGapMs = 800;     // the user's pen up at least this long before a commit
+constexpr qint64 kCommitGapMs = 1500; // between the starts of two commits
 void pumpInk();
 
 void finishCommit(const CommitPtr &s, const QString &result) {
@@ -135,6 +140,7 @@ void drawLines(const CommitPtr &s) {
     waitFor(
         [s, hasItemsBounds, drawnAt] {
             if (!stillOnPage(s)) return true;
+            if (userTouching()) return true;  // the user writes again: give their layer back now
             if (nowMs() - drawnAt < 60) return false;  // let the scene job run at least once
             return hasItemsBounds && s->c->property("itemsBoundingRect") != s->boundsBefore;
         },
@@ -233,11 +239,23 @@ void startCommit(InkJob job) {
 // The queue: one commit at a time, merged where possible, never under the user's hand.
 void pumpInk() {
     if (inkBusy || inkQueue().isEmpty()) return;
-    if (userTouching()) {
-        // the write-back guard: commit after the pen lifts, never under it
-        QTimer::singleShot(50, QCoreApplication::instance(), [] { pumpInk(); });
+    // The write-back guard: commit only in a pause of the user's writing (no pen down, and at least
+    // kPenGapMs since it lifted: a commit selects our layer for a few hundred ms, and a user stroke
+    // ending meanwhile would land on it), and at most every kCommitGapMs, so a streaming answer is
+    // committed in batches (the live overlay shows it meanwhile, live.h).
+    const qint64 wait = std::max<qint64>({userTouching() ? kPenGapMs : 0, kPenGapMs - msSincePenUp(),
+                                          kCommitGapMs - (nowMs() - lastCommitAt)});
+    if (wait > 0) {
+        if (!pumpScheduled) {
+            pumpScheduled = true;
+            QTimer::singleShot(int(std::min<qint64>(wait, 200)), QCoreApplication::instance(), [] {
+                pumpScheduled = false;
+                pumpInk();
+            });
+        }
         return;
     }
+    lastCommitAt = nowMs();
     inkBusy = true;
     InkJob job = inkQueue().takeFirst();
     // Merge queued jobs for the same page and layer (agent ink arrives one stroke per message).

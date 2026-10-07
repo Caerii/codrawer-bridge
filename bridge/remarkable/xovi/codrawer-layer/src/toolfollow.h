@@ -87,6 +87,10 @@ QString visiblePageId();
 // cannot block agent ink for good.
 bool userTouching();
 
+// Milliseconds since the user's pen or finger last left the page (very large before the first
+// time). ink.h commits only in a pen-up gap of at least 800 ms.
+qint64 msSincePenUp();
+
 // The last line written to /run/codrawer/tool (`pen 2`, `eraser 4`, `none`, …); empty before the
 // first tick.
 QByteArray toolLine();

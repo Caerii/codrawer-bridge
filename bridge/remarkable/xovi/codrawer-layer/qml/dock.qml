@@ -40,9 +40,11 @@
 // moved into the window's overlay, outside the item tree, where none of xochitl's e-paper screen
 // mode regions (`xofm.libs.epaper` ScreenModeItem: Content for the page, Overlay for UI drawn on
 // it) applies to it. The panel therefore marks itself as an Overlay region like xochitl's own
-// on-canvas UI, and blocks the pen under it (`PenInputBlocker`, with the toolbar's pen-input
-// surface manager). Both are created in tries: without them the panel still works, only the
-// e-paper hint and the pen block are missing.
+// on-canvas UI (created in a try: without it the panel still works). It does not touch the pen's
+// input: a PenInputBlocker of ours (xofm.libs.peninput) went with the 2026-10-07 incident in which
+// the user's pen stopped writing (the cause was live.qml covering the page; a blocker whose reach
+// is not known is not worth that risk). While closed, nothing of the panel is visible or enabled;
+// tests/qml/dock_test.qml checks it.
 //
 // The status reply is the panel's last row. A tap outside the open panel closes it (and is used up
 // by that, as a menu's outside tap is); a tap on the button closes it too; an action closes it,
@@ -114,29 +116,6 @@ Item {
         tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
                   'Epaper.ScreenModeItem { objectName: "codrawer-dock-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
                   panel, "codrawer-dock-screenmode");
-        attachPenBlocker();
-    }
-    onAnchorItemChanged: attachPenBlocker()
-
-    // The pen blocker needs the toolbar's pen-input surface manager, reached through the anchor
-    // item (a ToolLoader: toolbar.penInput.surfaceManager). Made once, when that is known.
-    property var penBlocker: null
-    function attachPenBlocker() {
-        if (penBlocker) return;
-        const t = root.anchorItem ? root.anchorItem.toolbar : null;
-        const mgr = t && t.penInput ? t.penInput.surfaceManager : null;
-        if (!mgr) return;
-        const blocker = tryCreate('import QtQuick\nimport xofm.libs.peninput\nPenInputBlocker { objectName: "codrawer-dock-penblock"; anchors.fill: parent }',
-                                  panel, "codrawer-dock-penblock");
-        if (!blocker) return;
-        // Assigned once, in a try: a JS assignment of the wrong type throws (caught here), where a
-        // binding would print a warning naming this file (the XOVI_NO_INJECT gate).
-        try {
-            blocker.manager = mgr;
-            penBlocker = blocker;
-        } catch (e) {
-            blocker.destroy();
-        }
     }
 
     // Fallback face, only without the native button: the same black cell, no outline.
@@ -187,6 +166,7 @@ Item {
     // While open: a tap anywhere outside the panel and the button closes it.
     MouseArea {
         id: outside
+        objectName: "codrawer-dock-outside"
         z: -1
         visible: root.open
         enabled: root.open
@@ -201,6 +181,7 @@ Item {
         objectName: "codrawer-dock-panel"
         z: 3
         visible: root.open
+        enabled: root.open
         x: root.width
         y: 0
         width: 520

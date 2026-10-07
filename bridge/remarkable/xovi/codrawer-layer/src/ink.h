@@ -41,8 +41,12 @@
 //   turned the page, the chain stops and, if it can, puts the user's layer back.
 // - The only scene changes are `addLayer`, `setLayerName` on the layer this extension created,
 //   `setCurrentLayer`, and `addDrawingLine` into that layer. A page with 32 layers gets no more.
-// - The write-back guard: nothing is committed while the user's pen or finger is on the page
-//   (toolfollow.h, `userTouching`); the queue waits, re-checking every 50 ms.
+// - The write-back guard: a commit selects our layer for a few hundred ms, and a user stroke ending
+//   meanwhile would land on it (xochitl has no meta-call that adds a line to a layer other than the
+//   current one). So commits start only in a pause of the user's writing: no pen or finger down
+//   (toolfollow.h, `userTouching`) and at least 800 ms since it lifted; and at most every 1.5 s, so
+//   a streaming answer is committed in batches while the live overlay shows it (live.h). If the
+//   pen comes down during a commit, the chain stops waiting and gives the user's layer back.
 // - Jobs run one at a time. Jobs queued meanwhile for the same page and layer are merged into one
 //   commit (up to kMaxBatch strokes), so a burst of agent strokes costs one select/restore, not
 //   one per stroke. At most kMaxQueue jobs wait; beyond that a job is refused with `err busy`.
