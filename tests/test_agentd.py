@@ -799,7 +799,7 @@ class _FakeHand:
     def __init__(self):
         self.calls: list[str] = []
 
-    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7):
+    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None):
         self.calls.append(text)
         lines = 1 + len(text) // 40
         pts = [[0.0, 0.0, 0.5, 0], [30.0, (lines - 1) * 10.0, 0.5, 100]]
