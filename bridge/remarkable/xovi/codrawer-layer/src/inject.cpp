@@ -5,6 +5,7 @@
 #include "cmdline_qt.h"
 #include "inject_conf.h"
 #include "inksock.h"
+#include "live.h"
 #include "log.h"
 #include "navigate.h"
 #include "paths.h"
@@ -19,6 +20,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
+#include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
@@ -135,11 +137,39 @@ void dockAction(const QString &source, const QString &id) {
             o.insert(QStringLiteral("selected_ms_ago"), double(nowMs() - s.atMs));
         }
     }
+    const bool ask = id == QLatin1String("ask_page") || id == QLatin1String("ask_selection");
+    if (ask) {
+        // A second tap on the same question within 2 s is the same question: one action is sent.
+        static QString lastKey;
+        static qint64 lastAt = 0;
+        const QString key = id + QLatin1Char(' ') + page + QLatin1Char(' ') +
+                            QString::fromUtf8(QJsonDocument(o.value(QStringLiteral("bbox")).toArray()).toJson(QJsonDocument::Compact));
+        if (key == lastKey && nowMs() - lastAt < 2000) {
+            logLine(QStringLiteral("action: %1 again within 2 s; the first one stands, not sent").arg(id));
+            return;
+        }
+        lastKey = key;
+        lastAt = nowMs();
+    }
     const QByteArray line = QJsonDocument(o).toJson(QJsonDocument::Compact);
     const bool sent = sendToBridge(line);
     logLine(QStringLiteral("action: %1 %2").arg(sent ? QStringLiteral("sent") : QStringLiteral("dropped (no bridge)"), QString::fromUtf8(line)));
     for (Injection &in : injections()) {
         if (in.item) in.item->setProperty("status", sent ? QStringLiteral("sent: %1").arg(id) : QStringLiteral("bridge not connected"));
+    }
+    if (ask && sent) {
+        // The answer's thinking starts here, at once (live.h), not when an agent's first status
+        // makes it across the network; if no agent speaks within 8 s, the dock says so.
+        const Selection &s = lastSelection();
+        liveLocalThinking(id == QLatin1String("ask_selection") && s.page == page && s.atMs > 0 ? s.rect : QRectF());
+        const qint64 askedAt = nowMs();
+        QTimer::singleShot(8000, QCoreApplication::instance(), [askedAt] {
+            if (liveLastAgentStatusMs() >= askedAt) return;
+            logLine(QStringLiteral("action: no agent answered in 8 s"));
+            for (Injection &in : injections()) {
+                if (in.item) in.item->setProperty("status", QStringLiteral("no agent answered (is agentd running?)"));
+            }
+        });
     }
 }
 

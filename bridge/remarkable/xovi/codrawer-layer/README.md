@@ -184,7 +184,12 @@ object per line:
   "bbox","style"}` (from the router's `agent_status`). The overlay plays strokes at the speed they
   were written in an e-paper Pen region, removes each once its native line is committed, and
   plays a small "thinking" animation (styles `pen`, `drop`, `glyph`) that hands off into the
-  answer's first stroke. Never saved; paused while the pen is down. No replies.
+  answer's first stroke. Never saved; paused while the pen is down. No replies. It is anchored
+  to the paper (page units; its root follows the tile manager's transform, so it stays put on
+  the page while that scrolls or zooms), covers only what it draws, takes no input and is
+  destroyed when idle. A tap on Ask starts the doodle at once (pending, below the selection)
+  until an agent's status adopts it; with none in 8 s it shows a "?" and the dock says no agent
+  answered. `done` ends with a tick, or with the agent's note as a brief caption.
 - **Actions** (extension → bridge): `{"t":"dock_action",…}` from the dock and the selection
   menu's Ask (`qml/selection-ask.qml`: after the menu's delete button, shown when the selection
   holds strokes; it sends what the dock's "Ask about selection" sends, with source `selection`).
