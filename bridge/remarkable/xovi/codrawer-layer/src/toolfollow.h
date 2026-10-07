@@ -75,6 +75,12 @@ void setUserGestureHook(std::function<void()> fn);
 // `gestureEnded` of the followed pen handler (live.h pauses its overlay).
 void addPenListener(std::function<void(bool down)> fn);
 
+// Adds `fn`, called on the GUI thread at every `strokeCompleted` of the followed pen handler: a
+// user stroke has just been handed to xochitl's QML, which adds it to the current layer
+// (`onStrokeCompleted: controller.addDrawingLine(stroke)`, extracted QML 00f9bf52 line 791). ink.h
+// counts any that complete while its layer is selected.
+void addStrokeListener(std::function<void()> fn);
+
 // The DocumentView whose pen handler is followed, or null. It may be hidden; callers check
 // `isVisible()` (as every caller does).
 QQuickItem *followedView();
@@ -88,8 +94,12 @@ QString visiblePageId();
 bool userTouching();
 
 // Milliseconds since the user's pen or finger last left the page (very large before the first
-// time). ink.h commits only in a pen-up gap of at least 800 ms.
+// time).
 qint64 msSincePenUp();
+
+// Milliseconds the user's pen or finger has been on the page in the current gesture, or -1 when
+// it is not (userTouching false).
+qint64 msPenDown();
 
 // The last line written to /run/codrawer/tool (`pen 2`, `eraser 4`, `none`, …); empty before the
 // first tick.

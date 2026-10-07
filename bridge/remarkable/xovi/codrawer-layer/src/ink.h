@@ -20,11 +20,24 @@
 //
 //   1. find the layer by name; if it is missing, `addLayer()`, wait for `layerCount` to grow
 //      (3 s), then `setLayerName(new, name)` and wait until `layerName(new)` reads it back (2 s);
-//   2. `setCurrentLayer(ours)` and wait for `currentLayer` (2 s);
-//   3. build every stroke's Line, `addDrawingLine` + `renderLineToTiles` each, and repaint the
-//      whole viewport once (one e-ink refresh per commit);
-//   4. wait for the scene to take the lines (`itemsBoundingRect` changes, at least 60 ms, at most
-//      400 ms), then select the user's layer again, found by its name since indices move (2 s).
+//   2. build every stroke's Line, then `setCurrentLayer(ours)`;
+//   3. the moment `currentLayer` reads ours (its notify signal, on the next turn of the event
+//      loop; a 20 ms poll as a fallback, 2 s at most), `addDrawingLine` every Line and at once
+//      `setCurrentLayer(user's)`, the user's layer found by its name since indices move;
+//   4. once `currentLayer` reads the user's again (2 s), `renderLineToTiles` each Line and repaint
+//      just their part of the view (one e-ink refresh per commit).
+//
+// # The commit window
+//
+// The `atomic` probe (layerprobe.h, device 2026-10-07) settled what can be done: `addDrawingLine`
+// adds to whichever layer `currentLayer` reads when it is called (a line added right after asking
+// for our layer landed on the user's), and `setCurrentLayer` takes effect about 14 ms after it is
+// asked for (its notify: our layer at +14 ms, the user's again at +27 ms). So no commit is free of
+// a window, but the window can be made as short as the scene allows: steps 2-4 above keep our
+// layer selected only from the notify that shows it to the notify that shows the user's again,
+// with nothing in between but the `addDrawingLine` calls. Every commit logs that window
+// (`ink: window N ms …`, with running mean and max). A user stroke misfiles only if it ends (pen-up,
+// when xochitl adds it to the current layer) inside the window.
 //
 // Placement: `addDrawingLine` takes the Line in page coordinates, exactly as the `.rm` file stores
 // them; nothing is mapped. Measured 2026-10-06 (item 4 of the same section): on a page scrolled to
@@ -41,12 +54,16 @@
 //   turned the page, the chain stops and, if it can, puts the user's layer back.
 // - The only scene changes are `addLayer`, `setLayerName` on the layer this extension created,
 //   `setCurrentLayer`, and `addDrawingLine` into that layer. A page with 32 layers gets no more.
-// - The write-back guard: a commit selects our layer for a few hundred ms, and a user stroke ending
-//   meanwhile would land on it (xochitl has no meta-call that adds a line to a layer other than the
-//   current one). So commits start only in a pause of the user's writing: no pen or finger down
-//   (toolfollow.h, `userTouching`) and at least 800 ms since it lifted; and at most every 1.5 s, so
-//   a streaming answer is committed in batches while the live overlay shows it (live.h). If the
-//   pen comes down during a commit, the chain stops waiting and gives the user's layer back.
+// - The write-back guard: a user stroke ending inside the window would land on our layer (xochitl
+//   has no meta-call that adds a line to a layer other than the current one). Commits run in the
+//   user's pen-up gaps and while the pen is down and has been moving for 150 ms (a pen-up within
+//   the next few tens of ms is unlikely then; quick pen-ups are dots and short ticks, which end
+//   within 150 ms of their pen-down), never in a gesture's first 150 ms; and at most every 1.5 s,
+//   so a streaming answer is committed in batches while the live overlay shows it (live.h).
+// - The safety net: every user stroke that completes (the pen handler's `strokeCompleted`,
+//   toolfollow.h) while a window is open is logged loudly; when `currentLayer` reads ours at that
+//   moment it is counted as misfiled (`ink: WARNING … misfiled N`), else as a near miss. Nothing
+//   moves a Line between layers, so it stays where it went.
 // - Jobs run one at a time. Jobs queued meanwhile for the same page and layer are merged into one
 //   commit (up to kMaxBatch strokes), so a burst of agent strokes costs one select/restore, not
 //   one per stroke. At most kMaxQueue jobs wait; beyond that a job is refused with `err busy`.

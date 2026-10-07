@@ -34,6 +34,11 @@ ToolFollow &toolFollow() {
     return tf;
 }
 
+std::vector<std::function<void()>> &strokeListeners() {
+    static std::vector<std::function<void()>> l;
+    return l;
+}
+
 std::vector<std::function<void()>> &tickHooks() {
     static std::vector<std::function<void()>> h;
     return h;
@@ -121,6 +126,9 @@ void followPen(QObject *pen, QQuickItem *view) {
         toolFollow().penUpAt = nowMs();
         for (auto &l : penListeners()) l(false);
     });
+    tf.relay->on(pen, Relay::signalNamed(pen, "strokeCompleted"), [](void **) {
+        for (auto &l : strokeListeners()) l();
+    });
     tf.relay->on(pen, Relay::signalNamed(pen, "destroyed"), [](void **) {
         QMetaObject::invokeMethod(QCoreApplication::instance(), [] { forgetPen("destroyed"); toolChanged(); }, Qt::QueuedConnection);
     });
@@ -154,6 +162,8 @@ void setUserGestureHook(std::function<void()> fn) { userGestureHook() = std::mov
 
 void addPenListener(std::function<void(bool)> fn) { penListeners().push_back(std::move(fn)); }
 
+void addStrokeListener(std::function<void()> fn) { strokeListeners().push_back(std::move(fn)); }
+
 void startToolFollow() {
     auto *t = new QTimer(QCoreApplication::instance());
     t->setInterval(kTickMs);
@@ -177,6 +187,8 @@ bool userTouching() {
 }
 
 QByteArray toolLine() { return toolFollow().last; }
+
+qint64 msPenDown() { return userTouching() ? nowMs() - toolFollow().penDownSince : -1; }
 
 qint64 msSincePenUp() {
     const qint64 up = toolFollow().penUpAt;

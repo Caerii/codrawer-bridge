@@ -36,14 +36,14 @@ on, the data flow, the threading). Read them in this order:
 | 3 | `src/qtmeta.{h,cpp}` | 303 | meta-calls by name (`invoke`), signals into functions (`Relay`), `waitFor` |
 | 4 | `src/scene.{h,cpp}` | 347 | the item tree, the visible page (`findOpenPage`), layers, selectors, `tree` |
 | 5 | `src/line_layout.h` *(pure)*, `src/line.{h,cpp}` | 323 | xochitl's `Line` bytes; building one from our points, reading one back |
-| 6 | `src/ink.{h,cpp}` | 370 | the commit chain: our layer, `addDrawingLine`, the user's layer back; the queue |
-| 7 | `src/toolfollow.{h,cpp}` | 273 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
+| 6 | `src/ink.{h,cpp}` | 539 | the commit chain and its window (tens of ms), the misfile safety net: our layer, `addDrawingLine`, the user's layer back; the queue |
+| 7 | `src/toolfollow.{h,cpp}` | 306 | the visible pen handler: `/run/codrawer/tool`, the followed view, the write-back guard |
 | 8 | `src/text.{h,cpp}` | 204 | text into the focused text box (route A `replaceText`, route B input method) |
 | 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 521 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, goto, status, actions |
 | 10 | `src/selection.{h,cpp}` | 171 | the last lasso selection (`areaSelected`) |
 | 11 | `src/goto_req.h` *(pure)*, `src/navigate.{h,cpp}` | 491 | "take me there": open a document by id, turn to a page, flash a region; folders; offers |
 | 12 | `src/live.{h,cpp}`, `qml/live.qml` | 350 + 807 | agent ink drawn as it streams in, removed at commit; "thinking" doodles, any number at once (a small Animation-region panel per drawing) |
-| 13 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 475 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
+| 13 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 598 | QML injected into xochitl (the dock, the lasso's Ask), `inject.conf`, agents' dock rows, dock actions to the bridge |
 | 14 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
 | 15 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 140 | `grab`: the display buffer copied out of xochitl's memory |
 | 16 | `src/autoinput.{h,cpp}` | 258 | synthesized taps and swipes behind the deny list; navigation; text |
