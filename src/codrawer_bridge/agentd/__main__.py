@@ -49,6 +49,15 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
         help="the repository; the state directory (logs, images) goes under it (default: here)",
     )
     ap.add_argument(
+        "--backend",
+        choices=("claude-stream", "even-terminal"),
+        default="claude-stream",
+        help="claude-stream: warm `claude -p` processes, the image attached (claude_stream.py; "
+        "~1 s warm); even-terminal: the --term-url server, the image Read from a file (~23 s)",
+    )
+    ap.add_argument("--model", default="claude-haiku-4-5-20251001", help="for claude-stream")
+    ap.add_argument("--pool", type=int, default=2, help="asks answered at once")
+    ap.add_argument(
         "--agent-cwd",
         default="",
         help="Claude Code's working directory, where the images it Reads go (default: the "
@@ -108,6 +117,9 @@ def config(a: argparse.Namespace) -> Config:
         term_token=a.term_token,
         term_cwd=a.term_cwd,
         agent_cwd=a.agent_cwd,
+        backend=a.backend,
+        model=a.model,
+        pool=a.pool,
         state_dir=a.state_dir,
         persona=a.persona,
         color=a.color,

@@ -36,6 +36,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .aio import within
 from .placement import MM_PER_PU, Block
 
 #: The Paper Pro page in millimetres (packages/hand/src/protocol.ts PAPER_PRO_MM).
@@ -172,7 +173,7 @@ class HandWorker:
             limit=2**26,
         )
         assert self._proc.stdout is not None
-        line = await asyncio.wait_for(self._proc.stdout.readline(), self.timeout_s)
+        line = await within(self._proc.stdout.readline(), self.timeout_s)
         if not line or not json.loads(line).get("ready"):
             raise HandUnavailable("layouts.ts --serve did not start")
 
@@ -198,7 +199,7 @@ class HandWorker:
                     assert self._proc is not None and self._proc.stdin and self._proc.stdout
                     self._proc.stdin.write(req.encode("utf-8") + b"\n")
                     await self._proc.stdin.drain()
-                    line = await asyncio.wait_for(self._proc.stdout.readline(), self.timeout_s)
+                    line = await within(self._proc.stdout.readline(), self.timeout_s)
                     if not line:
                         raise HandUnavailable("layouts.ts --serve exited")
                     return _parse(json.loads(line))

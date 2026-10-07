@@ -801,6 +801,7 @@ def test_the_stream_writes_the_first_sentence_before_the_turn_ends():
             return True
 
         a._status, a._play = status, play
+        a.others_blocks = lambda owner: []
         rec = Record(n=1, kind="ask_selection", received=0.0)
         met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
         s = InkStream(a, rec, "r", 800.0, 400.0, 80.0, 1.0, met, lambda: 1.0, 2160.0)
@@ -850,6 +851,7 @@ def test_the_stream_stops_where_the_page_ends():
             return True
 
         a._status, a._play = status, play
+        a.others_blocks = lambda owner: []
         rec = Record(n=1, kind="ask_selection", received=0.0)
         met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
         # the block starts 160 units above the page's end: room for one chunk, not two

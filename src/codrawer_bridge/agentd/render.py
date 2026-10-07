@@ -10,7 +10,8 @@ Two pictures:
 - :func:`render_region`: the selection's box grown by a margin, cropped. The selected strokes are
   black; other ink that falls in the margin is light grey, context the model can tell apart.
   Pen width follows pressure, as in primer/recognize.py's renderer, at a scale of at most 1.5 px
-  per page unit and 1400 px on the long side.
+  per page unit and 1000 px on the long side (grey ink on white compresses well; the image is
+  most of an ask's bytes and input tokens).
 
 Coordinates are normalized page coordinates; the page is ``page_w`` × ``page_h`` page units.
 """
@@ -47,7 +48,7 @@ def render_region(
     region: Box,
     page_w: float = 1620.0,
     page_h: float = 2160.0,
-    max_side: int = 1400,
+    max_side: int = 1000,
 ) -> bytes:
     """The ``region`` (normalized) cropped: ``selected`` black on white, ``context`` light grey."""
     x0, y0, x1, y1 = region

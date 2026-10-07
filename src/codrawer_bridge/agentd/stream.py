@@ -173,6 +173,7 @@ class InkStream:
             return False
         mine = f"agentd_{self.run}c"
         ink = [st.pts for st in m.ink() if not st.id.startswith(mine)]
+        ink += self.agent.others_blocks(self.rec.n)  # answers still being thought out elsewhere
         occ = placement.Occupancy(ink, m.w, m.h, height=max(m.h, self.page_bottom) + 400)
         return occ.free(rect, 24.0)
 
