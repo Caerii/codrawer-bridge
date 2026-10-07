@@ -95,11 +95,22 @@ def render_region(
     page_w: float = 1620.0,
     page_h: float = 2160.0,
     max_side: int = MAX_SIDE,
+    width_cap: float | None = None,
 ) -> bytes:
-    """The ``region`` (normalized) cropped: ``selected`` black on white, ``context`` light grey."""
+    """
+    The ``region`` (normalized) cropped: ``selected`` black on white, ``context`` light grey.
+    ``width_cap``: draw no line wider than this fraction of the estimated x-height (the median
+    height of the selected strokes), which keeps a heavy calligraphy pen's letters open.
+    """
     x0, y0, x1, y1 = region
     w_pu, h_pu = max(1.0, (x1 - x0) * page_w), max(1.0, (y1 - y0) * page_h)
     scale = scale_for(selected, region, page_w, page_h, max_side)
+    cap_px = None
+    if width_cap:
+        heights = [(s.bbox()[3] - s.bbox()[1]) * page_h for s in selected if s.pts]
+        tall = [h for h in heights if h > 2]
+        if tall:
+            cap_px = width_cap * median(tall) * scale * SUPERSAMPLE
     W, H = max(32, round(w_pu * scale)), max(32, round(h_pu * scale))
     k = scale * SUPERSAMPLE
     img = Image.new("L", (W * SUPERSAMPLE, H * SUPERSAMPLE), 255)
@@ -119,6 +130,8 @@ def render_region(
                 else:
                     pr = p[2] if len(p) >= 3 else 0.5
                     wd = (1.5 + 3.5 * pr) * k
+                if cap_px is not None:
+                    wd = min(wd, cap_px)
                 wd = max(1.5 * SUPERSAMPLE, wd)
                 if prev is not None:
                     draw.line([prev, cur], fill=ink, width=round(wd))

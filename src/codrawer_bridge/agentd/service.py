@@ -85,7 +85,8 @@ class Config:
     term_cwd: str = ""  # the repository: the state directory (logs, images) lives under it
     agent_cwd: str = ""  # Claude Code's working directory (default term_cwd); empty is faster
     backend: str = "even-terminal"  # claude-stream (warm claude -p processes) | even-terminal
-    model: str = "claude-haiku-4-5-20251001"  # for claude-stream
+    model: str = "claude-sonnet-5-5"  # "careful", the default (claude-stream)
+    fast_model: str = "claude-haiku-4-5-20251001"  # "fast", from the dock's Model entry
     pool: int = 1  # asks answered at once (claude-stream keeps one more process warm as a spare)
     state_dir: str = ""
     persona: str = "archivist"
@@ -171,13 +172,13 @@ class Agentd:
             self.state / f"state-{_slug(cfg.term_url)}.json",
         )
         self._turn = asyncio.Lock()  # one even-terminal turn at a time (its sessions slow down)
+        self.threads = ThreadStore(self.state)  # the page thread, the memory and model choices
         self.claude = (
-            ClaudePool(self.agent_cwd, size=cfg.pool + 1, model=cfg.model)
+            ClaudePool(self.agent_cwd, size=cfg.pool + 1, model=self.model_id)
             if cfg.backend == "claude-stream"
             else None
         )
         self._asks = asyncio.Semaphore(max(1, cfg.pool))  # asks in their model turn at once
-        self.threads = ThreadStore(self.state)  # the page thread and the memory toggle
         self._reserved: dict[int, Box] = {}  # in-flight asks' answer blocks (page units)
         self._ws = None
         self._connected = asyncio.Event()
@@ -290,6 +291,9 @@ class Agentd:
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
             return
+        if aid == MODEL_ID:
+            self._spawn(self._on_model_entry())
+            return
         if aid not in ASK_IDS:
             return
         received = time.time()
@@ -339,9 +343,38 @@ class Agentd:
                         "hint": "Asks on the same page follow on from each other",
                     },
                     {"id": FORGET_ID, "label": "Forget this page's thread"},
+                    {
+                        "id": MODEL_ID,
+                        "label": f"Model: {self.speed} ({_model_name(self.model_id)})",
+                        "badge": self.speed,
+                        "hint": "careful reads handwriting best; fast answers sooner",
+                    },
                 ],
             }
         )
+
+    @property
+    def speed(self) -> str:
+        """The dock's model choice: ``careful`` (default) or ``fast``."""
+        return "fast" if self.threads.setting("model", "careful") == "fast" else "careful"
+
+    @property
+    def model_id(self) -> str:
+        """The Claude model in use, by the dock's choice."""
+        return self.cfg.fast_model if self.speed == "fast" else self.cfg.model
+
+    async def _on_model_entry(self) -> None:
+        """Switch careful/fast: kept in settings; the pool restarts on the other model."""
+        self.threads.set_setting("model", "careful" if self.speed == "fast" else "fast")
+        if self.claude is not None:
+            old = self.claude
+            self.claude = ClaudePool(self.agent_cwd, size=self.cfg.pool + 1, model=self.model_id)
+            self.claude.fill()
+            await old.close()  # asks already running keep their process until they finish
+        note = f"Model: {self.speed} ({_model_name(self.model_id)})"
+        log.info("dock %s: %s", MODEL_ID, note)
+        await self._dock_entries()
+        await self._glasses(note, note)
 
     async def _on_memory_entry(self, msg: dict[str, Any]) -> None:
         if msg.get("id") == MEMORY_ID:
@@ -853,6 +886,7 @@ RETRY_MIN_S = 10.0
 
 #: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
 MEMORY_ID = "agentd_memory"
+MODEL_ID = "agentd_model"
 FORGET_ID = "agentd_forget"
 
 
@@ -903,6 +937,12 @@ def ask_signature(msg: dict[str, Any]) -> tuple:
         tuple(round(float(v) / 10) for v in box) if isinstance(box, list) and len(box) == 4 else ()
     )
     return (str(msg.get("id")), rounded)
+
+
+def _model_name(model: str) -> str:
+    """``claude-sonnet-5-5`` → ``Sonnet``."""
+    parts = model.split("-")
+    return parts[1].capitalize() if len(parts) > 1 else model
 
 
 def _slug(url: str) -> str:

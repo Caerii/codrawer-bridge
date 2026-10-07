@@ -16,7 +16,8 @@ the state directory (``threads/<hash of doc/page>.json``, local, gitignored), ne
 pages; "Forget this page's thread" (the dock) deletes it. With memory off nothing is read or
 written, and each ask stands alone.
 
-**The setting** (memory on or off) is kept in ``settings.json`` beside it, on by default.
+**The settings** (memory on or off, on by default; and service.py's model choice) are kept in
+``settings.json`` beside it.
 """
 
 from __future__ import annotations
@@ -50,27 +51,31 @@ class ThreadStore:
 
     # ── the setting ────────────────────────────────────────────────────────────────────────
 
-    @property
-    def memory(self) -> bool:
+    def setting(self, key: str, default):
+        """One value from ``settings.json`` (the user's choices from the dock), or ``default``."""
         try:
-            return bool(
-                json.loads((self.root / "settings.json").read_text(encoding="utf-8")).get(
-                    "memory", True
-                )
-            )
-        except (OSError, ValueError):
-            return True
+            data = json.loads((self.root / "settings.json").read_text(encoding="utf-8"))
+            return data.get(key, default)
+        except (OSError, ValueError, AttributeError):
+            return default
 
-    @memory.setter
-    def memory(self, on: bool) -> None:
+    def set_setting(self, key: str, value) -> None:
         path = self.root / "settings.json"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             data = {}
-        data["memory"] = bool(on)
+        data[key] = value
         self.root.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data), encoding="utf-8")
+
+    @property
+    def memory(self) -> bool:
+        return bool(self.setting("memory", True))
+
+    @memory.setter
+    def memory(self, on: bool) -> None:
+        self.set_setting("memory", bool(on))
 
     # ── threads ────────────────────────────────────────────────────────────────────────────
 
