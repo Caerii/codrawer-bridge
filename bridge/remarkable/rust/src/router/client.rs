@@ -86,11 +86,11 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
                 }
             }
             // the Primer and the toolbar dock (ADR 010), personal marks (protocol.md, "Personal
-            // marks"), "take me there" and agent_status (protocol.md) and the typer's notes:
+            // marks"), "take me there", agent_status and settings (protocol.md) and the typer's notes:
             // relayed as sent, like keys
             "key" | "cursor" | "doc" | "typer_note" | "primer" | "primer_request" | "dock_action"
             | "dock_query" | "mark_seen" | "mark_ask" | "mark_define" | "mark_invoke"
-            | "mark_feedback" | "mark_query" | "marks" | "goto" | "agent_status" => {
+            | "mark_feedback" | "mark_query" | "marks" | "goto" | "agent_status" | "settings" => {
                 sess.lock().unwrap().broadcast(&raw, cid)
             }
             "dock_entries" => {

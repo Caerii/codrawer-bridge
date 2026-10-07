@@ -105,11 +105,13 @@ Item {
             // an agent's entries below the built-ins (src/inject.cpp withOwners), updating live
             d.entries = [{ id: "status", label: "codrawer status" }, { id: "ask_page", label: "Ask about this page" },
                          { id: "agentd_memory", label: "Memory: page thread", badge: "on", owner: "agentd" },
-                         { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" }];
+                         { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" },
+                         { id: "agentd_text_size", label: "Text size", badge: "medium", owner: "agentd" }];
             d.toggle();
+            check(findText(panel, "medium") !== null, "a value badge shows its value");
             check(findText(panel, "Ask about this page") && findText(panel, "Memory: page thread"), "the agent's rows below the built-ins");
             const pills = findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; });
-            check(pills.length === 1, "one badge shown (" + pills.length + ")");
+            check(pills.length === 2, "two badges shown (" + pills.length + ")");
             d.entries = [{ id: "status", label: "codrawer status" }, { id: "ask_page", label: "Ask about this page" },
                          { id: "agentd_memory", label: "Memory: off", badge: "off", owner: "agentd" },
                          { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" }];
