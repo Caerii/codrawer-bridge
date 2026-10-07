@@ -54,6 +54,8 @@ class Layout:
     bbox_mm: tuple[float, float, float, float]
     duration_ms: float
     strokes: list[tuple[float, float, list[list[float]]]]
+    lines: list[int] | None = None  # each stroke's line (0 first), when the hand said
+    shift_mm: float = 0.0  # added below the last line by separate_lines
 
     def block(self, index: int, scale: float) -> Block:
         x0, y0, x1, y1 = self.bbox_mm
@@ -105,16 +107,7 @@ def layouts(
         raise HandUnavailable(str(e)) from e
     if r.returncode != 0:
         raise HandUnavailable((r.stderr or r.stdout or "layouts.ts failed").strip()[-300:])
-    data = json.loads(r.stdout)
-    return [
-        Layout(
-            width_mm=float(lay["width"]),
-            bbox_mm=tuple(lay["bbox"]),  # type: ignore[arg-type]
-            duration_ms=float(lay["duration"]),
-            strokes=[(float(s["down"]), float(s["up"]), s["pts"]) for s in lay["strokes"]],
-        )
-        for lay in data["layouts"]
-    ]
+    return _parse(json.loads(r.stdout))
 
 
 def _parse(data: dict) -> list[Layout]:
@@ -126,9 +119,58 @@ def _parse(data: dict) -> list[Layout]:
             bbox_mm=tuple(lay["bbox"]),  # type: ignore[arg-type]
             duration_ms=float(lay["duration"]),
             strokes=[(float(s["down"]), float(s["up"]), s["pts"]) for s in lay["strokes"]],
+            lines=[int(s.get("line") or 0) for s in lay["strokes"]],
         )
         for lay in data["layouts"]
     ]
+
+
+def line_bands(layout: Layout) -> dict[int, tuple[float, float]]:
+    """Each line's ink from top to bottom, mm (glyph extents: ascenders to descenders)."""
+    bands: dict[int, tuple[float, float]] = {}
+    for (_, _, pts), line in zip(
+        layout.strokes, layout.lines or [0] * len(layout.strokes), strict=True
+    ):
+        ys = [p[1] for p in pts]
+        if ys:
+            lo, hi = bands.get(line, (min(ys), max(ys)))
+            bands[line] = (min(lo, min(ys)), max(hi, max(ys)))
+    return bands
+
+
+def separate_lines(layout: Layout, gap_mm: float) -> Layout:
+    """
+    The layout with every line at least ``gap_mm`` below the ink of the line above: a compact
+    pitch can bring a line's descenders onto the next line's ascenders, and then that line and
+    all after it move down just enough. Timing is unchanged (only the pen-up travel lengthens).
+    """
+    bands = line_bands(layout)
+    shift: dict[int, float] = {}
+    total = 0.0
+    prev_bottom = None
+    for line in sorted(bands):
+        top, bottom = bands[line]
+        if prev_bottom is not None and top + total < prev_bottom + gap_mm:
+            total = prev_bottom + gap_mm - top
+        shift[line] = total
+        prev_bottom = bottom + total
+    if total == 0.0:
+        return layout
+    lines = layout.lines or [0] * len(layout.strokes)
+    strokes = [
+        (d, u, [[p[0], p[1] + shift.get(ln, 0.0), *p[2:]] for p in pts])
+        for (d, u, pts), ln in zip(layout.strokes, lines, strict=True)
+    ]
+    x0, y0, x1, y1 = layout.bbox_mm
+    last = max(shift)
+    return Layout(
+        layout.width_mm,
+        (x0, y0, x1, y1 + shift[last]),
+        layout.duration_ms,
+        strokes,
+        layout.lines,
+        layout.shift_mm + shift[last],
+    )
 
 
 @dataclass(frozen=True)
@@ -189,9 +231,16 @@ class HandWorker:
         persona: str = "archivist",
         widths: tuple[float, ...] = (80.0,),
         seed: int = 7,
+        pitch: float | None = None,
     ) -> list[Layout]:
-        """As :func:`layouts`, through the warm process (started, or restarted once, as needed)."""
-        req = json.dumps({"text": text, "persona": persona, "seed": seed, "widths": list(widths)})
+        """
+        As :func:`layouts`, through the warm process (started, or restarted once, as needed).
+        ``pitch``: baseline to baseline, mm (default the persona's own line spacing).
+        """
+        body = {"text": text, "persona": persona, "seed": seed, "widths": list(widths)}
+        if pitch:
+            body["pitch"] = pitch
+        req = json.dumps(body)
         async with self._lock:
             for attempt in range(2):
                 try:
@@ -228,8 +277,12 @@ class HandWorker:
 
 
 def lines_in(layout: Layout, pitch: float) -> int:
-    """How many lines a layout holds, from its depth below the first baseline (``pitch`` mm)."""
-    return 1 + max(0, round(layout.bbox_mm[3] / pitch)) if layout.strokes else 0
+    """How many lines a layout holds: the hand's line numbers, else its depth / ``pitch``."""
+    if not layout.strokes:
+        return 0
+    if layout.lines:
+        return max(layout.lines) + 1
+    return 1 + max(0, round(layout.bbox_mm[3] / pitch))
 
 
 def to_messages(

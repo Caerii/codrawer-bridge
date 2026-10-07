@@ -35,6 +35,10 @@ if TYPE_CHECKING:
     from .service import Agentd, Record
 
 
+#: The least clear space between one line's ink and the next line's, mm at scale 1.
+LINE_GAP_MM = 0.8
+
+
 class InkStream:
     """One answer's chunks, written in order into the block at ``(x, y)`` (module docstring)."""
 
@@ -58,7 +62,8 @@ class InkStream:
         self.baseline = y - metrics.ascent * scale / placement.MM_PER_PU  # page units
         self.width_mm = width_mm
         self.scale = scale
-        self.metrics = metrics
+        self.metrics = metrics  # pitch: the line spacing setting's (service.py effective_metrics)
+        self.bottom: float | None = None  # page units: the ink bottom of the last chunk written
         self.since = since
         self.page_bottom = page_bottom
         self.consumed = 0
@@ -120,13 +125,23 @@ class InkStream:
                     return
                 continue
             try:
-                lay = (await a.hand.layouts(chunk, a.cfg.persona, (self.width_mm,), seed=7 + k))[0]
+                lay = (
+                    await a.hand.layouts(
+                        chunk, a.cfg.persona, (self.width_mm,), seed=7 + k, pitch=self.metrics.pitch
+                    )
+                )[0]
+                # a compact pitch must never let one line's descenders touch the next's ascenders
+                lay = handmod.separate_lines(lay, LINE_GAP_MM)
             except handmod.HandUnavailable as e:
                 rec.note = f"no handwriting ({e}); glasses only"
                 self.stopped = True
                 continue
             s, mm = self.scale, placement.MM_PER_PU
             x0, y0, x1, y1 = lay.bbox_mm
+            if self.bottom is not None:  # nor the first line of this chunk the last one's
+                clash = self.bottom + LINE_GAP_MM * s / mm - (self.baseline + y0 * s / mm)
+                if clash > 0:
+                    self.baseline += clash
             rect = (
                 self.x + min(x0, 0.0) * s / mm,
                 self.baseline + y0 * s / mm,
@@ -160,7 +175,9 @@ class InkStream:
             if not ok:
                 rec.note = "link dropped while writing"
                 self.stopped = True
-            self.baseline += handmod.lines_in(lay, self.metrics.pitch) * self.metrics.pitch * s / mm
+            self.bottom = rect[3]
+            lines = handmod.lines_in(lay, self.metrics.pitch)
+            self.baseline += (lines * self.metrics.pitch + lay.shift_mm) * s / mm
             k += 1
 
     def _first(self) -> None:
