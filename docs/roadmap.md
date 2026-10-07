@@ -9,11 +9,20 @@ over you while you are mid-thought".
 
 These are in progress or landing (October 2026):
 
-- **Native agent ink on the tablet.** Strokes commit as real reMarkable ink on their own layer
-  (Probe 1 passed: render, save, undo). Next: placement through the view transform, bridge
-  forwarding of ai-layer strokes, call and response (`docs/investigations/native-multiplayer-layer.md`).
-- **The tablet dock and lasso action.** A toolbar button injected at runtime by the XOVI extension
-  opens a dock of agents; the lasso menu gets "Ask agent".
+- **Ask on paper: done and verified (2026-10-07; `docs/checkpoints/2026-10-07.md`).**
+  - Lasso, then "c" in the selection menu, or the dock.
+  - A local thinking doodle.
+  - agentd's warm Claude pool answers in native agent ink in about 3–4 s.
+  - Page threads.
+  - Size, spacing, speed and model are set from the dock.
+
+  Next, from `docs/design/ask-experience.md`:
+  - the tablet proposes the answer's spot and a move is one arc;
+  - gestures on answers (strike, circle, "?");
+  - math in the hand and answer formats;
+  - agentd as a service with a health row, plus a nightly on-device regression;
+  - history and citations;
+  - a voice per notebook.
 - **Direct text insertion.** Replies go into the focused text box through the extension, not key
   by key (fixes the characters xochitl drops when typed: `^ [ ] { } \` ~`).
 - **The Primer** (ADR 010): handwritten proofs recognised and re-rendered as LaTeX, a learner model
