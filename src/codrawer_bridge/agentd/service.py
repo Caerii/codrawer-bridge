@@ -92,7 +92,8 @@ class Config:
     state_dir: str = ""
     persona: str = "archivist"
     color: str = "#3a6ea5"
-    speed: float = 1.5
+    speed: float = 1.0  # an extra playback factor on top of the writing-speed setting
+    max_page_y: float = 1.5  # page heights: the deployed bridge refuses agent ink further down
     ink: str = "auto"  # on | off | auto (auto reads the tablet over ssh, else on)
     ssh: str = ""  # root@<tablet> for --ink auto
     thinking: str = "dots"  # dots | overlay | none: the pending mark (agent_status is always sent)
@@ -300,8 +301,12 @@ class Agentd:
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
             return
-        if aid in (SIZE_ID, SPACING_ID):
-            key, order = ("text_size", SIZES) if aid == SIZE_ID else ("spacing", SPACINGS)
+        if aid in (SIZE_ID, SPACING_ID, SPEED_ID):
+            key, order = {
+                SIZE_ID: ("text_size", SIZES),
+                SPACING_ID: ("spacing", SPACINGS),
+                SPEED_ID: ("writing_speed", SPEEDS),
+            }[aid]
             now = self.setting(key)
             self._spawn(self._apply_settings({key: order[(order.index(now) + 1) % len(order)]}))
             return
@@ -368,6 +373,12 @@ class Agentd:
                         "badge": self.setting("spacing"),
                     },
                     {
+                        "id": SPEED_ID,
+                        "label": "Writing speed: "
+                        + self.setting("writing_speed").replace("_", " "),
+                        "badge": self.setting("writing_speed"),
+                    },
+                    {
                         "id": MODEL_ID,
                         "label": f"Model: {self.speed} ({_model_name(self.model_id)})",
                         "badge": self.speed,
@@ -382,6 +393,16 @@ class Agentd:
         values, default = SETTINGS[key]
         v = self.threads.setting(key, default)
         return v if v in values else default
+
+    @property
+    def hurry(self) -> float:
+        """The hand's hurry for the writing-speed setting (WRITING_SPEED)."""
+        return WRITING_SPEED[self.setting("writing_speed")][0]
+
+    @property
+    def playback(self) -> float:
+        """How much faster than the (hurried) hand's own timing strokes are sent."""
+        return WRITING_SPEED[self.setting("writing_speed")][1] * self.cfg.speed
 
     def scales_for(self, met: handmod.Metrics) -> list[float]:
         """
@@ -413,6 +434,7 @@ class Agentd:
         return {
             "text_size": self.setting("text_size"),
             "spacing": self.setting("spacing"),
+            "writing_speed": self.setting("writing_speed"),
             "memory": self.threads.memory,
             "model": self.speed,
         }
@@ -584,7 +606,12 @@ class Agentd:
                 return rec
             if rec.ink and reserved is None:
                 rec.note = "no free space near the selection: glasses only"
-                rec.status_note = "No room near the selection - answer on your glasses"
+                too_low = anchor[3] > self.cfg.max_page_y - 0.05
+                rec.status_note = (
+                    "Too far down the page for agent ink - answer on your glasses"
+                    if too_low
+                    else "No room near the selection - answer on your glasses"
+                )
             elif not rec.ink:
                 tablet_on = await self.tablet_ink()
                 rec.status_note = (
@@ -655,7 +682,7 @@ class Agentd:
                     spot.block.scale,
                     metrics,
                     since,
-                    _page_bottom(m),
+                    _page_bottom(m, self.cfg.max_page_y),
                 )
             # the stream sees the answer only: the reply's first line is the SEEN transcription
             on_text = (lambda t: stream.feed(prompt.answer_so_far(t))) if stream else None
@@ -780,7 +807,7 @@ class Agentd:
             occ,
             blocks,
             placement.to_pu(anchor, m.w, m.h),
-            page_bottom=_page_bottom(m),
+            page_bottom=_page_bottom(m, self.cfg.max_page_y),
             page_top=_page_top(m),
             max_gap=MAX_GAP_PU,
         )
@@ -983,10 +1010,20 @@ SPACING_ID = "agentd_spacing"
 #: (2026-10-07); separate_lines (hand.py) guarantees its lines never touch.
 SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smallest to largest
 SPACINGS = ("compact", "normal", "airy")
+SPEEDS = ("calm", "fast", "very_fast")
 SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
     "spacing": (SPACINGS, "compact"),
+    "writing_speed": (SPEEDS, "fast"),
 }
+
+#: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried
+#: hand cuts its pauses more than its strokes and loosens a little, which reads as a person writing
+#: fast; past a hurry of 2 the letters lose their shape (2026-10-07), so the rest of the speed is
+#: playback. With the Archivist: calm ~4.6 letters/s, fast ~7.3, very fast ~9.9 (fast print is
+#: 8-12). The pre-setting live default (no hurry, playback 3) wrote ~4.2.
+WRITING_SPEED = {"calm": (1.5, 2.0), "fast": (2.0, 2.2), "very_fast": (2.0, 3.0)}
+SPEED_ID = "agentd_writing_speed"
 
 #: Text size presets as factors on the scales placement chooses from (Config.scales, 1, 0.8 and
 #: 0.65): medium is the original size (the Archivist's x-height 3.52 mm at scale 1).
@@ -1014,16 +1051,18 @@ def _bounds(strokes) -> Box:
 MAX_GAP_PU = 300.0
 
 
-def _page_bottom(m: PageModel) -> float:
+def _page_bottom(m: PageModel, max_y: float | None = None) -> float:
     """
     How far down the page reaches, page units: its height, the lowest ink, or the bottom of
     the screen when the user has scrolled further down (xochitl grows the page as one writes
-    there; the view comes from the request's ``view_bbox``, page.py).
+    there; the view comes from the request's ``view_bbox``, page.py). Never below ``max_y``
+    page heights: the tablet's bridge refuses agent ink further down (Config.max_page_y).
     """
     box = m.ink_box(include_ai=True)
     v = m.view
     visible = (v.screen_h - v.dy) / v.zoom
-    return max(m.h, box[3] * m.h if box else m.h, visible)
+    bottom = max(m.h, box[3] * m.h if box else m.h, visible)
+    return min(bottom, max_y * m.h) if max_y else bottom
 
 
 def _page_top(m: PageModel) -> float:

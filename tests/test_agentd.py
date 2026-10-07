@@ -802,7 +802,9 @@ class _FakeHand:
     def __init__(self):
         self.calls: list[str] = []
 
-    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None):
+    async def layouts(
+        self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None, tempo=None
+    ):
         self.calls.append(text)
         lines = 1 + len(text) // 40
         pts = [[0.0, 0.0, 0.5, 0], [30.0, (lines - 1) * 10.0, 0.5, 100]]
@@ -844,6 +846,7 @@ def test_the_stream_writes_the_first_sentence_before_the_turn_ends():
 
         a._status, a._play = status, play
         a.others_blocks = lambda owner: []
+        a.hurry, a.playback = 1.0, 10.0
         rec = Record(n=1, kind="ask_selection", received=0.0)
         met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
         s = InkStream(a, rec, "r", 800.0, 400.0, 80.0, 1.0, met, lambda: 1.0, 2160.0)
@@ -894,6 +897,7 @@ def test_the_stream_stops_where_the_page_ends():
 
         a._status, a._play = status, play
         a.others_blocks = lambda owner: []
+        a.hurry, a.playback = 1.0, 10.0
         rec = Record(n=1, kind="ask_selection", received=0.0)
         met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
         # the block starts 160 units above the page's end: room for one chunk, not two

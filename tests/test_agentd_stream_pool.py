@@ -181,7 +181,9 @@ def _tap(x0: float, y0: float, x1: float, y1: float) -> dict:
 
 
 class _Hand:
-    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None):
+    async def layouts(
+        self, text, persona="archivist", widths=(80.0,), seed=7, pitch=None, tempo=None
+    ):
         from codrawer_bridge.agentd.hand import Layout
 
         return [
@@ -484,3 +486,42 @@ def test_smaller_text_keeps_a_comfortable_width(tmp_path):
     assert st < sm and ht < hm  # smaller writing, a shorter block
     assert wt >= 0.9 * wm  # but as wide on the page: more words a line, not a narrow column
     assert abs(text_t * st - wt * placement.MM_PER_PU) < 1.0  # the hand wraps at that width
+
+
+def test_writing_speed_presets_hurry_the_hand_and_the_playback(tmp_path):
+    from codrawer_bridge.agentd import service
+
+    async def go():
+        a, sent = _agent(tmp_path)
+        out = []
+        for _ in range(len(service.SPEEDS)):
+            out.append((a.setting("writing_speed"), a.hurry, a.playback))
+            a.handle({"t": "dock_action", "id": service.SPEED_ID, "doc": "d", "page": "p1"})
+            await asyncio.sleep(0.02)
+        entries = {e["id"]: e for e in [m for m in sent if m["t"] == "dock_entries"][-1]["entries"]}
+        await a.claude.close()
+        return out, entries
+
+    out, entries = asyncio.run(go())
+    assert [o[0] for o in out] == ["fast", "very_fast", "calm"]  # default fast, cycling
+    speeds = {name: hurry * playback for name, hurry, playback in out}
+    assert speeds["calm"] < speeds["fast"] < speeds["very_fast"]
+    assert all(h <= 2.0 for _, h, _ in out)  # past 2 the hand's letters lose their shape
+    assert entries[service.SPEED_ID]["label"] == "Writing speed: fast"
+
+
+def test_no_ink_below_what_the_bridge_accepts(tmp_path):
+    async def go():
+        a, sent = _agent(tmp_path)
+        a.handle(
+            {**_page([_word(1, 0.2, 0.15)]), "strokes": [_word(1, 0.2, 0.15), _word(9, 0.2, 1.47)]}
+        )
+        low = await a._reserve((0.18, 1.45, 0.33, 1.49), owner=1)  # writing at 1.47 page heights
+        high = await a._reserve((0.18, 0.13, 0.33, 0.18), owner=2)
+        await a.claude.close()
+        return low, high, a
+
+    low, high, a = asyncio.run(go())
+    assert high is not None
+    if low is not None:  # beside it perhaps, but never below the bridge's limit
+        assert low[0].rect[3] <= a.cfg.max_page_y * 2160

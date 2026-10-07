@@ -233,6 +233,7 @@ class HandWorker:
         widths: tuple[float, ...] = (80.0,),
         seed: int = 7,
         pitch: float | None = None,
+        tempo: float | None = None,
     ) -> list[Layout]:
         """
         As :func:`layouts`, through the warm process (started, or restarted once, as needed).
@@ -241,6 +242,8 @@ class HandWorker:
         body = {"text": text, "persona": persona, "seed": seed, "widths": list(widths)}
         if pitch:
             body["pitch"] = pitch
+        if tempo and tempo > 1:
+            body["tempo"] = tempo  # a hurried hand (packages/hand persona.ts hurried)
         req = json.dumps(body)
         async with self._lock:
             for attempt in range(2):
