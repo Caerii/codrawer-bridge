@@ -231,6 +231,17 @@ normalized to the screen, not the page, so on a zoomed or scrolled view they mus
 can be compared with `bbox`. A selection's strokes may not be in the snapshot yet (xochitl saves
 6–10 s after a pause). `source` names the injection: `dock` for the toolbar dock, `selection`
 for the lasso's own selection toolbar.
+
+`ask_selection` and `ask_page` may also carry `spot` `[x0, y0, x1, y1]`, the tablet's provisional
+place for the answer (where its thinking doodle already is), and `ask_selection` may carry `ink`,
+the bounds of the selected ink itself (tighter than the lasso). Both are in scene units like
+`bbox`. agentd (`src/codrawer_bridge/agentd/service.py`, `placement.place_at`) starts the answer
+block at `spot`'s top-left when a block fits there under its usual rules (clearance from ink,
+margins, the page limit, other in-flight answers) and then sends its first `thinking` with exactly
+that `spot`, so the doodle does not move. Otherwise it chooses its own place and sends it once.
+A later `thinking` that would move the box by less than 20 units is not sent. `ink` is used as the
+anchor when it lies within the lasso (40 units of slack); without `spot` or `ink`, the behaviour
+is as before.
 `goto_accepted` (with `result`, the extension's reply) says the user tapped a `goto` offer and the
 tablet went there.
 

@@ -255,6 +255,41 @@ def place(
     return best
 
 
+def place_at(
+    occ: Occupancy,
+    blocks: list[Block],
+    anchor: Box,
+    at: tuple[float, float],
+    *,
+    clearance: float = 24.0,
+    margins: tuple[float, float, float, float] = (150.0, 70.0, 60.0, 70.0),
+    page_bottom: float | None = None,
+    max_gap: float | None = None,
+    page_top: float = 0.0,
+) -> Placement | None:
+    """
+    The first of ``blocks`` (largest scale first, then widest) whose top-left at ``at`` (page
+    units) obeys every rule :func:`place` applies: free of ink by ``clearance``, inside the margins
+    and the page, never over the anchor, within ``max_gap`` of it. None when none does: the caller
+    then lets :func:`place` choose. This is how the tablet's proposed spot (where its thinking
+    doodle already is) is honoured, so the answer starts where the user is already looking.
+    """
+    ml, mt, mr, mb = margins
+    mt += page_top
+    bottom = (page_bottom if page_bottom is not None else occ.page_h) - mb
+    x, y = at
+    for b in sorted(blocks, key=lambda b: (-b.scale, -b.w)):
+        rect = (x, y, x + b.w, y + b.h)
+        if x < ml or y < mt or rect[2] > occ.page_w - mr or rect[3] > bottom:
+            continue
+        side, gap, _ = _side(rect, anchor)
+        if side == "inside" or (max_gap is not None and gap > max_gap):
+            continue
+        if occ.free(rect, clearance):
+            return Placement(b, x, y, side, 0.0, occ.page_w, occ.page_h)
+    return None
+
+
 def _steps(lo: float, hi: float, step: float):
     v = lo
     while v <= hi:

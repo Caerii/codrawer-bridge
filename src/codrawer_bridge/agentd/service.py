@@ -577,24 +577,36 @@ class Agentd:
                 # lasso is often drawn much taller than the writing (placement keeps clear of every
                 # stroke on the page). The overlay goes there at once; only when the ink is not
                 # all known yet (an unsaved selection) does it start under the box and move.
+                # The tablet may propose where the answer goes (`spot`, its thinking doodle's
+                # place) and say where the selected ink is (`ink`): honour both when they hold.
+                spot = _scene_box(msg.get("spot"), m.w)  # page units, x from the left edge
+                tablet_ink = _scene_box(msg.get("ink"), m.w)
                 want = int(msg.get("items") or 0) if msg.get("contains_stroke", True) else 0
                 known = m.selected(sel_box)
-                first = _bounds(known) if known and len(known) >= want else sel_box
-                reserved = await self._reserve(first, rec.n)
+                if tablet_ink is not None and _within(
+                    tablet_ink, placement.to_pu(sel_box, m.w, m.h)
+                ):
+                    first = _norm_box(tablet_ink, m.w, m.h)
+                else:
+                    first = _bounds(known) if known and len(known) >= want else sel_box
+                reserved = await self._reserve(first, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
-                    await self._status(rec, "thinking", reserved[0].rect)
+                    await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
                 selected = await self._selection(msg, sel_box, rec)
-                anchor = _bounds(selected) if selected else sel_box
+                anchor = (
+                    first if first is not sel_box else (_bounds(selected) if selected else sel_box)
+                )
                 if anchor != first:
-                    reserved = await self._reserve(anchor, rec.n)
+                    reserved = await self._reserve(anchor, rec.n, at=spot)
                     if reserved is not None and not self.cfg.dry_run:
-                        await self._status(rec, "thinking", reserved[0].rect)
+                        await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
-                reserved = await self._reserve(anchor, rec.n)
+                spot = _scene_box(msg.get("spot"), m.w)
+                reserved = await self._reserve(anchor, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
-                    await self._status(rec, "thinking", reserved[0].rect)
+                    await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
             if not selected:
                 # never ask about (or answer) an empty picture
                 rec.error = "empty selection" if sel_box is not None else "empty page"
@@ -774,7 +786,7 @@ class Agentd:
         return selected
 
     async def _reserve(
-        self, anchor: Box, owner: int | None = None
+        self, anchor: Box, owner: int | None = None, at: Box | None = None
     ) -> tuple[placement.Placement, float, handmod.Metrics] | None:
         """
         A block near ``anchor`` for an answer not yet written: sized for ``TYPICAL_CHARS``
@@ -803,14 +815,18 @@ class Agentd:
         occ = placement.Occupancy(
             [s.pts for s in m.ink()] + self.others_blocks(owner), m.w, m.h, height=_ink_height(m)
         )
-        spot = placement.place(
-            occ,
-            blocks,
-            placement.to_pu(anchor, m.w, m.h),
+        rules = dict(
             page_bottom=_page_bottom(m, self.cfg.max_page_y),
             page_top=_page_top(m),
             max_gap=MAX_GAP_PU,
         )
+        spot = None
+        if at is not None:  # the tablet's proposal: its top-left, if a block fits there
+            spot = placement.place_at(
+                occ, blocks, placement.to_pu(anchor, m.w, m.h), at[:2], **rules
+            )
+        if spot is None:
+            spot = placement.place(occ, blocks, placement.to_pu(anchor, m.w, m.h), **rules)
         if spot is None:
             return None
         if owner is not None:
@@ -863,6 +879,13 @@ class Agentd:
                 [[(cx - 3) / m.w, (y - 3) / m.h, 0.6], [(cx + 3) / m.w, (y + 3) / m.h, 0.6]],
             )
 
+    @staticmethod
+    def _shown_box(spot: placement.Placement, proposed: Box | None) -> Box:
+        """The thinking bbox: the tablet's own when its proposal was honoured (no visible move)."""
+        if proposed is not None and abs(spot.x - proposed[0]) < 1 and abs(spot.y - proposed[1]) < 1:
+            return proposed
+        return spot.rect
+
     async def _status(self, rec: Record, state: str, box_pu: Box) -> None:
         """
         ``agent_status`` (docs/protocol.md): what agentd is doing and where, for an animated,
@@ -872,6 +895,10 @@ class Agentd:
         x0, y0, x1, y1 = box_pu
         half = self.model.w / 2
         bbox = [round(x0 - half, 1), round(y0, 1), round(x1 - half, 1), round(y1, 1)]
+        if state == "thinking" and rec.status_box is not None:
+            # one move at most: a correction under STATUS_SLACK units would only jitter the doodle
+            if max(abs(a - b) for a, b in zip(box_pu, rec.status_box, strict=True)) < STATUS_SLACK:
+                return
         rec.status_box = box_pu
         msg: dict[str, Any] = {
             "t": "agent_status",
@@ -1034,6 +1061,37 @@ TEXT_SIZE = {"micro": 0.42, "tiny": 0.55, "small": 0.7, "medium": 1.0, "large": 
 #: 3.52 mm, so micro (0.42) writes only at its largest scale (1.48 mm), tiny at two (1.93, 1.55).
 MIN_XHEIGHT_MM = 1.45
 FORGET_ID = "agentd_forget"
+
+
+#: Page units: a thinking spot that moves less than this is not sent again.
+STATUS_SLACK = 20.0
+
+
+def _scene_box(box: Any, page_w: float) -> Box | None:
+    """A box from the tablet in scene units (x centred), as page units from the left edge."""
+    if not (isinstance(box, list) and len(box) == 4):
+        return None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    if not (x0 <= x1 and y0 <= y1):
+        return None
+    return (x0 + page_w / 2, y0, x1 + page_w / 2, y1)
+
+
+def _norm_box(box_pu: Box, page_w: float, page_h: float) -> Box:
+    return (box_pu[0] / page_w, box_pu[1] / page_h, box_pu[2] / page_w, box_pu[3] / page_h)
+
+
+def _within(inner: Box, outer: Box, slack: float = 40.0) -> bool:
+    """``inner`` lies inside ``outer`` grown by ``slack`` (page units): ink inside its lasso."""
+    return (
+        inner[0] >= outer[0] - slack
+        and inner[1] >= outer[1] - slack
+        and inner[2] <= outer[2] + slack
+        and inner[3] <= outer[3] + slack
+    )
 
 
 def _bounds(strokes) -> Box:

@@ -525,3 +525,76 @@ def test_no_ink_below_what_the_bridge_accepts(tmp_path):
     assert high is not None
     if low is not None:  # beside it perhaps, but never below the bridge's limit
         assert low[0].rect[3] <= a.cfg.max_page_y * 2160
+
+
+# ── the tablet's proposed spot and ink bounds ───────────────────────────────────────────────
+
+
+def _thinking(sent):
+    return [m for m in sent if m["t"] == "agent_status" and m["state"] == "thinking"]
+
+
+def test_the_tablets_proposed_spot_is_honoured_when_free(tmp_path):
+    async def go():
+        a, sent = _agent(tmp_path)
+        # the selection is the word at y 0.15; the tablet proposes a spot just under it, free
+        spot = [0.2 * W - W / 2, 0.16 * H + 40, 0.2 * W - W / 2 + 600, 0.16 * H + 200]
+        rec = await a.answer({**_tap(0.18, 0.13, 0.33, 0.18), "spot": spot, "items": 1})
+        await a.claude.close()
+        return rec, sent, spot
+
+    rec, sent, spot = asyncio.run(go())
+    th = _thinking(sent)
+    assert len(th) == 1 and th[0]["bbox"] == [round(v, 1) for v in spot]  # the doodle stays put
+    x0, y0 = rec.placement["reserved_pu"][:2]
+    assert abs(x0 - (spot[0] + W / 2)) < 1 and abs(y0 - spot[1]) < 1  # the answer starts there
+
+
+def test_a_colliding_spot_is_overridden_once(tmp_path):
+    async def go():
+        a, sent = _agent(tmp_path)
+        # proposed right on top of the other word on the page (y 0.45): not free
+        spot = [0.2 * W - W / 2, 0.44 * H, 0.2 * W - W / 2 + 600, 0.44 * H + 160]
+        rec = await a.answer({**_tap(0.18, 0.13, 0.33, 0.18), "spot": spot, "items": 1})
+        await a.claude.close()
+        return rec, sent, spot
+
+    rec, sent, spot = asyncio.run(go())
+    th = _thinking(sent)
+    assert len(th) == 1  # one final spot, never two steps
+    assert th[0]["bbox"] != [round(v, 1) for v in spot]
+    x0, y0, x1, y1 = rec.placement["reserved_pu"]
+    word = (0.2 * W, 0.45 * H, 0.3 * W, 0.46 * H)
+    assert x1 <= word[0] or x0 >= word[2] or y1 <= word[1] or y0 >= word[3]
+
+
+def test_small_corrections_of_the_spot_are_not_sent(tmp_path):
+    from codrawer_bridge.agentd.service import Record
+
+    async def go():
+        a, sent = _agent(tmp_path)
+        rec = Record(n=7, kind="ask_selection", received=0.0)
+        await a._status(rec, "thinking", (300.0, 400.0, 900.0, 600.0))
+        await a._status(rec, "thinking", (310.0, 412.0, 905.0, 615.0))  # < 20 units: kept still
+        await a._status(rec, "thinking", (300.0, 500.0, 900.0, 700.0))  # a real move: sent
+        await a.claude.close()
+        return sent
+
+    th = _thinking(asyncio.run(go()))
+    assert [m["bbox"][1] for m in th] == [400.0, 500.0]
+
+
+def test_the_tablets_ink_bounds_are_preferred(tmp_path):
+    from codrawer_bridge.agentd import placement
+
+    async def go():
+        a, sent = _agent(tmp_path)
+        # a tall lasso (to y 0.30) around the word at y 0.15-0.16; the tablet says where the ink is
+        ink = [0.2 * W - W / 2, 0.15 * H, 0.3 * W - W / 2, 0.16 * H]
+        rec = await a.answer({**_tap(0.18, 0.10, 0.36, 0.30), "ink": ink, "items": 1})
+        await a.claude.close()
+        return rec
+
+    rec = asyncio.run(go())
+    y0 = rec.placement["reserved_pu"][1]
+    assert abs(y0 - (0.16 * H + placement.BELOW_GAP)) < 1  # under the ink, not under the lasso
