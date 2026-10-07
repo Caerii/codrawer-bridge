@@ -254,7 +254,9 @@ Item {
                         anchors.fill: parent
                         onClicked: {
                             root.action(modelData.id);
-                            if (modelData.id !== "status") root.open = false;
+                            // status and a row with a badge (a setting that cycles on tap: its
+                            // new value shows here) keep the panel open; any other row closes it
+                            if (modelData.id !== "status" && modelData.badge === undefined) root.open = false;
                         }
                     }
                 }

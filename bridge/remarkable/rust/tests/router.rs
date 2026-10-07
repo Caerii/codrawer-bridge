@@ -621,6 +621,21 @@ async fn non_owner_cannot_delete_user_ink() {
     assert!(m["t"] == "stroke_begin" && m["id"] == "u_1", "the refused delete removed u_1 anyway: {m}");
 }
 
+/// Go: TestSettingsAreRelayed.
+#[tokio::test]
+async fn settings_are_relayed() {
+    let srv = new_server().await;
+    let mut agent = dial(&srv, "s1").await;
+    let mut phone = dial(&srv, "s1").await;
+    send(&mut agent, r#"{"t":"settings","owner":"agentd","values":{"text_size":"medium","spacing":"compact"}}"#).await;
+    let m = read(&mut phone).await;
+    assert!(m["t"] == "settings" && m["owner"] == "agentd", "got {m}");
+    send(&mut phone, r#"{"t":"settings","owner":"agentd","set":{"text_size":"large"}}"#).await;
+    let m = read(&mut agent).await;
+    assert!(m["t"] == "settings" && !m["set"].is_null(), "got {m}");
+    expect_quiet(&mut phone, Duration::from_millis(150)).await;
+}
+
 /// Go: TestDockEntriesWithdrawnWhenOwnerLeaves. An agent's dock entries are relayed; when it
 /// leaves, an empty list goes out for each owner it still had, and not for one it withdrew.
 #[tokio::test]

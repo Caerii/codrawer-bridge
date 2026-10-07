@@ -678,6 +678,22 @@ func TestGotoIsRelayed(t *testing.T) {
 	expectQuiet(t, phone, 150*time.Millisecond)
 }
 
+// An agent's settings (protocol.md, "settings") and a phone's change to them are relayed as sent.
+func TestSettingsAreRelayed(t *testing.T) {
+	srv := newServer(t)
+	agent := dial(t, srv, "s1")
+	phone := dial(t, srv, "s1")
+	send(t, agent, `{"t":"settings","owner":"agentd","values":{"text_size":"medium","spacing":"compact"}}`)
+	if m := read(t, phone); m["t"] != "settings" || m["owner"] != "agentd" {
+		t.Fatalf("got %v", m)
+	}
+	send(t, phone, `{"t":"settings","owner":"agentd","set":{"text_size":"large"}}`)
+	if m := read(t, agent); m["t"] != "settings" || m["set"] == nil {
+		t.Fatalf("got %v", m)
+	}
+	expectQuiet(t, phone, 150*time.Millisecond)
+}
+
 // An agent's dock entries are relayed; when the agent leaves, the router withdraws them for it
 // (an empty list per owner it announced), so the tablet's dock never keeps a dead agent's rows.
 // An owner the agent withdrew itself is not withdrawn again.
