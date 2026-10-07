@@ -406,6 +406,15 @@ void pumpInk() {
             for (const auto &d : dones) d(r);
         };
     }
+    // A fast hand must not build a backlog: one commit takes up to kMaxBatch strokes every
+    // kCommitGapMs (about 40 strokes a second), well above agentd's very fast speed (about 10
+    // letters a second). If jobs still wait after a full batch, say so (at most every 10 s).
+    static qint64 backlogLoggedAt = 0;
+    if (inkQueue().size() >= 8 && nowMs() - backlogLoggedAt >= 10000) {
+        backlogLoggedAt = nowMs();
+        logLine(QStringLiteral("ink: backlog: %1 job(s) still queued after a batch of %2 stroke(s)")
+                    .arg(inkQueue().size()).arg(job.strokes.size()));
+    }
     startCommit(std::move(job));
 }
 

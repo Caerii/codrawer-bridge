@@ -23,7 +23,7 @@ mount=$( (cd "$here" && pwd -W 2> /dev/null) || echo "$here")
 MSYS_NO_PATHCONV=1 docker run --rm -v "$mount:/src:ro" -v "$mount/out/preview:/cap" -w /src \
     -e QT_QPA_PLATFORM=offscreen -e QT_QUICK_BACKEND=software -e LANG=C.UTF-8 -e PREVIEW="$preview" "$image" sh -euc '
     status=0
-    for t in dock live pending done concurrent selection; do
+    for t in dock live pending done concurrent fast selection; do
         for route in native fallback; do
             if [ $route = native ]; then export QML_IMPORT_PATH=/src/tests/qml/stub; else unset QML_IMPORT_PATH; fi
             extra=""

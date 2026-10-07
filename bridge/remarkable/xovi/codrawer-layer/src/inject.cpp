@@ -205,7 +205,8 @@ void dockAction(const QString &source, const QString &id) {
         // The answer's thinking starts here, at once (live.h), not when an agent's first status
         // makes it across the network; if no agent speaks within 8 s, the dock says so.
         const Selection &s = lastSelection();
-        liveLocalThinking(id == QLatin1String("ask_selection") && s.page == page && s.atMs > 0 ? s.rect : QRectF());
+        const QRectF ink = s.inkRect.isValid() && !s.inkRect.isEmpty() ? s.inkRect : s.rect;
+        liveLocalThinking(id == QLatin1String("ask_selection") && s.page == page && s.atMs > 0 ? ink : QRectF());
         const qint64 askedAt = nowMs();
         QTimer::singleShot(8000, QCoreApplication::instance(), [askedAt] {
             if (liveLastAgentStatusMs() >= askedAt) return;

@@ -7,6 +7,7 @@
 #include "toolfollow.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QMetaProperty>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtGui/QTransform>
@@ -39,8 +40,31 @@ void settled() {
 // The lasso as the controller and the view describe it (guibor's map:
 // selectionContainsStroke/Image, the page rect, the selection handler's geometry). Read-only;
 // the first time in a run it also logs the selection menu's item tree, for placing a button.
+// The controller's property for the selected items' bounds: the first QRectF property whose name
+// mentions the selection (logged once with every candidate), or -1.
+int inkBoundsProperty(QObject *c) {
+    static int found = -2;
+    if (found != -2) return found;
+    found = -1;
+    const QMetaObject *mo = c->metaObject();
+    QStringList seen;
+    for (int i = 0; i < mo->propertyCount(); ++i) {
+        const QMetaProperty p = mo->property(i);
+        const QString name = QString::fromLatin1(p.name());
+        if (p.metaType().id() != QMetaType::QRectF || !name.contains(QLatin1String("election"))) continue;
+        seen << name;
+        if (found < 0) found = i;
+    }
+    logLine(QStringLiteral("selection: ink bounds from %1 (QRectF selection properties: %2)")
+                .arg(found >= 0 ? QString::fromLatin1(mo->property(found).name()) : QStringLiteral("none; the signalled rect stands in"),
+                     seen.isEmpty() ? QStringLiteral("none") : seen.join(QStringLiteral(", "))));
+    return found;
+}
+
 void readSelection(QObject *c) {
     Selection &s = selectionFollow().last;
+    const int ink = inkBoundsProperty(c);
+    s.inkRect = ink >= 0 ? c->metaObject()->property(ink).read(c).toRectF() : QRectF();
     s.count = c->property("selectionItemCount").toInt();
     s.containsStroke = c->property("selectionContainsStroke").toBool();
     s.containsImage = c->property("selectionContainsImage").toBool();
@@ -65,8 +89,8 @@ void readSelection(QObject *c) {
         const QVariant tv = tiles ? tiles->property("sceneToViewTransform") : QVariant();
         if (tv.metaType().id() == QMetaType::QTransform) s.viewRect = tv.value<QTransform>().mapRect(s.rect);
     }
-    logLine(QStringLiteral("selection: items=%1 stroke=%2 image=%3 rect %4 -> view %5; pageBorderRect %6")
-                .arg(s.count).arg(s.containsStroke).arg(s.containsImage).arg(show(s.rect), show(s.viewRect), pageRect));
+    logLine(QStringLiteral("selection: items=%1 stroke=%2 image=%3 rect %4 -> view %5; ink %6; pageBorderRect %7")
+                .arg(s.count).arg(s.containsStroke).arg(s.containsImage).arg(show(s.rect), show(s.viewRect), show(QVariant(s.inkRect)), pageRect));
     static bool treeLogged = false;
     if (!treeLogged) {
         treeLogged = true;

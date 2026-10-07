@@ -23,7 +23,15 @@
 // 150-300 ms, so a reply used to appear a letter at a time. Here each stroke's points are played
 // back as they stream in, at the speed they were written: every point carries its protocol
 // timestamp, and each frame draws the stroke up to "now minus a short buffer", interpolating inside
-// the segment it is in, so motion is continuous rather than jumping in point batches. Each panel is
+// the segment it is in, so motion is continuous rather than jumping in point batches. Live strokes
+// play at 20 frames a second (paint costs about 1 ms a frame on the device; each frame draws every
+// segment due by then, so a fast hand advances smoothly), doodles at 10. The buffer behind the
+// newest point adapts: it starts at 70 ms, grows by 20 ms (to 240 at most) each time a stroke
+// still being written runs out of points (and by 10 ms more each half second it stays out: a
+// stream that runs late against its own timestamps), and shrinks by 5 ms (to 60 at least)
+// after each second of steady arrival. When an answer's strokes have all played, the overlay reports the tablet's
+// wall-clock time from the first point's arrival to the last drawn against the hand's own time
+// (the points' timestamps). Each panel is
 // an e-paper Animation region (the fast waveform, created in a try like every xochitl module
 // here); no Pen region: that waveform is the user's pen's own.
 //
@@ -94,8 +102,18 @@ Item {
     // A pending doodle (thinkPending) waited its time and no agent answered.
     signal noAgent()
 
-    readonly property int frameMs: 100     // 10 frames a second
-    readonly property int bufferMs: 140    // playback runs this far behind the newest point
+    readonly property int frameMs: 50      // 20 frames a second while live strokes play
+    readonly property int doodleMs: 100    // doodles keep 10 a second
+    // playback runs this far behind the newest point (ms): adaptive, see "Live ink" above
+    property real bufferMs: 70
+    readonly property real bufferMin: 60
+    readonly property real bufferMax: 240
+    property int steadyFrames: 0
+    property bool lastStarved: false
+    property int starvedFrames: 0
+    property real lastDoodleAt: 0
+    // the answer being played: first arrival (clock ms), the hand's first and last timestamps
+    property var answer: null
     readonly property int handoffMs: 700   // the nib's travel from a doodle to its answer
     readonly property int clearWaitMs: 4000
     readonly property int thinkMaxMs: 120000
@@ -311,8 +329,14 @@ Item {
             strokes[id] = s;
             if (pts.length > 0) s.local0 = Math.max(now, handOffNear(pts[0][0], pts[0][1]));
         }
+        if (!answer) answer = { firstAt: now, handT0: -1, handT1: -1, strokes: 0, starved: 0 };
+        if (s.pts.length === 0) answer.strokes += 1;
         for (let i = 0; i < pts.length; ++i) {
             const p = pts[i];
+            if (p[3] > 0) {
+                if (answer.handT0 < 0 || p[3] < answer.handT0) answer.handT0 = p[3];
+                answer.handT1 = Math.max(answer.handT1, p[3]);
+            }
             const arrival = now - s.local0;
             let due;
             if (p[3] > 0) {
@@ -327,6 +351,7 @@ Item {
         }
         s.panel.ensure(s.bbox);
         updateOffscreen();
+        frames.interval = frameMs;  // 20 a second while strokes play
         frames.start();
     }
 
@@ -353,17 +378,22 @@ Item {
 
     // Plays every stroke up to the current clock; draws the new parts.
     function stepStrokes(now) {
+        let starved = false, live = false;
         for (const id in strokes) {
             const s = strokes[id];
             if (s.pts.length === 0) continue;
             const play = now - s.local0 - bufferMs;
             if (play < 0) continue;
+            if (!s.ended) {
+                live = true;
+                if (play > s.pts[s.pts.length - 1].due) starved = true;  // caught up with a stroke still coming
+            }
             let idx = s.idx;
             while (idx + 1 < s.pts.length && s.pts[idx + 1].due <= play) ++idx;
             let head = null;
             if (idx >= 0 && idx + 1 < s.pts.length) {
                 const a = s.pts[idx], b = s.pts[idx + 1];
-                const f = b.due > a.due ? Math.min(1, (play - a.due) / (b.due - a.due)) : 1;
+                const f = b.due > a.due ? Math.max(0, Math.min(1, (play - a.due) / (b.due - a.due))) : 1;
                 head = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
             }
             // from where the last frame stopped (its interpolated head, or a real point) through
@@ -383,6 +413,33 @@ Item {
             for (let i = 0; i < copy.length; ++i) r = grow(r, copy[i].x, copy[i].y, s.width + 2);
             const w = s.width, c = s.color;
             s.panel.push(function(ctx) { paintStroke(ctx, copy, w, c); }, r);
+        }
+        // the adaptive buffer: grow when starved, shrink after a steady second
+        const wasStarved = lastStarved;
+        lastStarved = starved;
+        if (starved) {
+            // +20 ms when a stall begins; while it lasts (the stream runs late against its own
+            // timestamps), +10 ms every half second more
+            if (!wasStarved) {
+                bufferMs = Math.min(bufferMax, bufferMs + 20);
+                starvedFrames = 0;
+                if (answer) answer.starved += 1;
+            } else if (++starvedFrames >= 500 / frameMs) {
+                bufferMs = Math.min(bufferMax, bufferMs + 10);
+                starvedFrames = 0;
+            }
+            steadyFrames = 0;
+        } else if (live && ++steadyFrames >= 1000 / frameMs) {
+            bufferMs = Math.max(bufferMin, bufferMs - 5);
+            steadyFrames = 0;
+        }
+        // the answer has played out: its wall-clock time against the hand's
+        if (answer && !anyLiveActive()) {
+            const wall = now - answer.firstAt, hand = answer.handT1 - answer.handT0;
+            note("live: answer of " + answer.strokes + " stroke(s) played in " + Math.round(wall) + " ms on the tablet, the hand's own " +
+                 (answer.handT0 >= 0 ? Math.round(hand) + " ms" : "unknown (no timestamps)") + "; buffer now " + Math.round(bufferMs) +
+                 " ms, " + answer.starved + " stall(s)");
+            answer = null;
         }
     }
 
@@ -778,22 +835,29 @@ Item {
 
     Timer {
         id: frames
-        interval: root.frameMs
+        interval: root.doodleMs
         repeat: true
         running: false
         onTriggered: {
+            // 20 frames a second only while a live stroke is still playing; doodles alone need 10
+            const want = root.anyLiveActive() ? root.frameMs : root.doodleMs;
+            if (interval !== want) interval = want;
             root.updateOffscreen();
             if (root.halted) return;
             const now = root.clock();
             if (root.statsSince === 0) root.statsSince = now;
             root.stepStrokes(now);
-            for (const id in root.doodles) root.stepDoodle(root.doodles[id], now);
+            if (now - root.lastDoodleAt >= root.doodleMs - root.frameMs / 2) {
+                root.lastDoodleAt = now;
+                for (const id in root.doodles) root.stepDoodle(root.doodles[id], now);
+            }
             root.framesDrawn += 1;
             if (now - root.statsSince >= 5000) {
                 root.note("frames " + root.framesDrawn + " in " + Math.round(now - root.statsSince) + " ms (" +
                           (root.framesDrawn * 1000 / (now - root.statsSince)).toFixed(1) + " fps), " +
                           Object.keys(root.doodles).length + " doodle(s), " + Object.keys(root.strokes).length +
-                          " live stroke(s), paint " + (root.paintMs / Math.max(1, root.framesDrawn)).toFixed(1) + " ms/frame");
+                          " live stroke(s), paint " + (root.paintMs / Math.max(1, root.framesDrawn)).toFixed(1) + " ms/frame, buffer " +
+                          Math.round(root.bufferMs) + " ms");
                 root.framesDrawn = 0;
                 root.paintMs = 0;
                 root.statsSince = now;

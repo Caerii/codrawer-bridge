@@ -37,6 +37,10 @@ struct Selection {
     QString page;     // the page uuid it was made on
     int arg = -1;     // areaSelected's int (logged: which it is, layer or mode, is not yet known)
     QRectF rect;      // as signalled (page coordinates, see above)
+    // The selected ink's own bounds (page coordinates), when the controller has a QRectF property
+    // naming the selection (found by name at run time and logged once); else invalid, and `rect`
+    // stands in for it. agentd places an answer 36 page units below the ink's bottom.
+    QRectF inkRect;
     int count = 0;    // selectionItemCount
     qint64 atMs = 0;  // when areaSelected came (nowMs); 0 = never
 };
