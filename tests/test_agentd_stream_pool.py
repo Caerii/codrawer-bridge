@@ -308,3 +308,49 @@ def test_a_replace_touches_only_its_own_ask(tmp_path, monkeypatch):
     by_err = sorted((r["error"], r["bbox"][1]) for r in recs)
     assert [e for e, _ in by_err].count("replaced by a newer ask for the same selection") == 1
     assert sum(1 for r in recs if r["answer"]) == 2  # B, and A's replacement
+
+
+def test_the_model_toggle_switches_careful_and_fast(tmp_path, monkeypatch):
+    from codrawer_bridge.agentd import service
+
+    made: list[str] = []
+
+    class FakePool:
+        def __init__(self, cwd, size=2, model="", **kw):
+            made.append(model)
+            self.model = model
+
+        def fill(self):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(service, "ClaudePool", FakePool)
+
+    def agentd():
+        return service.Agentd(
+            service.Config(ws="ws://x", term_cwd=str(tmp_path), backend="claude-stream")
+        )
+
+    async def go():
+        a = agentd()
+        sent: list[dict] = []
+
+        async def send(msg):
+            sent.append(msg)
+            return True
+
+        a.send = send  # type: ignore[method-assign]
+        assert a.speed == "careful" and a.claude.model == "claude-sonnet-5-5"  # the default
+        a.handle({"t": "dock_action", "id": service.MODEL_ID, "doc": "d", "page": "p"})
+        await asyncio.sleep(0.05)
+        assert a.speed == "fast" and a.claude.model == "claude-haiku-4-5-20251001"
+        entries = [m for m in sent if m["t"] == "dock_entries"][-1]["entries"]
+        entry = next(e for e in entries if e["id"] == service.MODEL_ID)
+        assert entry["badge"] == "fast" and "Haiku" in entry["label"]
+        b = agentd()  # kept across a restart
+        assert b.speed == "fast" and b.claude.model == "claude-haiku-4-5-20251001"
+
+    asyncio.run(go())
+    assert made == ["claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"]

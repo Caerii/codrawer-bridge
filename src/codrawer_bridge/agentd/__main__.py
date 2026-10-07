@@ -55,7 +55,16 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
         help="claude-stream: warm `claude -p` processes, the image attached (claude_stream.py; "
         "~1 s warm); even-terminal: the --term-url server, the image Read from a file (~23 s)",
     )
-    ap.add_argument("--model", default="claude-haiku-4-5-20251001", help="for claude-stream")
+    ap.add_argument(
+        "--model",
+        default="claude-sonnet-5-5",
+        help="the 'careful' model (claude-stream; 10/10 handwriting reads on 2026-10-07, ~1.3 s)",
+    )
+    ap.add_argument(
+        "--fast-model",
+        default="claude-haiku-4-5-20251001",
+        help="the 'fast' model, chosen from the dock (7/10 reads, ~0.5 s)",
+    )
     ap.add_argument("--pool", type=int, default=2, help="asks answered at once")
     ap.add_argument(
         "--agent-cwd",
@@ -119,6 +128,7 @@ def config(a: argparse.Namespace) -> Config:
         agent_cwd=a.agent_cwd,
         backend=a.backend,
         model=a.model,
+        fast_model=a.fast_model,
         pool=a.pool,
         state_dir=a.state_dir,
         persona=a.persona,
