@@ -94,6 +94,20 @@ QQuickItem *overlay() {
     o.relay->on(item, Relay::signalNamed(item, "note"), [](void **a) {
         logLine(QStringLiteral("live: %1").arg(*static_cast<QString *>(a[1])));
     });
+    // Idle: nothing shown or playing. The overlay goes entirely, so nothing of ours stays over the
+    // page (the 2026-10-07 incident: a page-covering overlay stopped the user's pen); the next live
+    // op makes a new one.
+    o.relay->on(item, Relay::signalNamed(item, "idle"), [](void **) {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+            Overlay &st = overlayState();
+            if (st.item) st.item->deleteLater();
+            st.item = nullptr;
+            st.view = nullptr;
+            if (st.relay) st.relay->deleteLater();
+            st.relay = nullptr;
+            logLine(QStringLiteral("live: overlay removed (idle)"));
+        }, Qt::QueuedConnection);
+    });
     logLine(QStringLiteral("live: overlay created on %1 (%2x%3)")
                 .arg(QString::fromLatin1(v->metaObject()->className())).arg(v->width()).arg(v->height()));
     return item;
@@ -119,8 +133,15 @@ void liveOp(const QJsonObject &o) {
     const QString op = o.value(QStringLiteral("op")).toString();
     const QString id = o.value(QStringLiteral("id")).toString().left(64);
     if (id.isEmpty()) return;
-    QQuickItem *item = overlay();
-    if (!item) return;
+    // Only something to show makes an overlay; ends and clears go to the existing one, if any
+    // (an overlay made for nothing would never go idle).
+    const bool shows = op == QLatin1String("live") ||
+                       (op == QLatin1String("overlay") && o.value(QStringLiteral("kind")).toString() == QLatin1String("thinking"));
+    QQuickItem *item = shows ? overlay() : overlayState().item.data();
+    if (!item) {
+        if (op == QLatin1String("live_end")) strokes().erase(id);
+        return;
+    }
     const QVariant tv = viewTransform(visibleView());
     if (!tv.isValid()) return;
     const QTransform t = tv.value<QTransform>();

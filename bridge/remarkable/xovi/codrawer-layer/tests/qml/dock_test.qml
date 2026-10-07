@@ -1,6 +1,6 @@
 // Host test of qml/dock.qml (run by qmltest.sh, offscreen, no xochitl). It checks what can be
 // checked without the tablet: the file loads without a warning; the native button, e-paper hint
-// and pen blocker are used when their modules exist (tests/qml/stub: stand-ins) and skipped
+// hint are used when their modules exist (tests/qml/stub: stand-ins) and skipped
 // silently when they do not; the highlight follows the press and the open panel; the panel is an
 // opaque item in the tree with one 112 px row per entry plus the status row; a status tap keeps it
 // open, an action closes it; the badge shows. Prints `dock_test: PASS (native|fallback)` or
@@ -56,11 +56,14 @@ Item {
             const panel = find(d, "codrawer-dock-panel");
             check(panel !== null, "the panel is an item in the tree (not a Popup in the overlay)");
             check(d.width === 112 && d.height === 112, "size follows the anchor item");
+            // the pen guard: closed, nothing of the dock but its 112 px button is visible or takes input
+            const outside = find(d, "codrawer-dock-outside");
+            check(panel && !panel.visible && !panel.enabled, "closed: the panel is hidden and disabled");
+            check(outside && !outside.visible && !outside.enabled, "closed: the outside catcher is hidden and disabled");
             check(!d.highlighted && !d.open, "idle at start");
             if (d.nativeButton) check(d.nativeButton.state === "idle", "native state idle at start");
             if (mode === "native") {
                 check(find(panel, "codrawer-dock-screenmode") !== null, "e-paper Overlay region on the panel");
-                check(find(panel, "codrawer-dock-penblock") !== null, "pen blocked under the panel");
             }
 
             var actions = [];
@@ -78,6 +81,7 @@ Item {
             check(d.open, "status keeps the panel open");
             d.toggle();  // a tap on the button while open: closes it
             check(!d.open && !d.highlighted, "closed by the button");
+            check(!panel.visible && !panel.enabled && !outside.visible && !outside.enabled, "closed again: nothing over the page");
             if (d.nativeButton) check(d.nativeButton.state === "idle", "native state idle after closing");
             d.badge = true;
             check(d.badge, "badge settable");

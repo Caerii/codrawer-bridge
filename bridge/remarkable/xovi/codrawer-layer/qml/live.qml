@@ -1,10 +1,19 @@
 // codrawer's live overlay: agent ink appearing as it is written, and the agent "thinking".
 //
-// Created by codrawer-layer (src/live.h) as a child of the visible DocumentView, filling it; the
-// extension calls the functions below with view coordinates (it maps page units through the tile
-// manager's transform) and logs the `note` signal. Nothing here is drawn into the page and
-// nothing is saved: when a stroke's native line has been committed (src/ink.h), the extension
-// calls liveRemove and the overlay's copy goes.
+// Created by codrawer-layer (src/live.h) as a child of the visible DocumentView when there is
+// something to show, and destroyed when it says `idle`; the extension calls the functions below
+// with view coordinates (it maps page units through the tile manager's transform) and logs the
+// `note` signal. Nothing here is drawn into the page and nothing is saved: when a stroke's native
+// line has been committed (src/ink.h), the extension calls liveRemove and the overlay's copy goes.
+//
+// # The user's pen always wins
+//
+// xochitl's pen does not write where another item covers its scene: the first version of this
+// overlay filled the view at z 1e6 (a zero-input Canvas) and the user's pen stopped writing
+// everywhere until XOVI was turned off (device, 2026-10-07). So the overlay covers only what it
+// draws: the root is zero-sized, the one canvas spans just the union of the live strokes' and the
+// doodle's boxes, nothing takes input (`enabled: false`), and when nothing is shown everything is
+// hidden and the extension destroys the overlay. tests/qml/live_test.qml checks all of it.
 //
 // # Live ink
 //
@@ -12,9 +21,10 @@
 // 150-300 ms, so a reply used to appear a letter at a time. Here each stroke's points are played
 // back as they stream in, at the speed they were written: every point carries its protocol
 // timestamp, and each frame draws the stroke up to "now minus a short buffer", interpolating inside
-// the segment it is in, so motion is continuous rather than jumping in point batches. The stroke's
-// region is marked an e-paper Pen region (xochitl's own fast waveform for ink,
-// docs/investigations/codrawer-animate.md), created in a try like every xochitl module here.
+// the segment it is in, so motion is continuous rather than jumping in point batches. The canvas's
+// area is marked an e-paper Animation region (xochitl's fast waveform for things that move,
+// docs/investigations/codrawer-animate.md), created in a try like every xochitl module here; no
+// Pen region, which is the user's pen's own.
 //
 // # Thinking
 //
@@ -44,11 +54,21 @@ import QtQuick
 
 Item {
     id: root
-    anchors.fill: parent
+    // Zero-sized at the view's origin, so its children's coordinates are view coordinates and the
+    // overlay covers nothing but what it draws. It never takes input. (The first version filled the
+    // view at z 1e6 and blocked the user's pen everywhere on the device, 2026-10-07: xochitl's pen
+    // does not write where another item covers its scene.)
+    x: 0
+    y: 0
+    width: 0
+    height: 0
     z: 1000000
+    enabled: false
 
     property bool paused: false
     signal note(string text)
+    // Nothing is shown or playing any more: the extension destroys the overlay.
+    signal idle()
 
     readonly property int frameMs: 100     // 10 frames a second
     readonly property int bufferMs: 140    // playback runs this far behind the newest point
@@ -75,6 +95,10 @@ Item {
 
     function clock() { return Date.now() - pausedTotal; }
 
+    // The view the overlay sits on (its parent; the root itself is zero-sized).
+    function viewWidth() { return parent ? parent.width : 0; }
+    function viewHeight() { return parent ? parent.height : 0; }
+
     onPausedChanged: {
         if (paused) {
             pausedAt = Date.now();
@@ -95,14 +119,12 @@ Item {
         }
     }
 
-    property var penRegion: null
+    // One e-paper Animation region over what the overlay draws (the canvas's area), never over the
+    // rest of the page: a Pen region of ours could take xochitl's own pen waveform from the user.
     property var animRegion: null
     Component.onCompleted: {
-        penRegion = tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
-                              'Epaper.ScreenModeItem { objectName: "codrawer-live-pen"; visible: false; mode: Epaper.ScreenModeItem.Pen }',
-                              root, "codrawer-live-pen");
         animRegion = tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
-                               'Epaper.ScreenModeItem { objectName: "codrawer-live-anim"; visible: false; mode: Epaper.ScreenModeItem.Animation }',
+                               'Epaper.ScreenModeItem { objectName: "codrawer-live-anim"; visible: false; enabled: false; mode: Epaper.ScreenModeItem.Animation }',
                                root, "codrawer-live-anim");
         tryCreate('import QtQuick\nimport xofm.libs.epaper\n' +
                   'Connections { ignoreUnknownSignals: true; target: typeof EPFramebuffer !== "undefined" ? EPFramebuffer : null\n' +
@@ -164,7 +186,7 @@ Item {
             s.pts.push({ x: p[0], y: p[1], due: due });
             s.bbox = grow(s.bbox, p[0], p[1], width + 4);
         }
-        updateRegions();
+        ensureArea(s.bbox);
         frames.start();
     }
 
@@ -180,7 +202,7 @@ Item {
         if (!s) return;
         delete strokes[id];
         repaint(s.bbox);
-        updateRegions();
+        checkIdle();
     }
 
     // Plays every stroke up to the current clock; draws the new parts.
@@ -240,10 +262,10 @@ Item {
         let cx = x + sz / 2;
         if (w < sz) {
             cx = x + w + sz / 2 + 24;
-            if (cx + sz / 2 > root.width) cx = x - sz / 2 - 24;
+            if (cx + sz / 2 > viewWidth()) cx = x - sz / 2 - 24;
         }
-        cx = Math.max(sz / 2, Math.min(root.width - sz / 2, cx));
-        const cy = Math.max(sz / 2, Math.min(root.height - sz / 2, y + sz / 2));
+        cx = Math.max(sz / 2, Math.min(viewWidth() - sz / 2, cx));
+        const cy = Math.max(sz / 2, Math.min(viewHeight() - sz / 2, y + sz / 2));
         if (think) repaint(think.rect);
         think = { style: (style === "drop" || style === "glyph") ? style : "pen", cx: cx, cy: cy, t0: now,
                   trail: [], rect: null, handoff: null, clearAt: 0, target: null, frames: 0 };
@@ -272,7 +294,7 @@ Item {
         repaint(think.rect);
         note("thinking: ended (" + why + ") after " + think.frames + " frames");
         think = null;
-        updateRegions();
+        checkIdle();
     }
 
     // ---------------------------------------------------------------------------------------
@@ -419,6 +441,11 @@ Item {
             const it = all[i], pts = it.pts || it.fill || [it.dot];
             for (let j = 0; j < pts.length; ++j) r = grow(r, pts[j].x, pts[j].y, (it.width || it.r || 2) + 4);
         }
+        // the canvas covers the doodle's square and, during a hand-off, the flight to its target
+        const home = rect(think.cx - thinkSize / 2, think.cy - thinkSize / 2, think.cx + thinkSize / 2, think.cy + thinkSize / 2);
+        const h = think.handoff;
+        ensureArea(union(union(home, r), h && h.to ? rect(Math.min(h.from.x, h.to.x) - 24, Math.min(h.from.y, h.to.y) - 24,
+                                                           Math.max(h.from.x, h.to.x) + 24, Math.max(h.from.y, h.to.y) + 24) : null));
         const dirty = union(think.rect, r);
         const t = think;
         queue.push(function(ctx) {
@@ -426,9 +453,52 @@ Item {
             for (let i = 0; i < all.length; ++i) paintItem(ctx, all[i]);
         });
         think.rect = r;
+        think.items = all;
         think.frames += 1;
         markDirtyRect(dirty);
-        placeRegion(animRegion, union(r, think.handoff && think.handoff.to ? rect(think.handoff.to.x - 8, think.handoff.to.y - 8, think.handoff.to.x + 8, think.handoff.to.y + 8) : null));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The canvas's area: only where the overlay draws (the union of the live strokes' boxes and
+    // the doodle's), never the whole page. It grows by a margin when something needs more room
+    // (the canvas is reallocated and everything shown is drawn again), and goes when idle.
+
+    property var area: null
+
+    function ensureArea(r) {
+        if (!r) return;
+        if (area && r.x0 >= area.x0 && r.y0 >= area.y0 && r.x1 <= area.x1 && r.y1 <= area.y1) return;
+        const m = 60;
+        area = union(area, rect(Math.floor(r.x0 - m), Math.floor(r.y0 - m), Math.ceil(r.x1 + m), Math.ceil(r.y1 + m)));
+        ink.x = area.x0;
+        ink.y = area.y0;
+        ink.width = area.x1 - area.x0;
+        ink.height = area.y1 - area.y0;
+        ink.visible = true;
+        placeRegion(animRegion, area);
+        // a resized canvas starts empty: draw again all that is shown, then what follows
+        queue = [function(ctx) {
+            ctx.clearRect(area.x0, area.y0, area.x1 - area.x0, area.y1 - area.y0);
+            for (const id in strokes) {
+                const p = drawnPath(strokes[id]);
+                if (p.length > 0) paintStroke(ctx, p.length > 1 ? p : [p[0], p[0]], strokes[id].width, strokes[id].color);
+            }
+            if (think && think.items) for (let i = 0; i < think.items.length; ++i) paintItem(ctx, think.items[i]);
+        }];
+        ink.requestPaint();
+    }
+
+    // Nothing shown and nothing playing: hide everything and tell the extension, which destroys
+    // the overlay (an idle overlay must leave nothing over the page).
+    function checkIdle() {
+        if (think || Object.keys(strokes).length > 0) return;
+        frames.stop();
+        area = null;
+        ink.visible = false;
+        ink.width = 0;
+        ink.height = 0;
+        placeRegion(animRegion, null);
+        root.idle();
     }
 
     // ---------------------------------------------------------------------------------------
@@ -503,29 +573,33 @@ Item {
     }
 
     function markDirtyRect(r) {
-        if (!r) return;
-        ink.markDirty(Qt.rect(Math.floor(r.x0), Math.floor(r.y0), Math.ceil(r.x1 - r.x0) + 1, Math.ceil(r.y1 - r.y0) + 1));
+        if (!r || !area) return;
+        ink.markDirty(Qt.rect(Math.floor(r.x0 - area.x0), Math.floor(r.y0 - area.y0), Math.ceil(r.x1 - r.x0) + 1, Math.ceil(r.y1 - r.y0) + 1));
     }
 
-    function updateRegions() {
-        let r = null;
-        for (const id in strokes) r = union(r, strokes[id].bbox);
-        placeRegion(penRegion, r);
-        if (!think) placeRegion(animRegion, null);
-    }
-
+    // The canvas: view coordinates translated to its area. No input: `enabled: false`, and it is
+    // hidden and empty whenever nothing is shown.
     Canvas {
         id: ink
         objectName: "codrawer-live-canvas"
-        anchors.fill: parent
+        x: 0
+        y: 0
+        width: 0
+        height: 0
+        visible: false
+        enabled: false
         renderTarget: Canvas.Image
         renderStrategy: Canvas.Immediate
         onPaint: (region) => {
+            if (!root.area) return;
             const t0 = Date.now();
             const ctx = getContext("2d");
             const jobs = root.queue;
             root.queue = [];
+            ctx.save();
+            ctx.translate(-root.area.x0, -root.area.y0);
             for (let i = 0; i < jobs.length; ++i) jobs[i](ctx);
+            ctx.restore();
             root.paintMs += Date.now() - t0;
         }
     }
