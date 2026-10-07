@@ -216,6 +216,92 @@ def test_queue_runs_one_at_a_time_per_page_in_order():
     asyncio.run(go())
 
 
+def test_a_second_ask_for_the_same_selection_replaces_the_first():
+    from codrawer_bridge.agentd.queue import REPLACED
+
+    async def go():
+        q = PageQueue()
+        log: list[str] = []
+
+        def job(name: str, secs: float):
+            async def run():
+                log.append(f"start {name}")
+                try:
+                    await asyncio.sleep(secs)
+                except asyncio.CancelledError:
+                    log.append(f"cancelled {name}")
+                    raise
+                log.append(f"end {name}")
+
+            return run
+
+        assert q.submit("p", job("a1", 0.2), sig="A") == 0
+        await asyncio.sleep(0.01)  # a1 is running (its model turn is under way)
+        assert q.submit("p", job("a2", 0.01), sig="A") == REPLACED  # the double tap
+        assert q.submit("p", job("b1", 0.01), sig="B") == 2  # another selection queues
+        assert q.submit("p", job("b2", 0.01), sig="B") == REPLACED  # replaces b1 while waiting
+        await q.drain()
+        assert log == ["start a1", "cancelled a1", "start a2", "end a2", "start b2", "end b2"]
+        assert q.pending("p") == 0
+
+    asyncio.run(go())
+
+
+def test_a_double_tap_gives_one_answer(tmp_path):
+    import json
+
+    from codrawer_bridge.agentd.service import Agentd, Config
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go():
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off"))
+        sent: list[dict] = []
+        asked: list[str] = []
+
+        async def send(msg):
+            sent.append(msg)
+            return True
+
+        async def ask(text, timeout_s=90.0, on_text=None):
+            asked.append(text)
+            await asyncio.sleep(0.3)
+            return Reply(text="A circled word.", ok=True)
+
+        a.send = send  # type: ignore[method-assign]
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
+        a.handle(page_msg([word]))
+        tap = {
+            "t": "dock_action",
+            "id": "ask_selection",
+            "doc": "d",
+            "page": "p1",
+            "bbox": [-500.0, 300.0, -300.0, 360.0],
+        }
+        a.handle(tap)
+        await asyncio.sleep(0.1)  # the first ask is with the model
+        a.handle({**tap, "ts": 2})
+        await a.queue.drain()
+        recs = [json.loads(x) for x in (a.state / "requests.jsonl").read_text().splitlines()]
+        assert [r["error"] for r in recs] == ["replaced by a newer ask for the same selection", ""]
+        assert len(asked) == 2 and recs[1]["answer"] == "A circled word."
+        answers = [m for m in sent if m["t"] == "primer" and m["move"]["text"] == "A circled word."]
+        assert len(answers) == 1  # one answer reaches the glasses
+
+    asyncio.run(go())
+
+
+def test_ask_signature_tells_a_double_tap_from_a_new_lasso():
+    from codrawer_bridge.agentd.service import ask_signature
+
+    tap = {"t": "dock_action", "id": "ask_selection", "bbox": REQ6_BBOX, "ts": 1}
+    again = {**tap, "ts": 2, "source": "selection"}
+    other = {**tap, "bbox": [-505.0, 1500.0, -37.0, 1600.0]}
+    assert ask_signature(tap) == ask_signature(again)
+    assert ask_signature(tap) != ask_signature(other)
+    assert ask_signature({"id": "ask_page"}) == ("ask_page", ())
+
+
 def test_queue_survives_a_failing_job():
     async def go():
         errors: list[BaseException] = []
