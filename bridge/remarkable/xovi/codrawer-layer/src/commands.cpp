@@ -3,6 +3,7 @@
 
 #include "cmdline_qt.h"
 #include "inject.h"
+#include "layerprobe.h"
 #include "log.h"
 #include "navigate.h"
 #include "paths.h"
@@ -54,6 +55,7 @@ void runCommands(const QString &text) {
         else if (c == QLatin1String("linetest")) cmdLineTest();
         else if (c == QLatin1String("pencolor")) cmdPenColor(w);
         else if (c == QLatin1String("stroke")) cmdStroke(w);
+        else if (c == QLatin1String("atomic")) cmdAtomic(w);
         else if (c == QLatin1String("layers")) cmdLayers(w);
         else if (c == QLatin1String("watch")) cmdWatch(w);
         else if (c == QLatin1String("unwatch")) cmdUnwatch();

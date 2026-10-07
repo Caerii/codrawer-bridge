@@ -28,6 +28,8 @@
 #include <QtQuick/QQuickItem>
 
 #include <ctime>
+#include <iterator>
+#include <map>
 #include <sys/stat.h>
 
 namespace cdl {
@@ -139,17 +141,19 @@ void dockAction(const QString &source, const QString &id) {
     }
     const bool ask = id == QLatin1String("ask_page") || id == QLatin1String("ask_selection");
     if (ask) {
-        // A second tap on the same question within 2 s is the same question: one action is sent.
-        static QString lastKey;
-        static qint64 lastAt = 0;
+        // A second tap on the same question (the same action, page and selection box) within 2 s
+        // is the same question: one action is sent. A different selection is a new question and
+        // is sent at once, even while others are still being answered (each gets its own doodle).
+        static std::map<QString, qint64> askedAt;  // key -> nowMs of its last send
         const QString key = id + QLatin1Char(' ') + page + QLatin1Char(' ') +
                             QString::fromUtf8(QJsonDocument(o.value(QStringLiteral("bbox")).toArray()).toJson(QJsonDocument::Compact));
-        if (key == lastKey && nowMs() - lastAt < 2000) {
+        const qint64 now = nowMs();
+        for (auto it = askedAt.begin(); it != askedAt.end();) it = now - it->second >= 2000 ? askedAt.erase(it) : std::next(it);
+        if (askedAt.count(key)) {
             logLine(QStringLiteral("action: %1 again within 2 s; the first one stands, not sent").arg(id));
             return;
         }
-        lastKey = key;
-        lastAt = nowMs();
+        askedAt[key] = now;
     }
     const QByteArray line = QJsonDocument(o).toJson(QJsonDocument::Compact);
     const bool sent = sendToBridge(line);

@@ -23,12 +23,12 @@ mount=$( (cd "$here" && pwd -W 2> /dev/null) || echo "$here")
 MSYS_NO_PATHCONV=1 docker run --rm -v "$mount:/src:ro" -v "$mount/out/preview:/cap" -w /src \
     -e QT_QPA_PLATFORM=offscreen -e QT_QUICK_BACKEND=software -e LANG=C.UTF-8 -e PREVIEW="$preview" "$image" sh -euc '
     status=0
-    for t in dock live pending done selection; do
+    for t in dock live pending done concurrent selection; do
         for route in native fallback; do
             if [ $route = native ]; then export QML_IMPORT_PATH=/src/tests/qml/stub; else unset QML_IMPORT_PATH; fi
             extra=""
             if [ "$PREVIEW" = --preview ] && [ $t = live ] && [ $route = native ]; then extra="-- --capture=/cap"; fi
-            out=$(/usr/lib/qt6/bin/qml tests/qml/${t}_test.qml $extra 2>&1 || true)
+            out=$(timeout 90 /usr/lib/qt6/bin/qml tests/qml/${t}_test.qml $extra 2>&1 || true)  # a hang fails
             echo "$out" | sed "s/^/  [$t $route] /"
             echo "$out" | grep -q "${t}_test: PASS ($route)" || status=1
             # any warning (a line naming a .qml file and a line number) fails the run

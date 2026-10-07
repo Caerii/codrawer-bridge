@@ -22,7 +22,8 @@
 //   lasso sent, the user reported the pen dead from then on, even idle, and on stock xochitl it
 //   wrote again. The page-covering overlay was the one thing of ours over the whole page from that
 //   moment (the dock's panel was hidden), so xochitl evidently does not let the pen write under
-//   another item. Now the overlay's root is zero-sized, its one canvas spans only what it draws,
+//   another item. Now the overlay's root is zero-sized, each thing it draws (a live stroke, a
+//   doodle) has its own small canvas spanning only that,
 //   nothing of it takes input, it uses no Pen region (the user's pen's own), and when nothing is
 //   shown it says `idle` and is destroyed here. Only a live stroke or a thinking overlay makes one.
 //   tests/qml/live_test.qml guards all of this.
@@ -60,10 +61,12 @@ namespace cdl {
 // logged (`live: …`).
 void liveOp(const QJsonObject &op);
 
-// The user just tapped Ask (inject.h): start the thinking doodle at once, as "pending", just below
-// `selection` (page units, x centred; left-aligned, a line's gap down) or, for the whole page (an
-// invalid rect), a third of the way down the screen. The agent's first `overlay` status adopts it;
-// with none in 8 s it shows a "?" and goes (the dock says so: liveLastAgentStatusMs).
+// The user just tapped Ask (inject.h): start a thinking doodle at once, as "pending", just below
+// `selection` (page units, x centred; left-aligned, 80 page units down, agentd's BELOW_GAP) or, for
+// the whole page (an invalid rect), a third of the way down the screen. Each Ask gets its own: the
+// overlay plays any number at once, one per request. An agent's first `overlay` status for a request
+// adopts the nearest pending one; with none in 8 s it shows a "?" and goes (the dock says so:
+// liveLastAgentStatusMs).
 void liveLocalThinking(const QRectF &selection);
 
 // When the last `overlay` status from an agent arrived (nowMs), 0 for never.

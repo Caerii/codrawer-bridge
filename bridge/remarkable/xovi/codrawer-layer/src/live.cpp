@@ -29,7 +29,7 @@ namespace {
 constexpr const char *kLiveQml = "/home/root/xovi/exthome/codrawer-layer/live.qml";
 constexpr int kRemoveAfterMs = 250;   // after the commit: the native line is on screen by then
 constexpr int kForgetAfterMs = 15000; // a stroke whose commit never reports goes anyway
-constexpr double kLineGap = 48;       // page units below a selection where its answer begins
+constexpr double kLineGap = 80;       // page units below a selection where its answer begins (agentd's BELOW_GAP)
 
 qint64 &lastAgentStatusAt() {
     static qint64 t = 0;
@@ -216,21 +216,23 @@ void liveOp(const QJsonObject &o) {
         const QRectF page = b.size() == 4 ? QRectF(QPointF(b[0].toDouble(), b[1].toDouble()), QPointF(b[2].toDouble(), b[3].toDouble()))
                                           : QRectF();
         const QRectF r = page;  // the overlay works in page units
+        // Every call names the request (`id`): several answers can be thinking at once, each with
+        // its own doodle (qml/live.qml).
         if (kind == QLatin1String("clear") && o.value(QStringLiteral("state")).toString() == QLatin1String("done")) {
             // never just vanish: a tick when answered, else the agent's note as a brief caption
             const QJsonValue ok = o.value(QStringLiteral("ok"));
-            invoke(item, "thinkDone", {ok.isBool() ? QVariant(ok.toBool()) : QVariant(), o.value(QStringLiteral("note")).toString(),
+            invoke(item, "thinkDone", {id, ok.isBool() ? QVariant(ok.toBool()) : QVariant(), o.value(QStringLiteral("note")).toString(),
                                        b.size() == 4 ? QVariant(r.left()) : QVariant(), b.size() == 4 ? QVariant(r.bottom()) : QVariant()});
             return;
         }
         if (kind == QLatin1String("clear")) {
             // writing: the answer block's top left is where the nib flies if no live ink comes
-            if (b.size() == 4) invoke(item, "thinkClear", {r.left(), r.top()});
-            else invoke(item, "thinkClear", {QVariant(), QVariant()});
+            if (b.size() == 4) invoke(item, "thinkClear", {id, r.left(), r.top()});
+            else invoke(item, "thinkClear", {id, QVariant(), QVariant()});
             return;
         }
         if (kind != QLatin1String("thinking") || b.size() != 4) return;
-        invoke(item, "thinkStart", {r.x(), r.y(), r.width(), r.height(), o.value(QStringLiteral("style")).toString()});
+        invoke(item, "thinkStart", {id, r.x(), r.y(), r.width(), r.height(), o.value(QStringLiteral("style")).toString()});
     }
 }
 
