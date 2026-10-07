@@ -129,6 +129,7 @@ class Record:
     items: int = 0  # how many items the lasso held (dock_action)
     waited_s: float = 0.0  # waiting for the tablet to save the selection
     status_note: str = ""  # the one line the dock's status row shows at `done` (protocol.md)
+    retry_of: dict[str, Any] | None = None  # the failed first turn, when it was retried
     chunks: list[dict[str, Any]] = field(default_factory=list)  # what was written, chunk by chunk
 
 
@@ -456,9 +457,20 @@ class Agentd:
                     _page_bottom(m),
                 )
             async with self._turn:
+                t_turn = time.monotonic()
                 reply = await self.terminal.ask(
                     rec.prompt, self.cfg.timeout_s, on_text=stream.feed if stream else None
                 )
+                left = self.cfg.timeout_s - (time.monotonic() - t_turn)
+                if reply.error and not (stream and stream.written) and left > RETRY_MIN_S:
+                    # a failed turn (e.g. "[ede_diagnostic] … stop_reason=tool_use") is retried
+                    # once, on a fresh session (terminal.py starts one after any failure)
+                    log.info("request %d: %s; retrying on a fresh session", n, reply.error[:80])
+                    first = reply
+                    reply = await self.terminal.ask(
+                        rec.prompt, left, on_text=stream.feed if stream else None
+                    )
+                    rec.retry_of = {k: v for k, v in asdict(first).items() if k != "text"}
             rec.reply = {k: v for k, v in asdict(reply).items() if k != "text"}
             rec.reply["raw"] = reply.text
             text = prompt.clean_answer(reply.text) if reply.text and not reply.error else ""
@@ -729,6 +741,9 @@ MIN_MEASURE_MM = 70.0
 REPLAY_WINDOW_S = 3.0
 STALE_TAP_S = 10.0
 DEBOUNCE_S = 1.5
+
+#: A failed turn is retried only with at least this much of the timeout left (seconds).
+RETRY_MIN_S = 30.0
 
 
 def _bounds(strokes) -> Box:
