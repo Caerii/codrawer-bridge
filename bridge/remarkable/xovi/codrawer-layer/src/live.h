@@ -37,9 +37,13 @@
 //
 // # Units
 //
-// Socket points are page units (x centred; line_layout.h); the overlay works in the
-// DocumentView's own coordinates, through the tile manager's sceneToViewTransform at the time each
-// point arrives. Widths scale with the zoom.
+// Socket points are page units (x centred; line_layout.h), and so is everything inside the
+// overlay: it is anchored to the paper. Its root is placed with the tile manager's
+// sceneToViewTransform (x, y = the offset, scale = the zoom) when made and at every change of that
+// transform (its notify signal), so the doodle and the live strokes stay where they are on the page
+// while it scrolls or zooms, without repainting; and it is told which page area is on screen, so it
+// stops moving while what it draws is wholly scrolled away (as the user asked, 2026-10-07: "the
+// place where the answer is loading should stay in the absolute position it was in the paper").
 //
 // # Threading
 //
@@ -47,6 +51,7 @@
 #pragma once
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QRectF>
 #include <QtCore/QString>
 
 namespace cdl {
@@ -54,6 +59,15 @@ namespace cdl {
 // A `live`, `live_end` or `overlay` op from the bridge (inksock.h). Replies nothing: errors are
 // logged (`live: …`).
 void liveOp(const QJsonObject &op);
+
+// The user just tapped Ask (inject.h): start the thinking doodle at once, as "pending", just below
+// `selection` (page units, x centred; left-aligned, a line's gap down) or, for the whole page (an
+// invalid rect), a third of the way down the screen. The agent's first `overlay` status adopts it;
+// with none in 8 s it shows a "?" and goes (the dock says so: liveLastAgentStatusMs).
+void liveLocalThinking(const QRectF &selection);
+
+// When the last `overlay` status from an agent arrived (nowMs), 0 for never.
+qint64 liveLastAgentStatusMs();
 
 // The commit chain's verdict for the stroke line `id` (ink.h, via inksock): the overlay copy goes
 // a moment later, once the native line is on screen.

@@ -2,7 +2,7 @@
 //
 // Created by codrawer-layer (src/live.h) as a child of the visible DocumentView when there is
 // something to show, and destroyed when it says `idle`; the extension calls the functions below
-// with view coordinates (it maps page units through the tile manager's transform) and logs the
+// in page units (the root is placed with the tile manager's transform, see below) and logs the
 // `note` signal. Nothing here is drawn into the page and nothing is saved: when a stroke's native
 // line has been committed (src/ink.h), the extension calls liveRemove and the overlay's copy goes.
 //
@@ -45,6 +45,12 @@
 // the stroke starts to write as the nib arrives. A `clear` (the agent is writing or done) waits up
 // to 4 s for that first stroke, then the doodle dissolves on its own; it also ends after 120 s.
 //
+// It starts the moment the user taps Ask (thinkPending, from the extension), not when the agent's
+// first status arrives over the network, which took seconds on the device: a provisional doodle
+// just below the selection, which the agent's status adopts (the doodle glides to the agent's
+// spot). If no agent answers within 8 s, the doodle dissolves into a calm "?" and goes, and the
+// extension says "no agent answered" in the dock's status row.
+//
 // Everything stops while `paused` (the user's pen or finger is on the page) and resumes where it
 // was, with the clock shifted, so nothing jumps.
 //
@@ -54,21 +60,35 @@ import QtQuick
 
 Item {
     id: root
-    // Zero-sized at the view's origin, so its children's coordinates are view coordinates and the
-    // overlay covers nothing but what it draws. It never takes input. (The first version filled the
-    // view at z 1e6 and blocked the user's pen everywhere on the device, 2026-10-07: xochitl's pen
-    // does not write where another item covers its scene.)
+    // Zero-sized, so the overlay covers nothing but what it draws, and it never takes input. (The
+    // first version filled the view at z 1e6 and blocked the user's pen everywhere on the device,
+    // 2026-10-07: xochitl's pen does not write where another item covers its scene.)
+    //
+    // Anchored to the paper: everything inside is in page units (x centred, y down from the top),
+    // and the extension places this root with the tile manager's sceneToViewTransform (x, y = its
+    // offset, scale = its zoom; src/live.h), again whenever that changes. So the doodle and the
+    // live strokes stay where they are on the page while it scrolls or zooms, without repainting.
     x: 0
     y: 0
     width: 0
     height: 0
+    scale: 1
+    transformOrigin: Item.TopLeft
     z: 1000000
     enabled: false
 
     property bool paused: false
+    // The page area on screen, in page units (set by the extension with the transform). While what
+    // the overlay draws lies wholly outside it, nothing moves: the clock stops, as when paused.
+    property rect visibleArea: Qt.rect(-100000, -100000, 200000, 200000)
+    readonly property bool offscreen: area !== null && !(area.x0 < visibleArea.x + visibleArea.width && visibleArea.x < area.x1 &&
+                                                         area.y0 < visibleArea.y + visibleArea.height && visibleArea.y < area.y1)
+    readonly property bool halted: paused || offscreen
     signal note(string text)
     // Nothing is shown or playing any more: the extension destroys the overlay.
     signal idle()
+    // A pending doodle (thinkPending) waited its time and no agent answered.
+    signal noAgent()
 
     readonly property int frameMs: 100     // 10 frames a second
     readonly property int bufferMs: 140    // playback runs this far behind the newest point
@@ -95,12 +115,12 @@ Item {
 
     function clock() { return Date.now() - pausedTotal; }
 
-    // The view the overlay sits on (its parent; the root itself is zero-sized).
-    function viewWidth() { return parent ? parent.width : 0; }
-    function viewHeight() { return parent ? parent.height : 0; }
+    // The page's bounds in page units (the Paper Pro page; a longer page extends downwards).
+    readonly property real pageLeft: -810
+    readonly property real pageRight: 810
 
-    onPausedChanged: {
-        if (paused) {
+    onHaltedChanged: {
+        if (halted) {
             pausedAt = Date.now();
         } else if (pausedAt > 0) {
             pausedTotal += Date.now() - pausedAt;
@@ -160,8 +180,8 @@ Item {
     // ---------------------------------------------------------------------------------------
     // Live ink: the API.
 
-    // New points of stroke `id`: [[x, y, pressure, t ms (0: none)], ...] in view px; `width` in
-    // view px; `color` "#rrggbb".
+    // New points of stroke `id`: [[x, y, pressure, t ms (0: none)], ...] in page units; `width` in
+    // page px; `color` "#rrggbb".
     function liveAdd(id, pts, width, color) {
         const now = clock();
         let s = strokes[id];
@@ -252,7 +272,7 @@ Item {
     // ---------------------------------------------------------------------------------------
     // Thinking: the API.
 
-    // Start at the spot the answer will take (x, y, w, h in view px: agent_status's bbox, the
+    // Start at the spot the answer will take (x, y, w, h in page units: agent_status's bbox, the
     // reserved answer block, or the selection when agent ink is off). style: pen | drop | glyph.
     function thinkStart(x, y, w, h, style) {
         const now = clock();
@@ -262,15 +282,39 @@ Item {
         let cx = x + sz / 2;
         if (w < sz) {
             cx = x + w + sz / 2 + 24;
-            if (cx + sz / 2 > viewWidth()) cx = x - sz / 2 - 24;
+            if (cx + sz / 2 > pageRight) cx = x - sz / 2 - 24;
         }
-        cx = Math.max(sz / 2, Math.min(viewWidth() - sz / 2, cx));
-        const cy = Math.max(sz / 2, Math.min(viewHeight() - sz / 2, y + sz / 2));
+        cx = Math.max(pageLeft + sz / 2, Math.min(pageRight - sz / 2, cx));
+        const cy = Math.max(sz / 2, y + sz / 2);
+        if (think && think.pending && !think.handoff && !think.noAgent) {
+            // the agent answers the request this doodle was started for: keep it, and glide to
+            // where the agent says the answer goes
+            think.pending = false;
+            think.move = { fx: think.cx, fy: think.cy, tx: cx, ty: cy, t0: now };
+            note("thinking: adopted by the agent, to " + Math.round(cx) + "," + Math.round(cy));
+            frames.start();
+            return;
+        }
         if (think) repaint(think.rect);
         think = { style: (style === "drop" || style === "glyph") ? style : "pen", cx: cx, cy: cy, t0: now,
-                  trail: [], rect: null, handoff: null, clearAt: 0, target: null, frames: 0 };
+                  trail: [], rect: null, handoff: null, clearAt: 0, target: null, frames: 0,
+                  pending: false, move: null, noAgent: 0, done: null };
         note("thinking: " + think.style + " at " + Math.round(cx) + "," + Math.round(cy));
         frames.start();
+    }
+
+    // Started on the tablet the moment the user taps Ask, before any agent has said a word (the
+    // link to the agent can take seconds): a provisional doodle at (x, y, w, h) that the agent's
+    // first status adopts. If none comes within pendingMs, a calm "?" says so and the doodle goes.
+    readonly property int pendingMs: 8000
+    property int pendingLimitMs: pendingMs  // tests shorten it
+    function thinkPending(x, y, w, h, style) {
+        if (think && !think.pending) return;  // an agent is already thinking here
+        if (think) repaint(think.rect);
+        think = null;
+        thinkStart(x, y, w, h, style);
+        think.pending = true;
+        note("thinking: pending (no agent yet)");
     }
 
     // The agent is writing or done: hand off to the first live stroke, or after 4 s fly to (tx, ty)
@@ -279,6 +323,31 @@ Item {
         if (!think) return;
         if (!think.clearAt) think.clearAt = clock();
         if (typeof tx === "number" && typeof ty === "number") think.target = { x: tx, y: ty };
+    }
+
+    // The agent is done (agent_status `done`). Never just vanish: with `ok` and the doodle still
+    // up (no ink came, e.g. a text answer), it dissolves into a small tick; with !ok, `note` (e.g.
+    // "Answered on your glasses") appears as a brief caption at the spot, then fades. (x, y) in
+    // page units: where the caption goes when no doodle is up (the agent's bbox), may be undefined.
+    function thinkDone(ok, note, x, y) {
+        const text = (typeof note === "string") ? note : "";
+        let at = think ? { x: think.cx - thinkSize / 2, y: think.cy + thinkSize / 2 } : null;
+        if (!at && typeof x === "number" && typeof y === "number") at = { x: x, y: y };
+        if (think && !think.handoff && !think.done) {
+            think.done = { ok: ok !== false, t0: clock() };
+            frames.start();
+        }
+        if (ok === false && text !== "" && at) showCaption(text, at.x, at.y);
+    }
+
+    function showCaption(text, x, y) {
+        caption.text = text;
+        caption.x = x;
+        caption.y = y;
+        caption.opacity = 1;
+        caption.visible = true;
+        captionTimer.restart();
+        note("caption: " + text);
     }
 
     // The nib leaves the doodle for (x, y), where the answer begins.
@@ -332,6 +401,16 @@ Item {
         const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
         const erf = z >= 0 ? y : -y;
         return Math.min(1, Math.max(0, 0.5 * (1 + erf) / 0.98));
+    }
+
+    // A tick at (cx, cy), drawn to fraction u (0..1) of its length.
+    function tickPoints(cx, cy, u) {
+        const a = { x: cx - 16, y: cy }, b = { x: cx - 4, y: cy + 13 }, c = { x: cx + 20, y: cy - 15 };
+        const l1 = Math.hypot(b.x - a.x, b.y - a.y), l2 = Math.hypot(c.x - b.x, c.y - b.y);
+        const d = u * (l1 + l2);
+        if (d <= l1) return [a, { x: a.x + (b.x - a.x) * d / l1, y: a.y + (b.y - a.y) * d / l1 }];
+        const f = (d - l1) / l2;
+        return [a, b, { x: b.x + (c.x - b.x) * f, y: b.y + (c.y - b.y) * f }];
     }
 
     function spiralPoints(cx, cy) {
@@ -411,6 +490,39 @@ Item {
         if (!think) return;
         const tau = (now - think.t0) / 1000;
         if (now - think.t0 > thinkMaxMs) return thinkEnd("timeout");
+        // adopted: glide to the agent's spot (eased, 600 ms); the doodle keeps moving meanwhile
+        if (think.move) {
+            const m = think.move, u = Math.min(1, (now - m.t0) / 600), e = u * u * (3 - 2 * u);
+            think.cx = m.fx + (m.tx - m.fx) * e;
+            think.cy = m.fy + (m.ty - m.fy) * e;
+            if (u >= 1) think.move = null;
+        }
+        // nobody answered: dissolve the doodle (0.8 s), show a calm "?" (2.4 s), end
+        if (think.pending && !think.noAgent && now - think.t0 > pendingLimitMs) {
+            think.noAgent = now;
+            note("thinking: no agent answered in " + Math.round(pendingLimitMs / 1000) + " s");
+            root.noAgent();
+        }
+        // done: dissolve the doodle (0.8 s); when answered, a tick is drawn in (2.4 s in all)
+        if (think.done && !think.noAgent) {
+            const since = now - think.done.t0;
+            if (since > (think.done.ok ? 2400 : 800)) return thinkEnd(think.done.ok ? "done" : "done elsewhere");
+            const extra = [];
+            if (think.done.ok && since > 500) extra.push({ pts: tickPoints(think.cx, think.cy, Math.min(1, (since - 500) / 400)), width: 3 });
+            return paintThink(now, doodle(tau, Math.max(0, 1 - since / 800)).concat(extra));
+        }
+        if (think.noAgent) {
+            const since = now - think.noAgent;
+            if (since > 3200) return thinkEnd("no agent");
+            const fade = Math.max(0, 1 - since / 800);
+            const extra = [];
+            if (since > 600) {
+                const q = questionPoints(think.cx, think.cy);
+                extra.push({ pts: q, width: 2.6 });
+                extra.push({ dot: { x: think.cx, y: think.cy + 30 }, r: 3 });
+            }
+            return paintThink(now, doodle(tau, fade).concat(extra));
+        }
         if (think.clearAt && !think.handoff && now - think.clearAt > clearWaitMs) {
             think.handoff = { from: think.trail.length ? think.trail[think.trail.length - 1] : { x: think.cx, y: think.cy },
                               to: think.target || null, t0: now, path: [] };
@@ -435,7 +547,11 @@ Item {
             }
             if (u >= 1) return thinkEnd(h.to ? "hand-off" : "cleared");
         }
-        const all = doodle(tau, scale).concat(items);
+        paintThink(now, doodle(tau, scale).concat(items));
+    }
+
+    // Queues one frame of the thinking piece: `all` replaces the last frame's items.
+    function paintThink(now, all) {
         let r = null;
         for (let i = 0; i < all.length; ++i) {
             const it = all[i], pts = it.pts || it.fill || [it.dot];
@@ -490,8 +606,10 @@ Item {
 
     // Nothing shown and nothing playing: hide everything and tell the extension, which destroys
     // the overlay (an idle overlay must leave nothing over the page).
+    function isIdle() { return !think && Object.keys(strokes).length === 0 && !caption.visible; }
+
     function checkIdle() {
-        if (think || Object.keys(strokes).length > 0) return;
+        if (!isIdle()) return;
         frames.stop();
         area = null;
         ink.visible = false;
@@ -577,7 +695,7 @@ Item {
         ink.markDirty(Qt.rect(Math.floor(r.x0 - area.x0), Math.floor(r.y0 - area.y0), Math.ceil(r.x1 - r.x0) + 1, Math.ceil(r.y1 - r.y0) + 1));
     }
 
-    // The canvas: view coordinates translated to its area. No input: `enabled: false`, and it is
+    // The canvas: page units translated to its area. No input: `enabled: false`, and it is
     // hidden and empty whenever nothing is shown.
     Canvas {
         id: ink
@@ -604,13 +722,41 @@ Item {
         }
     }
 
+    // The done caption (thinkDone with !ok and a note): page units like everything here, no input,
+    // shown 4 s, faded out in 0.6 s, then gone (and the overlay may go idle).
+    Text {
+        id: caption
+        objectName: "codrawer-live-caption"
+        visible: false
+        enabled: false
+        width: 560
+        wrapMode: Text.Wrap
+        font.pixelSize: 28
+        color: "black"
+        NumberAnimation on opacity {
+            id: captionFade
+            running: false
+            to: 0
+            duration: 600
+            onFinished: {
+                caption.visible = false;
+                root.checkIdle();
+            }
+        }
+    }
+    Timer {
+        id: captionTimer
+        interval: 4000
+        onTriggered: captionFade.start()
+    }
+
     Timer {
         id: frames
         interval: root.frameMs
         repeat: true
         running: false
         onTriggered: {
-            if (root.paused) return;
+            if (root.halted) return;
             const now = root.clock();
             if (root.statsSince === 0) root.statsSince = now;
             root.stepStrokes(now);
