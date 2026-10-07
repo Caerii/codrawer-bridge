@@ -2,11 +2,19 @@
 The answer in handwriting: ``packages/hand`` writes it, agentd places and paces it.
 
 **Why a layout request.** Where an answer fits depends on its block's size, and the size on the
-wrap width. ``packages/hand/scripts/layouts.ts`` simulates the text once per requested width in
-one Node process (~0.8 s to start, ~0.6 s per width for 100 characters), and returns the strokes
-in millimetres from the start of the first baseline, with the hand's own timing (ms). The
-persona's motor plan, tremor and pressure are its business (packages/hand/README.md); a calm one
-suits an answer: ``archivist`` (upright print) by default, ``sketcher`` (cursive) on request.
+wrap width. ``packages/hand/scripts/layouts.ts`` simulates the text once per requested width and
+returns the strokes in millimetres from the start of the first baseline, with the hand's own
+timing (ms). The persona's motor plan, tremor and pressure are its business
+(packages/hand/README.md); a calm one suits an answer: ``archivist`` (upright print) by
+default, ``sketcher`` (cursive) on request.
+
+**A warm worker.** Starting Node and compiling the TypeScript costs ~0.8 s, and agentd used to
+pay it on every answer (with three widths, 4–5 s before the first stroke on 2026-10-06).
+:class:`HandWorker` keeps one ``layouts.ts --serve`` process running (node with tsx's CLI
+directly, so stopping it stops Node too), one request per line, restarted if it dies; the
+one-shot :func:`layouts` (via pnpm) remains for scripts. :meth:`HandWorker.metrics` measures
+the persona once (millimetres per character, line pitch), so a block can be sized before the
+text exists.
 
 **From millimetres to the page** (packages/hand/src/protocol.ts, the same mapping): a Paper Pro
 page is 179.6 × 239.5 mm, so ``x_norm = origin_x + scale · x_mm / 179.6`` and likewise for y over
@@ -108,8 +116,119 @@ def layouts(
     ]
 
 
-async def layouts_async(text: str, **kw) -> list[Layout]:
-    return await asyncio.to_thread(layouts, text, **kw)
+def _parse(data: dict) -> list[Layout]:
+    if "error" in data:
+        raise HandUnavailable(str(data["error"])[:300])
+    return [
+        Layout(
+            width_mm=float(lay["width"]),
+            bbox_mm=tuple(lay["bbox"]),  # type: ignore[arg-type]
+            duration_ms=float(lay["duration"]),
+            strokes=[(float(s["down"]), float(s["up"]), s["pts"]) for s in lay["strokes"]],
+        )
+        for lay in data["layouts"]
+    ]
+
+
+@dataclass(frozen=True)
+class Metrics:
+    """
+    A persona's writing at scale 1, in mm: advance per character, line pitch, and the ink above
+    and below the baseline (``ascent`` negative, since the layout's y grows down the page).
+    """
+
+    mm_per_char: float
+    pitch: float
+    ascent: float
+    descent: float
+
+
+class HandWorker:
+    """One warm ``layouts.ts --serve`` process (module docstring)."""
+
+    def __init__(self, repo: Path = REPO, timeout_s: float = 30.0) -> None:
+        self.repo = repo
+        self.timeout_s = timeout_s
+        self._proc: asyncio.subprocess.Process | None = None
+        self._lock = asyncio.Lock()
+        self._metrics: dict[str, Metrics] = {}
+
+    def _cmd(self) -> list[str]:
+        cli = self.repo / "packages" / "hand" / "node_modules" / "tsx" / "dist" / "cli.mjs"
+        node = shutil.which("node")
+        if not node or not cli.exists():
+            raise HandUnavailable("node or packages/hand/node_modules/tsx missing (pnpm install)")
+        return [node, str(cli), "scripts/layouts.ts", "--serve"]
+
+    async def start(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            return
+        self._proc = await asyncio.create_subprocess_exec(
+            *self._cmd(),
+            cwd=self.repo / "packages" / "hand",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            limit=2**26,
+        )
+        assert self._proc.stdout is not None
+        line = await asyncio.wait_for(self._proc.stdout.readline(), self.timeout_s)
+        if not line or not json.loads(line).get("ready"):
+            raise HandUnavailable("layouts.ts --serve did not start")
+
+    async def close(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            self._proc.kill()
+            await self._proc.wait()
+        self._proc = None
+
+    async def layouts(
+        self,
+        text: str,
+        persona: str = "archivist",
+        widths: tuple[float, ...] = (80.0,),
+        seed: int = 7,
+    ) -> list[Layout]:
+        """As :func:`layouts`, through the warm process (started, or restarted once, as needed)."""
+        req = json.dumps({"text": text, "persona": persona, "seed": seed, "widths": list(widths)})
+        async with self._lock:
+            for attempt in range(2):
+                try:
+                    await self.start()
+                    assert self._proc is not None and self._proc.stdin and self._proc.stdout
+                    self._proc.stdin.write(req.encode("utf-8") + b"\n")
+                    await self._proc.stdin.drain()
+                    line = await asyncio.wait_for(self._proc.stdout.readline(), self.timeout_s)
+                    if not line:
+                        raise HandUnavailable("layouts.ts --serve exited")
+                    return _parse(json.loads(line))
+                except (TimeoutError, OSError, ValueError, HandUnavailable) as e:
+                    await self.close()
+                    if attempt:
+                        raise HandUnavailable(f"worker: {e}") from e
+        raise HandUnavailable("unreachable")
+
+    async def metrics(self, persona: str) -> Metrics:
+        """The persona's character advance and line pitch, measured once (three short layouts)."""
+        if persona in self._metrics:
+            return self._metrics[persona]
+        sample = "the quick brown fox jumps over the lazy dog"
+        one = (await self.layouts(sample, persona, (1000.0,)))[0]
+        x1 = (await self.layouts("x", persona, (1000.0,)))[0]
+        x2 = (await self.layouts("x\nx", persona, (1000.0,)))[0]
+        m = Metrics(
+            mm_per_char=(one.bbox_mm[2] - min(one.bbox_mm[0], 0.0)) / len(sample),
+            pitch=max(1.0, x2.bbox_mm[3] - x1.bbox_mm[3]),
+            ascent=one.bbox_mm[1],
+            descent=one.bbox_mm[3],
+        )
+        self._metrics[persona] = m
+        return m
+
+
+def lines_in(layout: Layout, pitch: float) -> int:
+    """How many lines a layout holds, from its depth below the first baseline (``pitch`` mm)."""
+    return 1 + max(0, round(layout.bbox_mm[3] / pitch)) if layout.strokes else 0
 
 
 def to_messages(

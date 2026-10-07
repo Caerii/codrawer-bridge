@@ -179,6 +179,7 @@ def place(
     step: float = 18.0,
     page_bottom: float | None = None,
     max_gap: float | None = None,
+    page_top: float = 0.0,
 ) -> Placement | None:
     """
     The cheapest free position for any of ``blocks`` (module docstring), or None when none fits.
@@ -190,9 +191,12 @@ def place(
     Never past it, since a reply below the page's end would be off screen or would grow the page.
     So a selection at the bottom edge gets its answer beside it (right, then left), above it, or
     smaller, before anywhere else. With ``max_gap``, a block farther than that from the anchor
-    counts as not fitting (the caller then answers on the glasses only).
+    counts as not fitting (the caller then answers on the glasses only). ``page_top`` (page
+    units) keeps the block below the top of the screen when the user has scrolled down; the
+    caller passes the screen's bottom as ``page_bottom`` then (xochitl grows the page there).
     """
     ml, mt, mr, mb = margins
+    mt += page_top
     W = occ.page_w
     bottom = (page_bottom if page_bottom is not None else occ.page_h) - mb
     best: Placement | None = None
