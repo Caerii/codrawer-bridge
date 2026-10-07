@@ -128,6 +128,7 @@ class Record:
     live_user: int = 0  # the tablet's pen strokes not yet in a snapshot, at the request
     items: int = 0  # how many items the lasso held (dock_action)
     waited_s: float = 0.0  # waiting for the tablet to save the selection
+    status_note: str = ""  # the one line the dock's status row shows at `done` (protocol.md)
     chunks: list[dict[str, Any]] = field(default_factory=list)  # what was written, chunk by chunk
 
 
@@ -160,6 +161,9 @@ class Agentd:
         self._ink_checked = 0.0
         self._tasks: set[asyncio.Task] = set()
         self.hand = handmod.HandWorker()  # warm layouts.ts (hand.py), started by run()
+        self._joined_at = 0.0  # monotonic s of the latest join (replayed taps are not taps)
+        self._last_tap: dict[tuple, float] = {}  # ask signature -> monotonic s (debounce)
+        self._open_status: dict[str, tuple] = {}  # agent_status id -> page-unit box, until done
 
     # ── the connection ─────────────────────────────────────────────────────────────────────
 
@@ -179,14 +183,19 @@ class Agentd:
                 async with websockets.connect(
                     self._url(),
                     open_timeout=self.cfg.open_timeout_s,
-                    ping_interval=20,
-                    ping_timeout=40,
+                    # a router restart (the tablet's bridge hosts it) leaves a half-open socket;
+                    # 2026-10-06 the old 20 s / 40 s keepalive took 54 s to notice, and the
+                    # taps made meanwhile reached nobody
+                    ping_interval=5,
+                    ping_timeout=10,
                     max_size=2**25,
                 ) as ws:
                     self._ws = ws
+                    self._joined_at = time.monotonic()
                     self._connected.set()
                     backoff = 2.0
                     log.info("joined %s", self.cfg.ws)
+                    self._spawn(self._end_orphans())
                     async for raw in ws:
                         try:
                             msg = json.loads(raw)
@@ -249,8 +258,20 @@ class Agentd:
         if aid not in ASK_IDS:
             return
         received = time.time()
+        now = time.monotonic()
+        ts = msg.get("ts")
+        age_s = received - float(ts) / 1000 if isinstance(ts, (int, float)) else 0.0
+        if now - self._joined_at < REPLAY_WINDOW_S and age_s > STALE_TAP_S:
+            log.info("dock_action %s %.0f s old at join: a replay, not a tap; ignored", aid, age_s)
+            return
+        sig = ask_signature(msg)
+        last = self._last_tap.get(sig)
+        self._last_tap[sig] = now
+        if last is not None and now - last < DEBOUNCE_S:
+            log.info("dock_action %s %.1f s after the same tap: one ask", aid, now - last)
+            return
         key = f"{msg.get('doc') or self.model.doc}/{msg.get('page') or self.model.page}"
-        ahead = self.queue.submit(key, lambda: self.answer(msg, received), sig=ask_signature(msg))
+        ahead = self.queue.submit(key, lambda: self.answer(msg, received), sig=sig)
         log.info(
             "dock_action %s on %s (%s)",
             aid,
@@ -276,6 +297,10 @@ class Agentd:
         mode = self.cfg.ink
         if mode in ("on", "off"):
             return mode == "on"
+        return await self.tablet_ink()
+
+    async def tablet_ink(self) -> bool:
+        """The tablet's own agent-ink toggle (over ssh, cached 2 min); True when unknown."""
         if not self.cfg.ssh:
             return True
         if self._ink_on is not None and time.time() - self._ink_checked < 120:
@@ -338,27 +363,44 @@ class Agentd:
             rec.bbox = list(msg["bbox"]) if isinstance(msg.get("bbox"), list) else None
             rec.view = [round(m.view.zoom, 4), round(m.view.dx, 1), round(m.view.dy, 1)]
             rec.live_user = m.live_user()
-            if not self.cfg.dry_run:
-                box0 = sel_box or m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
-                await self._status(rec, "thinking", placement.to_pu(box0, W, H))
+            rec.ink = await self.ink_enabled()
             if sel_box is not None:
+                # where the answer will go, and the overlay at once (before any wait for a save)
+                reserved = await self._reserve(sel_box)
+                if reserved is not None and not self.cfg.dry_run:
+                    await self._status(rec, "thinking", reserved[0].rect)
                 selected = await self._selection(msg, sel_box, rec)
-                anchor = sel_box
+                # the larger of the lasso's box and its strokes' bounds (the box can be smaller)
+                anchor = _union(sel_box, _bounds(selected)) if selected else sel_box
+                if anchor != sel_box:
+                    reserved = await self._reserve(anchor)
+                    if reserved is not None and not self.cfg.dry_run:
+                        await self._status(rec, "thinking", reserved[0].rect)
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
+                reserved = await self._reserve(anchor)
+                if reserved is not None and not self.cfg.dry_run:
+                    await self._status(rec, "thinking", reserved[0].rect)
             if not selected:
                 # never ask about (or answer) an empty picture
                 rec.error = "empty selection" if sel_box is not None else "empty page"
                 what = "that selection" if sel_box is not None else "anything on this page"
+                rec.status_note = f"Couldn't see {what} - try again"
                 await self._glasses(
                     f"Couldn't see {what} — try again", f"Couldn't see {what}. Try again."
                 )
                 return rec
-            rec.ink = await self.ink_enabled()
-            reserved = await self._reserve(anchor) if rec.ink else None
             if rec.ink and reserved is None:
                 rec.note = "no free space near the selection: glasses only"
+                rec.status_note = "No room near the selection - answer on your glasses"
+            elif not rec.ink:
+                tablet_on = await self.tablet_ink()
+                rec.status_note = (
+                    "Answered on your glasses (agent ink off on the desktop)"
+                    if tablet_on
+                    else "Answered on your glasses (agent ink is off)"
+                )
             if reserved is not None:
                 spot, width_mm, metrics = reserved
                 dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
@@ -370,11 +412,11 @@ class Agentd:
                     "width_mm": width_mm,
                     "anchor_norm": [round(v, 4) for v in anchor],
                 }
-                if not self.cfg.dry_run:
-                    await self._status(rec, "thinking", spot.rect)
-                    if self.cfg.thinking == "dots":
-                        await self._dots(spot, run)
-                        rec.pending_at = since()
+                if rec.ink and not self.cfg.dry_run and self.cfg.thinking == "dots":
+                    await self._dots(spot, run)
+                    rec.pending_at = since()
+            if not rec.ink:
+                reserved = None  # the spot only placed the overlay
             # 3. the picture
             img = self.state / f"req-{n}.png"
             if sel_box is not None:
@@ -422,6 +464,7 @@ class Agentd:
             text = prompt.clean_answer(reply.text) if reply.text and not reply.error else ""
             if not text:
                 rec.error = reply.error or "empty answer"
+                rec.status_note = "Couldn't answer just now - try again"
                 await self._glasses(
                     "Couldn't answer just now", f"Couldn't answer just now ({rec.error[:80]})."
                 )
@@ -435,6 +478,8 @@ class Agentd:
             await self._glasses(text, text)
             if stream is not None:
                 await stream.finish(reply.text)
+                if stream.stopped and not rec.status_note:
+                    rec.status_note = "Ran out of room - the rest is on your glasses"
             elif not rec.ink:
                 rec.note = "agent ink off: text only"
             return rec
@@ -450,6 +495,7 @@ class Agentd:
             log.exception("request %d failed", n)
             return rec
         finally:
+            # every request ends its overlay, answered or not (an orphan spins for 120 s)
             if rec.status_box is not None:
                 await self._status(rec, "done", rec.status_box)
             self._log(rec)
@@ -495,7 +541,8 @@ class Agentd:
         dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
         mm = placement.MM_PER_PU
         blocks = []
-        for i, w_mm in enumerate(self.cfg.widths):
+        a = placement.to_pu(anchor, m.w, m.h)
+        for i, w_mm in enumerate(self._widths(a[0], dots_w)):
             lines = math.ceil(TYPICAL_CHARS * met.mm_per_char / w_mm) + 1
             h_mm = -met.ascent + (lines - 1) * met.pitch + met.descent + 1.0
             for s in self.cfg.scales:
@@ -513,7 +560,20 @@ class Agentd:
         )
         if spot is None:
             return None
-        return spot, self.cfg.widths[spot.block.layout], met
+        return spot, self._widths(a[0], dots_w)[spot.block.layout], met
+
+    def _widths(self, left_pu: float, dots_w: float) -> list[float]:
+        """
+        Wrap widths to try, mm at scale 1: first the comfortable measure that fits between the
+        selection's left edge and the page's right margin (capped at ``MAX_MEASURE_MM``, never
+        under ``MIN_MEASURE_MM``: a selection near the right edge shifts the block left, as
+        placement may), then the configured ones. Not the selection's own width: a narrow lasso
+        gave a column of two words a line on 2026-10-06.
+        """
+        m = self.model
+        room_mm = (m.w - 60.0 - max(left_pu, 150.0) - dots_w) * placement.MM_PER_PU
+        first = max(MIN_MEASURE_MM, min(MAX_MEASURE_MM, room_mm))
+        return [first, *[w for w in self.cfg.widths if abs(w - first) > 5]]
 
     async def _dots(self, spot: placement.Placement, run: str) -> None:
         """The static pending mark: three dots at the reserved spot, on the first baseline."""
@@ -559,7 +619,36 @@ class Agentd:
         }
         if state == "done":
             msg["ok"] = bool(rec.answer) and not rec.error
-        await self.send(msg)
+            if rec.status_note:
+                msg["note"] = rec.status_note
+        if state == "done":
+            if await self.send(msg):
+                self._open_status.pop(msg["id"], None)
+        else:
+            self._open_status[msg["id"]] = (bbox, msg["doc"], msg["page"])
+            await self.send(msg)
+
+    async def _end_orphans(self) -> None:
+        """After a (re)join: end every overlay whose `done` was lost with the connection."""
+        for sid, (bbox, doc, page) in list(self._open_status.items()):
+            if any(not t.done() and t.get_name() == sid for t in self._tasks):
+                continue
+            log.info("ending orphaned overlay %s", sid)
+            ok = await self.send(
+                {
+                    "t": "agent_status",
+                    "id": sid,
+                    "agent": "agentd",
+                    "state": "done",
+                    "ok": False,
+                    "bbox": bbox,
+                    "doc": doc,
+                    "page": page,
+                    "ts": int(time.time() * 1000),
+                }
+            )
+            if ok:
+                self._open_status.pop(sid, None)
 
     async def _play(
         self, msgs: list[tuple[float, dict]], on_first=None, rec: Record | None = None
@@ -630,6 +719,30 @@ DOTS_PU = handmod.DOTS_W
 #: The answer length a block is reserved for before the answer exists (characters): the prompt
 #: asks for under 25 words, ~140 characters.
 TYPICAL_CHARS = 140
+
+#: A comfortable line for an answer, mm at scale 1, and the narrowest acceptable.
+MAX_MEASURE_MM = 125.0
+MIN_MEASURE_MM = 70.0
+
+#: Taps: arriving within this long of a (re)join and older than STALE_TAP_S, a dock_action is a
+#: replay, not a tap; the same ask again within DEBOUNCE_S is one ask (seconds).
+REPLAY_WINDOW_S = 3.0
+STALE_TAP_S = 10.0
+DEBOUNCE_S = 1.5
+
+
+def _bounds(strokes) -> Box:
+    bs = [st.bbox() for st in strokes]
+    return (
+        min(b[0] for b in bs),
+        min(b[1] for b in bs),
+        max(b[2] for b in bs),
+        max(b[3] for b in bs),
+    )
+
+
+def _union(a: Box, b: Box) -> Box:
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
 #: The farthest an answer may sit from what it answers, page units (~33 mm); farther away it

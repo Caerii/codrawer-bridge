@@ -61,6 +61,28 @@ func TestLiveOnlyForAiAndAKnownPage(t *testing.T) {
 	}
 }
 
+func TestOverlayDoneCarriesOutcomeAndNote(t *testing.T) {
+	line, why := Overlay([]byte(`{"t":"agent_status","state":"done","id":"q1","ok":false,"note":"No room near the\nselection —  answer on your glasses"}`))
+	want := `{"op":"overlay","id":"q1","kind":"clear","state":"done","ok":false,"note":"No room near the selection — answer on your glasses"}`
+	if why != "" || string(line) != want {
+		t.Fatalf("%s %q", line, why)
+	}
+	if n := CleanNote(strings.Repeat("é", 300)); len([]rune(n)) != NoteMax {
+		t.Fatalf("note not cut: %d", len([]rune(n)))
+	}
+	for raw, want := range map[string][2]string{
+		`{"t":"agent_status","state":"done","id":"q","note":"Answered on your glasses"}`: {"Answered on your glasses", "set"},
+		`{"t":"agent_status","state":"thinking","id":"q","bbox":[0,0,1,1]}`:              {"", "set"},
+		`{"t":"agent_status","state":"done","id":"q","ok":true}`:                         {"", ""},
+		`{"t":"goto","doc":"d"}`: {"", ""},
+	} {
+		n, set := StatusNote([]byte(raw))
+		if n != want[0] || set != (want[1] == "set") {
+			t.Fatalf("%s: %q %v", raw, n, set)
+		}
+	}
+}
+
 func TestOverlayFromAgentStatus(t *testing.T) {
 	line, why := Overlay([]byte(`{"t":"agent_status","state":"thinking","id":"q1","bbox":[-480.81,2982.8,-270.9,3314.7]}`))
 	if why != "" || string(line) != `{"op":"overlay","id":"q1","kind":"thinking","state":"thinking","bbox":[-480.81,2982.8,-270.9,3314.7],"style":"pen"}` {

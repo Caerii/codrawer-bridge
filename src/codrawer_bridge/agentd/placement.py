@@ -17,10 +17,11 @@ clearance, free?" in constant time.
 grid inside the page's margins, and each free position gets a cost:
 
 - the gap between the block and the anchor (the selection, or the page's ink for ``ask_page``);
-- where it sits: right of the anchor (the margin) and below it are natural, left of it costs
-  more and above it more still, as a reader looks for a reply after the question;
-- misalignment: right of the anchor its top should meet the anchor's top, below it its left
-  edge should meet the anchor's left edge;
+- where it sits: directly **below** the anchor first, as the user asked on 2026-10-06 ("the
+  response should be underneath the selection"); then right of it, left of it, above it. A
+  block that overlaps the anchor is never a candidate, even where the lasso's box is empty;
+- below, its left edge should meet the anchor's left edge, about one line (``below_gap``)
+  under the anchor's bottom; to the right or left, its top should meet the anchor's top;
 - a smaller scale costs a little (writing should be its true size when it can);
 - with ``prefer`` (the pending mark's spot), the distance from it, so the answer starts there.
 
@@ -146,25 +147,32 @@ class Occupancy:
         return self.count(x0 - clearance, y0 - clearance, x1 + clearance, y1 + clearance) == 0
 
 
-#: Extra cost by side (page units): a reply is looked for to the right of or below the question.
-SIDE_COST = {"right": 0.0, "below": 40.0, "left": 280.0, "above": 320.0, "inside": 600.0}
+#: Extra cost by side (page units): a reply is looked for under the question first.
+SIDE_COST = {"below": 0.0, "right": 120.0, "left": 280.0, "above": 320.0}
+
+#: The gap under the anchor a block below it keeps, page units (about one written line).
+BELOW_GAP = 80.0
 
 
 def _side(rect: Box, anchor: Box) -> tuple[str, float, float]:
-    """Which side of ``anchor`` the block is on, the gap between them, and the misalignment."""
+    """
+    Which side of ``anchor`` the block is on (``inside`` when they overlap), the gap between
+    them, and the misalignment. A block below the anchor's bottom edge is ``below`` wherever it
+    sits across, so the answer goes under the selection rather than beside it whenever it can.
+    """
     x0, y0, x1, y1 = rect
     ax0, ay0, ax1, ay1 = anchor
     dx = max(ax0 - x1, x0 - ax1, 0.0)
     dy = max(ay0 - y1, y0 - ay1, 0.0)
     gap = math.hypot(dx, dy)
+    if y0 >= ay1 - 1e-6:
+        return "below", gap, abs(x0 - ax0) + abs(dy - BELOW_GAP)
     if x0 >= ax1 - 1e-6:
         return "right", gap, abs(y0 - ay0)
-    if y0 >= ay1 - 1e-6:
-        return "below", gap, abs(x0 - ax0)
-    if y1 <= ay0 + 1e-6:
-        return "above", gap, abs(x0 - ax0)
     if x1 <= ax0 + 1e-6:
         return "left", gap, abs(y0 - ay0)
+    if y1 <= ay0 + 1e-6:
+        return "above", gap, abs(x0 - ax0)
     return "inside", gap, 0.0
 
 
@@ -204,19 +212,32 @@ def place(
         if b.w > W - ml - mr or b.h > bottom - mt:
             continue
         scale_cost = (1.0 - b.scale) * 300.0 + b.h * 0.25
-        y = mt
-        while y + b.h <= bottom:
-            x = ml
-            while x + b.w <= W - mr:
-                rect = (x, y, x + b.w, y + b.h)
-                side, gap, misalign = _side(rect, anchor)
-                cost = gap + SIDE_COST[side] + 0.35 * misalign + scale_cost
-                if prefer is not None:
-                    cost += 1.5 * math.hypot(x - prefer[0], y - prefer[1])
-                if max_gap is not None and gap > max_gap:
-                    pass
-                elif (best is None or cost < best.cost) and occ.free(rect, clearance):
-                    best = Placement(b, x, y, side, cost, occ.page_w, occ.page_h)
-                x += step
-            y += step
+        # the ideal spot first (under the anchor, left edges aligned, one line down), then a grid
+        ideal = (min(max(anchor[0], ml), W - mr - b.w), anchor[3] + BELOW_GAP)
+        grid = (
+            (x, y) for y in _steps(mt, bottom - b.h, step) for x in _steps(ml, W - mr - b.w, step)
+        )
+        for x, y in [ideal, *grid]:
+            if y < mt or y + b.h > bottom or x < ml or x + b.w > W - mr:
+                continue
+            rect = (x, y, x + b.w, y + b.h)
+            side, gap, misalign = _side(rect, anchor)
+            if side == "inside" or (side == "below" and y - anchor[3] < BELOW_GAP * 0.6):
+                continue  # never over the selection; below, at least most of a line clear
+            if max_gap is not None and gap > max_gap:
+                continue
+            cost = gap + SIDE_COST[side] + (1.0 if side == "below" else 0.35) * misalign
+            cost += scale_cost
+            if prefer is not None:
+                # the spot was chosen already (by these same rules, when it was reserved): stay
+                cost = scale_cost + 3.0 * math.hypot(x - prefer[0], y - prefer[1])
+            if (best is None or cost < best.cost) and occ.free(rect, clearance):
+                best = Placement(b, x, y, side, cost, occ.page_w, occ.page_h)
     return best
+
+
+def _steps(lo: float, hi: float, step: float):
+    v = lo
+    while v <= hi:
+        yield v
+        v += step

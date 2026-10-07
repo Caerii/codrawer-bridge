@@ -15,10 +15,14 @@ API). agentd needs only a sliver of it, so this is a separate, smaller client:
 after the last id seen is the event stream without the race of subscribing to SSE after the
 prompt was posted.
 
-**One session, kept.** agentd keeps a session of its own (its id in ``state.json`` under the
-state directory) so later turns skip Claude Code's start-up (measured 2026-10-06: a new session
-answered "pong" in 12 s, its first text 8 s after the prompt). If the session is gone (even-terminal
-restarted without it), the prompt is posted again without an id and the new session is kept.
+**One session, kept for a few turns.** agentd keeps a session of its own (its id and turn
+count in a state file under the state directory) so later turns skip Claude Code's start-up
+(measured 2026-10-06: a new session answered "pong" in 12 s, its first text 8 s after the
+prompt). But every turn leaves its image in the session's context, and later turns slow down
+with it (Haiku, 2026-10-06: 28 s, 30 s, then 67–74 s in one session), so after ``max_turns``
+turns a new session starts. If the session is gone (even-terminal restarted without it), the
+prompt is posted again without an id and the new session is kept. Each reply records its
+phases (prompt accepted, Read started and ended, first answer text, done) for the log.
 
 **When the answer is done.** The turn ends with a ``result`` event carrying the final text,
 but that event can trail the text by seconds (5 s in the measurement above). The model Reads the
@@ -66,6 +70,10 @@ class Reply:
     session_id: str = ""
     first_text_s: float | None = None
     first_answer_s: float | None = None  # first answer text after the Read
+    posted_s: float | None = None  # the prompt was accepted (a new session takes longer)
+    read_start_s: float | None = None  # the model asked to Read the image
+    read_end_s: float | None = None  # the image was read; the answer is being thought out
+    new_session: bool = False
     done_s: float | None = None
     cost_usd: float | None = None
     tools: list[str] = field(default_factory=list)
@@ -84,6 +92,7 @@ class Terminal:
         provider: str = "claude",
         poll_s: float = 0.25,
         settle_s: float = 1.5,
+        max_turns: int = 4,
     ) -> None:
         self.url = url.rstrip("/")
         self.token = token
@@ -95,6 +104,8 @@ class Terminal:
         self.session_id = self._load()
         self._last_id = 0  # the last event id this client has read in its session
         self._open_turn = False  # the last turn was accepted before its `result` arrived
+        self.max_turns = max_turns
+        self._turns = self._load_turns()
 
     # ── state ──────────────────────────────────────────────────────────────────────────────
 
@@ -106,11 +117,18 @@ class Terminal:
         except (OSError, ValueError):
             return ""
 
+    def _load_turns(self) -> int:
+        try:
+            return int(json.loads(self.state_path.read_text(encoding="utf-8")).get("turns") or 0)
+        except (OSError, ValueError, TypeError):
+            return 0
+
     def _save(self) -> None:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             self.state_path.write_text(
-                json.dumps({"session_id": self.session_id}), encoding="utf-8"
+                json.dumps({"session_id": self.session_id, "turns": self._turns}),
+                encoding="utf-8",
             )
         except OSError:
             pass
@@ -169,6 +187,11 @@ class Terminal:
         try:
             async with httpx.AsyncClient(timeout=30) as c:
                 after = 0
+                if self.session_id and self._turns >= self.max_turns and not self._open_turn:
+                    # Every turn adds its image to the session's context, and each later turn
+                    # carries them all: on 2026-10-06 Haiku's turns grew from 28 s to 74 s in
+                    # one session. A fresh session costs a few seconds once instead.
+                    self.session_id, self._turns = "", 0
                 if self.session_id:
                     # A turn accepted before its `result` may still be finishing: wait for that
                     # result, so its trailing events are not read as this turn's. (Not for
@@ -191,8 +214,11 @@ class Terminal:
                     if code >= 300 or not isinstance(data, dict) or not data.get("sessionId"):
                         out.error = f"prompt failed ({code}): {str(data)[:120]}"
                         return out
-                    self.session_id = str(data["sessionId"])
-                    self._save()
+                    self.session_id, self._turns = str(data["sessionId"]), 0
+                    out.new_session = True
+                out.posted_s = round(time.monotonic() - t0, 3)
+                self._turns += 1
+                self._save()
                 out.session_id = self.session_id
                 try:
                     return await self._follow(c, after, t0, timeout_s, out, on_text)
@@ -250,9 +276,16 @@ class Terminal:
                     segments.append("".join(segment).strip())
                     segment = []
                     settled_at = now if read_done else None
+                elif t == "tool_start" and m.get("name") == "Read" and out.read_start_s is None:
+                    out.read_start_s = now
+                    out.tools.append("Read")
+                    settled_at = None
                 elif t == "tool_start":
                     out.tools.append(str(m.get("name") or "?"))
                     settled_at = None
+                elif t == "tool_end" and m.get("name") == "Read" and out.read_end_s is None:
+                    out.read_end_s = now
+                    read_done = True
                 elif t == "tool_end":
                     read_done = read_done or str(m.get("name") or "") == "Read"
                 elif t == "permission_request":
