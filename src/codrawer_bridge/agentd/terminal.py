@@ -36,7 +36,8 @@ same request: Opus thinks first and then sends its answer in a burst ~1.5 s befo
 Haiku streams a little earlier.
 
 **Nothing else may happen.** Every permission request is denied and every question skipped
-(prompt.py: page content is data). A turn that runs past its timeout is interrupted.
+(prompt.py: page content is data). A turn that runs past its timeout is interrupted, and so is
+one whose request is cancelled because a newer ask replaced it (queue.py).
 """
 
 from __future__ import annotations
@@ -50,6 +51,9 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+#: Fire-and-forget requests (an interrupt), kept referenced until done.
+_background: set[asyncio.Task] = set()
 
 
 @dataclass
@@ -134,6 +138,14 @@ class Terminal:
         data = r.json() if r.status_code == 200 else {}
         return list(data.get("messages") or []), str(data.get("state") or "")
 
+    async def _interrupt(self) -> None:
+        """Stop the session's running turn (best effort)."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                await self._post(c, "/api/interrupt", {"sessionId": self.session_id})
+        except (httpx.HTTPError, OSError):
+            pass
+
     async def reachable(self) -> bool:
         try:
             async with httpx.AsyncClient(timeout=5) as c:
@@ -182,7 +194,16 @@ class Terminal:
                     self.session_id = str(data["sessionId"])
                     self._save()
                 out.session_id = self.session_id
-                return await self._follow(c, after, t0, timeout_s, out, on_text)
+                try:
+                    return await self._follow(c, after, t0, timeout_s, out, on_text)
+                except asyncio.CancelledError:
+                    # replaced by a newer ask (queue.py): stop the model, and let the next turn
+                    # wait for this one's (interrupted) result before reading its own events
+                    self._open_turn = True
+                    task = asyncio.ensure_future(self._interrupt())
+                    _background.add(task)
+                    task.add_done_callback(_background.discard)
+                    raise
         except (httpx.HTTPError, OSError, ValueError) as e:
             out.error = f"{type(e).__name__}: {e}"[:200]
             return out

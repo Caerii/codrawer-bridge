@@ -103,6 +103,11 @@ class InkStream:
         self._queue.put_nowait(None)
         await self._task
 
+    def stop(self) -> None:
+        """Stop now (a newer ask replaced this one): nothing more is written."""
+        self.stopped = True
+        self._task.cancel()
+
     # ── output: the hand ────────────────────────────────────────────────────────────────────
 
     async def _run(self) -> None:

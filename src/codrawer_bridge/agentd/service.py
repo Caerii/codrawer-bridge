@@ -64,7 +64,7 @@ from typing import Any
 from . import hand as handmod
 from . import placement, prompt, render
 from .page import Box, PageModel
-from .queue import PageQueue
+from .queue import REPLACED, PageQueue
 from .stream import InkStream
 from .terminal import Reply, Terminal
 
@@ -250,8 +250,13 @@ class Agentd:
             return
         received = time.time()
         key = f"{msg.get('doc') or self.model.doc}/{msg.get('page') or self.model.page}"
-        ahead = self.queue.submit(key, lambda: self.answer(msg, received))
-        log.info("dock_action %s on %s (%s ahead)", aid, key, ahead)
+        ahead = self.queue.submit(key, lambda: self.answer(msg, received), sig=ask_signature(msg))
+        log.info(
+            "dock_action %s on %s (%s)",
+            aid,
+            key,
+            "replaces the same ask in flight" if ahead == REPLACED else f"{ahead} ahead",
+        )
         if ahead is None:
             self._spawn(
                 self._glasses(
@@ -320,6 +325,7 @@ class Agentd:
         )
         since = lambda: round(time.time() - received, 3)  # noqa: E731
         run = f"{int(received * 1000) % 10**8:x}"
+        stream: InkStream | None = None
         try:
             # 1. acknowledge
             what = "your selection" if kind == "ask_selection" else "this page"
@@ -394,7 +400,6 @@ class Agentd:
                 print(f"the answer's block: {rec.placement}")
                 return rec
             # 4. the turn, 5. the answer written sentence by sentence as it streams (stream.py)
-            stream = None
             if reserved is not None:
                 stream = InkStream(
                     self,
@@ -433,6 +438,13 @@ class Agentd:
             elif not rec.ink:
                 rec.note = "agent ink off: text only"
             return rec
+        except asyncio.CancelledError:
+            # a newer ask for the same selection replaced this one (queue.py); terminal.py has
+            # interrupted the model's turn, and the hand stops after its current stroke
+            rec.error = "replaced by a newer ask for the same selection"
+            if stream is not None:
+                stream.stop()
+            raise
         except Exception as e:  # noqa: BLE001
             rec.error = f"{type(e).__name__}: {e}"[:300]
             log.exception("request %d failed", n)
@@ -640,6 +652,19 @@ def _page_bottom(m: PageModel) -> float:
 def _page_top(m: PageModel) -> float:
     """The top of the screen on the page, page units (0 unless the user has scrolled down)."""
     return max(0.0, -m.view.dy / m.view.zoom)
+
+
+def ask_signature(msg: dict[str, Any]) -> tuple:
+    """
+    What makes two asks the same question (queue.py): the entry and, for a selection, the
+    lasso's box rounded to 10 page units (a second tap on the same lasso repeats it exactly; a
+    redrawn lasso differs by more). The page is the queue's key already.
+    """
+    box = msg.get("bbox")
+    rounded = (
+        tuple(round(float(v) / 10) for v in box) if isinstance(box, list) and len(box) == 4 else ()
+    )
+    return (str(msg.get("id")), rounded)
 
 
 def _slug(url: str) -> str:
