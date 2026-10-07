@@ -18,6 +18,9 @@ Item {
     property int idles: 0
     property bool sawTick: false
 
+    // the one doodle playing, or null
+    function only(L) { const k = Object.keys(L.doodles); return k.length ? L.doodles[k[0]] : null; }
+
     function find(item, name) {
         if (item.objectName === name) return item;
         for (let i = 0; i < item.children.length; ++i) {
@@ -32,7 +35,7 @@ Item {
     Component.onCompleted: {
         live = comp.createObject(stage);
         live.idle.connect(function() { top.idles += 1; });
-        live.thinkStart(-300, 400, 400, 200, "pen");
+        live.thinkStart("q1", -300, 400, 400, 200, "pen");
     }
 
     Timer {
@@ -43,14 +46,14 @@ Item {
             const L = top.live;
             top.tick += 1;
             const t = top.tick;
-            if (t === 5) L.thinkDone(true, "", undefined, undefined);
-            if (t >= 12 && t <= 20 && L.think && L.think.items)
-                top.sawTick = top.sawTick || L.think.items.some(function(it) { return it.width === 3; });
+            if (t === 5) L.thinkDone("q1", true, "", undefined, undefined);
+            if (t >= 12 && t <= 20 && top.only(L) && top.only(L).items)
+                top.sawTick = top.sawTick || top.only(L).items.some(function(it) { return it.width === 3; });
             if (t === 32) {
                 top.check(top.sawTick, "answered: a tick was drawn");
-                top.check(L.think === null && top.idles === 1, "answered: then gone, idle");
+                top.check(top.only(L) === null && top.idles === 1, "answered: then gone, idle");
                 // not answered here: the agent's note at its spot (the overlay may be idle)
-                L.thinkDone(false, "Answered on your glasses", -300, 640);
+                L.thinkDone("q1", false, "Answered on your glasses", -300, 640);
                 const c = top.find(L, "codrawer-live-caption");
                 top.check(c && c.visible && c.text === "Answered on your glasses", "the note is shown");
                 top.check(c && !c.enabled, "the caption takes no input");
@@ -58,7 +61,7 @@ Item {
             }
             if (t === 85) {
                 const c = top.find(L, "codrawer-live-caption");
-                top.check(c && !c.visible, "the note faded");
+                top.check(!c || !c.visible, "the note faded");
                 top.check(top.idles === 2, "idle after the note");
                 finish();
             }
@@ -66,7 +69,7 @@ Item {
     }
 
     function finish() {
-        const mode = live && live.animRegion ? "native" : "fallback";
+        const mode = live && live.animRegions ? "native" : "fallback";
         if (failures.length) console.log("done_test: FAIL " + mode + ": " + failures.join("; "));
         else console.log("done_test: PASS (" + mode + ")");
         Qt.quit();
