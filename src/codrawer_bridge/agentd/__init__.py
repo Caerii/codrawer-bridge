@@ -33,8 +33,9 @@ so nothing on the tablet changes.
 
     tablet router ──page/stroke_*──▶ PageModel (page.py)
                   ──dock_action──▶ PageQueue (queue.py) ──▶ Agentd.answer (service.py):
-        render PNG (render.py) ─▶ prompt (prompt.py) ─▶ even-terminal (terminal.py) ─▶ reply text
-        ─▶ layouts (hand.py, packages/hand) ─▶ free space (placement.py) ─▶ ai strokes at pace
+        free space reserved (placement.py) ─▶ render PNG (render.py) ─▶ prompt (prompt.py)
+        ─▶ even-terminal (terminal.py), streaming ─▶ each finished sentence laid out by the warm
+        hand worker (hand.py, packages/hand) and written at pace into the block (stream.py)
         ─▶ glasses line; one JSON line per request in ``.codrawer/agentd/requests.jsonl``
 
 Run it: ``uv run python -m codrawer_bridge.agentd --ws ws://<tablet>:8577/ws/session1 --token

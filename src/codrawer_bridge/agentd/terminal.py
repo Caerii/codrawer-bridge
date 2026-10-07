@@ -25,8 +25,15 @@ but that event can trail the text by seconds (5 s in the measurement above). The
 image first and then writes its answer, so once a text segment has ended after a Read finished,
 and nothing new started for ``settle_s``, that segment is the answer. Otherwise the ``result``.
 
-Before the next prompt the session must be idle again (the earlier turn's ``result`` has
-arrived), so those trailing events are never read as the next turn's.
+Before the next prompt, an earlier turn accepted that way must have delivered its ``result``,
+so its trailing events are never read as the next turn's. A turn that ended with its
+``result`` needs no wait: the session's ``idle`` status can trail it by many seconds and is
+not waited for.
+
+**Streaming.** Answer text (text after the Read) is handed to ``on_text`` delta by delta, so
+stream.py can start writing a sentence the moment it is complete. Measured 2026-10-06 on the
+same request: Opus thinks first and then sends its answer in a burst ~1.5 s before ``result``;
+Haiku streams a little earlier.
 
 **Nothing else may happen.** Every permission request is denied and every question skipped
 (prompt.py: page content is data). A turn that runs past its timeout is interrupted.
@@ -37,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,6 +61,7 @@ class Reply:
     error: str = ""
     session_id: str = ""
     first_text_s: float | None = None
+    first_answer_s: float | None = None  # first answer text after the Read
     done_s: float | None = None
     cost_usd: float | None = None
     tools: list[str] = field(default_factory=list)
@@ -80,6 +89,8 @@ class Terminal:
         self.poll_s = poll_s
         self.settle_s = settle_s
         self.session_id = self._load()
+        self._last_id = 0  # the last event id this client has read in its session
+        self._open_turn = False  # the last turn was accepted before its `result` arrived
 
     # ── state ──────────────────────────────────────────────────────────────────────────────
 
@@ -133,22 +144,31 @@ class Terminal:
 
     # ── a turn ─────────────────────────────────────────────────────────────────────────────
 
-    async def ask(self, text: str, timeout_s: float = 90.0) -> Reply:
-        """Post ``text`` and wait for the answer (module docstring); never raises on HTTP errors."""
+    async def ask(
+        self, text: str, timeout_s: float = 90.0, on_text: Callable[[str], None] | None = None
+    ) -> Reply:
+        """
+        Post ``text`` and wait for the answer (module docstring); never raises on HTTP errors.
+        ``on_text`` is called with the answer so far (the text segment after the Read) as it
+        streams, so a caller can start writing before the turn ends.
+        """
         out = Reply()
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=30) as c:
                 after = 0
                 if self.session_id:
-                    # An earlier turn accepted before its `result` may still be finishing: wait
-                    # for idle, so its trailing events are not read as this turn's.
-                    msgs, state = await self._messages(c, 0)
+                    # A turn accepted before its `result` may still be finishing: wait for that
+                    # result, so its trailing events are not read as this turn's. (Not for
+                    # "idle": it can trail a finished turn by many seconds.)
+                    msgs, _ = await self._messages(c, self._last_id)
                     deadline = time.monotonic() + 20
-                    while state == "busy" and time.monotonic() < deadline:
-                        await asyncio.sleep(0.5)
-                        msgs, state = await self._messages(c, 0)
-                    after = max((int(m.get("id") or 0) for m in msgs), default=0)
+                    while self._open_turn and time.monotonic() < deadline:
+                        if any(m.get("type") == "result" for m in msgs):
+                            break
+                        await asyncio.sleep(0.3)
+                        msgs, _ = await self._messages(c, self._last_id)
+                    after = max([self._last_id] + [int(m.get("id") or 0) for m in msgs])
                     code, data = await self._post(
                         c, "/api/prompt", {"text": text, "sessionId": self.session_id}
                     )
@@ -162,13 +182,19 @@ class Terminal:
                     self.session_id = str(data["sessionId"])
                     self._save()
                 out.session_id = self.session_id
-                return await self._follow(c, after, t0, timeout_s, out)
+                return await self._follow(c, after, t0, timeout_s, out, on_text)
         except (httpx.HTTPError, OSError, ValueError) as e:
             out.error = f"{type(e).__name__}: {e}"[:200]
             return out
 
     async def _follow(
-        self, c: httpx.AsyncClient, after: int, t0: float, timeout_s: float, out: Reply
+        self,
+        c: httpx.AsyncClient,
+        after: int,
+        t0: float,
+        timeout_s: float,
+        out: Reply,
+        on_text: Callable[[str], None] | None = None,
     ) -> Reply:
         segment: list[str] = []
         segments: list[str] = []
@@ -180,6 +206,7 @@ class Terminal:
                 await self._post(c, "/api/interrupt", {"sessionId": self.session_id})
                 out.error = f"timed out after {timeout_s:.0f} s"
                 out.text = segments[-1] if segments else "".join(segment)
+                self._last_id, self._open_turn = after, True
                 return out
             msgs, _ = await self._messages(c, after)
             for m in msgs:
@@ -190,6 +217,11 @@ class Terminal:
                         out.first_text_s = now
                     segment.append(m["text"])
                     settled_at = None
+                    if read_done:
+                        if out.first_answer_s is None:
+                            out.first_answer_s = now
+                        if on_text is not None:
+                            on_text("".join(segment))
                 elif t == "status" and m.get("state") == "text_start":
                     segment = []
                     settled_at = None
@@ -224,6 +256,7 @@ class Terminal:
                     )
                     if not out.ok and not out.error:
                         out.error = out.text[:200] or "the turn failed"
+                    self._last_id, self._open_turn = after, False
                     return out
                 elif t == "error":
                     out.error = str(m.get("message") or "error")[:200]
@@ -236,5 +269,6 @@ class Terminal:
                 out.done_s = now
                 out.ok = True
                 out.text = segments[-1]
+                self._last_id, self._open_turn = after, True
                 return out
             await asyncio.sleep(self.poll_s)

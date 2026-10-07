@@ -26,10 +26,11 @@ Messages sent while the link is down wait for it up to ``send_wait_s`` and are t
    strokes black. ``ask_page``: the whole page. The PNG goes to the state directory, which lies
    under the terminal's working directory so Claude Code can Read it (ADR 002).
 4. *The turn* (prompt.py, terminal.py), with a timeout (90 s by default).
-5. *The answer in ink.* hand.py lays the text out at three widths; placement.py picks a width,
-   a scale and a free spot (near the dots when there are any); the strokes are sent at the hand's
-   pace, pausing while the user's pen is down or moving (the bridge also refuses to commit while
-   the user touches the page, ADR 009 §2).
+5. *The answer in ink, as it streams* (stream.py). The block reserved in step 1 fixes the wrap
+   width and the scale; each sentence is laid out by the warm hand worker (hand.py) as soon as
+   the model has finished it, and written on the next line of the block while the model writes
+   the rest. The strokes are sent at the hand's pace, pausing while the user's pen is down or
+   moving (the bridge also refuses to commit while the user touches the page, ADR 009 §2).
 6. *The glasses.* The answer as a ``primer`` message with a ``notice`` move (the tablet's router
    relays ``primer``; its ``glance`` is the glasses' line, its ``text`` the phone panel's) and as
    ``ai_intent`` (for the desktop router, which relays it).
@@ -51,7 +52,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
+import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -62,6 +65,7 @@ from . import hand as handmod
 from . import placement, prompt, render
 from .page import Box, PageModel
 from .queue import PageQueue
+from .stream import InkStream
 from .terminal import Reply, Terminal
 
 log = logging.getLogger("agentd")
@@ -124,6 +128,7 @@ class Record:
     live_user: int = 0  # the tablet's pen strokes not yet in a snapshot, at the request
     items: int = 0  # how many items the lasso held (dock_action)
     waited_s: float = 0.0  # waiting for the tablet to save the selection
+    chunks: list[dict[str, Any]] = field(default_factory=list)  # what was written, chunk by chunk
 
 
 class Agentd:
@@ -141,7 +146,11 @@ class Agentd:
         self.model = PageModel()
         self.queue = PageQueue(on_error=lambda e: log.exception("request failed", exc_info=e))
         self.terminal = Terminal(
-            cfg.term_url, cfg.term_token, str(self.term_cwd), self.state / "state.json"
+            cfg.term_url,
+            cfg.term_token,
+            str(self.term_cwd),
+            # one session per even-terminal: a Haiku terminal must not resume the Opus session
+            self.state / f"state-{_slug(cfg.term_url)}.json",
         )
         self._turn = asyncio.Lock()  # one terminal turn at a time
         self._ws = None
@@ -150,6 +159,7 @@ class Agentd:
         self._ink_on: bool | None = None
         self._ink_checked = 0.0
         self._tasks: set[asyncio.Task] = set()
+        self.hand = handmod.HandWorker()  # warm layouts.ts (hand.py), started by run()
 
     # ── the connection ─────────────────────────────────────────────────────────────────────
 
@@ -161,6 +171,7 @@ class Agentd:
     async def run(self, until: asyncio.Event | None = None) -> None:
         import websockets
 
+        self._spawn(self._warm())
         backoff = 2.0
         while until is None or not until.is_set():
             try:
@@ -196,6 +207,17 @@ class Agentd:
                 self._connected.clear()
             await asyncio.sleep(backoff)
             backoff = min(30.0, backoff * 2)
+
+    async def _warm(self) -> None:
+        """Start the hand's worker and measure the persona now, not at the first request."""
+        try:
+            t0 = time.monotonic()
+            m = await self.hand.metrics(self.cfg.persona)
+            log.info(
+                "hand worker warm in %.1f s (%s: %s)", time.monotonic() - t0, self.cfg.persona, m
+            )
+        except handmod.HandUnavailable as e:
+            log.warning("hand worker unavailable (%s); answers go to the glasses only", e)
 
     async def send(self, msg: dict[str, Any]) -> bool:
         """Send now, or when the link is back within ``send_wait_s``; False if dropped."""
@@ -328,17 +350,25 @@ class Agentd:
                 )
                 return rec
             rec.ink = await self.ink_enabled()
-            prefer = None
-            if not self.cfg.dry_run:
-                spot = self._reserve(anchor) if rec.ink else None
-                if spot is not None:
+            reserved = await self._reserve(anchor) if rec.ink else None
+            if rec.ink and reserved is None:
+                rec.note = "no free space near the selection: glasses only"
+            if reserved is not None:
+                spot, width_mm, metrics = reserved
+                dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
+                rec.placement = {
+                    "reserved_pu": [round(v, 1) for v in spot.rect],
+                    "reserved_norm": [round(v, 4) for v in spot.norm],
+                    "side": spot.side,
+                    "scale": spot.block.scale,
+                    "width_mm": width_mm,
+                    "anchor_norm": [round(v, 4) for v in anchor],
+                }
+                if not self.cfg.dry_run:
                     await self._status(rec, "thinking", spot.rect)
-                if spot is not None and self.cfg.thinking == "dots":
-                    await self._dots(spot, run)
-                    prefer = (spot.x + DOTS_PU, spot.y)
-                    rec.pending_at = since()
-                elif spot is not None:
-                    prefer = (spot.x, spot.y)  # the overlay marks the spot; the answer starts there
+                    if self.cfg.thinking == "dots":
+                        await self._dots(spot, run)
+                        rec.pending_at = since()
             # 3. the picture
             img = self.state / f"req-{n}.png"
             if sel_box is not None:
@@ -361,32 +391,46 @@ class Agentd:
             if self.cfg.dry_run:
                 print(f"\n--- dry run: request {n} ({kind}) ---\nimage: {img}\n{rec.prompt}\n---")
                 rec.note = "dry run"
-                if rec.ink:
-                    sample = DRY_RUN_ANSWER
-                    await self._write(sample, anchor, None, run, rec, since, perform=False)
-                    print(f"a sample {len(sample)}-character answer would go: {rec.placement}")
+                print(f"the answer's block: {rec.placement}")
                 return rec
-            # 4. the turn
+            # 4. the turn, 5. the answer written sentence by sentence as it streams (stream.py)
+            stream = None
+            if reserved is not None:
+                stream = InkStream(
+                    self,
+                    rec,
+                    run,
+                    spot.x + dots_w,
+                    spot.y,
+                    width_mm,
+                    spot.block.scale,
+                    metrics,
+                    since,
+                    _page_bottom(m),
+                )
             async with self._turn:
-                reply = await self.terminal.ask(rec.prompt, self.cfg.timeout_s)
+                reply = await self.terminal.ask(
+                    rec.prompt, self.cfg.timeout_s, on_text=stream.feed if stream else None
+                )
             rec.reply = {k: v for k, v in asdict(reply).items() if k != "text"}
             rec.reply["raw"] = reply.text
             text = prompt.clean_answer(reply.text) if reply.text and not reply.error else ""
             if not text:
                 rec.error = reply.error or "empty answer"
-                text_out = "couldn't answer just now"
                 await self._glasses(
                     "Couldn't answer just now", f"Couldn't answer just now ({rec.error[:80]})."
                 )
-                if prefer is not None and self.cfg.thinking == "dots":
-                    await self._write(text_out, anchor, prefer, run + "e", rec, since)
+                if stream is not None:
+                    # keep what was written; after bare dots, say why they lead nowhere
+                    dangling = not stream.written and self.cfg.thinking == "dots"
+                    await stream.finish("couldn't answer just now" if dangling else "")
                 return rec
             rec.answer = text
-            # 5. ink, 6. glasses
+            # 6. the glasses
             await self._glasses(text, text)
-            if rec.ink:
-                await self._write(text, anchor, prefer, run, rec, since)
-            else:
+            if stream is not None:
+                await stream.finish(reply.text)
+            elif not rec.ink:
                 rec.note = "agent ink off: text only"
             return rec
         except Exception as e:  # noqa: BLE001
@@ -422,23 +466,42 @@ class Agentd:
         rec.items = want
         return selected
 
-    def _reserve(self, anchor: Box) -> placement.Placement | None:
-        """A spot near ``anchor`` for a typical answer (three lines, ~80 mm), before it is known."""
+    async def _reserve(
+        self, anchor: Box
+    ) -> tuple[placement.Placement, float, handmod.Metrics] | None:
+        """
+        A block near ``anchor`` for an answer not yet written: sized for ``TYPICAL_CHARS``
+        characters (plus a line, as each streamed sentence starts a new one) at each wrap width
+        and scale, from the persona's metrics. Returns the placement, its wrap width in mm and the
+        metrics, or None when nothing fits (or the hand cannot run).
+        """
         m = self.model
+        try:
+            met = await self.hand.metrics(self.cfg.persona)
+        except handmod.HandUnavailable:
+            return None
+        dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
+        mm = placement.MM_PER_PU
+        blocks = []
+        for i, w_mm in enumerate(self.cfg.widths):
+            lines = math.ceil(TYPICAL_CHARS * met.mm_per_char / w_mm) + 1
+            h_mm = -met.ascent + (lines - 1) * met.pitch + met.descent + 1.0
+            for s in self.cfg.scales:
+                blocks.append(
+                    placement.Block(w=w_mm * s / mm + dots_w, h=h_mm * s / mm, layout=i, scale=s)
+                )
         occ = placement.Occupancy([s.pts for s in m.ink()], m.w, m.h, height=_ink_height(m))
-        typical = [
-            placement.Block(
-                w=(DOTS_PU + 80 / placement.MM_PER_PU) * s, h=34 / placement.MM_PER_PU * s, scale=s
-            )
-            for s in self.cfg.scales
-        ]
-        return placement.place(
+        spot = placement.place(
             occ,
-            typical,
+            blocks,
             placement.to_pu(anchor, m.w, m.h),
             page_bottom=_page_bottom(m),
+            page_top=_page_top(m),
             max_gap=MAX_GAP_PU,
         )
+        if spot is None:
+            return None
+        return spot, self.cfg.widths[spot.block.layout], met
 
     async def _dots(self, spot: placement.Placement, run: str) -> None:
         """The static pending mark: three dots at the reserved spot, on the first baseline."""
@@ -485,77 +548,6 @@ class Agentd:
         if state == "done":
             msg["ok"] = bool(rec.answer) and not rec.error
         await self.send(msg)
-
-    async def _write(
-        self,
-        text: str,
-        anchor: Box,
-        prefer: tuple[float, float] | None,
-        run: str,
-        rec: Record,
-        since,
-        perform: bool = True,
-    ) -> None:
-        """Lay out, place and (unless not ``perform``) write ``text`` (module docstring, step 5)."""
-        m = self.model
-        try:
-            lays = await handmod.layouts_async(
-                text, persona=self.cfg.persona, widths=self.cfg.widths
-            )
-        except handmod.HandUnavailable as e:
-            rec.note = f"no handwriting ({e}); text only"
-            return
-        occ = placement.Occupancy([s.pts for s in m.ink()], m.w, m.h, height=_ink_height(m))
-        blocks = [
-            lay.block(i, s) for i, lay in enumerate(lays) for s in self.cfg.scales if lay.strokes
-        ]
-        # the dots are ink now; the answer may start right after them
-        spot = placement.place(
-            occ,
-            blocks,
-            placement.to_pu(anchor, m.w, m.h),
-            prefer=prefer,
-            clearance=30.0 if prefer else 36.0,
-            page_bottom=_page_bottom(m),
-            max_gap=MAX_GAP_PU,
-        )
-        if spot is None:
-            rec.note = "no free space near the selection: glasses only"
-            return
-        lay = lays[spot.block.layout]
-        origin = lay.origin_for((spot.x, spot.y), spot.block.scale, m.w, m.h)
-        start = time.time() * 1000 + 50
-        msgs = handmod.to_messages(
-            lay,
-            origin,
-            spot.block.scale,
-            start,
-            speed=self.cfg.speed,
-            run=run,
-            color=self.cfg.color,
-            author=f"agentd:{self.cfg.persona}",
-        )
-        rec.placement = {
-            "rect_norm": [round(v, 4) for v in spot.norm],
-            "rect_pu": [round(v, 1) for v in spot.rect],
-            "side": spot.side,
-            "scale": spot.block.scale,
-            "width_mm": lay.width_mm,
-            "anchor_norm": [round(v, 4) for v in anchor],
-            "origin_norm": [round(v, 5) for v in origin],
-        }
-        rec.strokes = len(lay.strokes)
-        if not perform:
-            return
-        await self._status(rec, "writing", spot.rect)
-        first = await self._play(
-            msgs, on_first=lambda: setattr(rec, "first_stroke_at", since()), rec=rec
-        )
-        rec.last_stroke_at = since()
-        if not first:
-            rec.note = "link dropped while writing"
-        for sid, pts in _own_strokes(msgs):
-            m.add_own(sid, pts)
 
     async def _play(
         self, msgs: list[tuple[float, dict]], on_first=None, rec: Record | None = None
@@ -623,11 +615,9 @@ class Agentd:
 #: Width of the pending mark in page units.
 DOTS_PU = handmod.DOTS_W
 
-#: What a dry run places, to show where an answer of typical length would go.
-DRY_RUN_ANSWER = (
-    "Nice line of thought. Check the second step: the sign flips when you move the term across, "
-    "so the last line should read minus. The rest holds."
-)
+#: The answer length a block is reserved for before the answer exists (characters): the prompt
+#: asks for under 25 words, ~140 characters.
+TYPICAL_CHARS = 140
 
 
 #: The farthest an answer may sit from what it answers, page units (~33 mm); farther away it
@@ -636,15 +626,31 @@ MAX_GAP_PU = 300.0
 
 
 def _page_bottom(m: PageModel) -> float:
-    """How far down the page reaches, page units: its height, or the lowest ink if the user
-    has already written further down a page extended by scrolling."""
+    """
+    How far down the page reaches, page units: its height, the lowest ink, or the bottom of
+    the screen when the user has scrolled further down (xochitl grows the page as one writes
+    there; the view comes from the request's ``view_bbox``, page.py).
+    """
     box = m.ink_box(include_ai=True)
-    return max(m.h, box[3] * m.h if box else m.h)
+    v = m.view
+    visible = (v.screen_h - v.dy) / v.zoom
+    return max(m.h, box[3] * m.h if box else m.h, visible)
+
+
+def _page_top(m: PageModel) -> float:
+    """The top of the screen on the page, page units (0 unless the user has scrolled down)."""
+    return max(0.0, -m.view.dy / m.view.zoom)
+
+
+def _slug(url: str) -> str:
+    """A file-name-safe form of a URL (``http://127.0.0.1:3457`` → ``127.0.0.1-3457``)."""
+    return re.sub(r"[^A-Za-z0-9.]+", "-", url.split("://", 1)[-1]).strip("-")
 
 
 def _ink_height(m: PageModel) -> float:
+    """The height the occupancy grid covers, page units: the page, its ink and the screen."""
     box = m.ink_box(include_ai=True)
-    return max(m.h, (box[3] * m.h + 600) if box else m.h)
+    return max(m.h, (box[3] * m.h + 600) if box else m.h, _page_bottom(m))
 
 
 def _shifted(msg: dict, shift_ms: float) -> dict:
@@ -654,14 +660,6 @@ def _shifted(msg: dict, shift_ms: float) -> dict:
     if out.get("t") == "stroke_pts":
         out["pts"] = [[p[0], p[1], p[2], int(p[3] + shift_ms)] for p in out["pts"]]
     return out
-
-
-def _own_strokes(msgs: list[tuple[float, dict]]) -> list[tuple[str, list[list[float]]]]:
-    pts: dict[str, list[list[float]]] = {}
-    for _, m in msgs:
-        if m["t"] == "stroke_pts":
-            pts.setdefault(m["id"], []).extend([p[0], p[1], p[2]] for p in m["pts"])
-    return list(pts.items())
 
 
 def read_tablet_ink(host: str) -> bool:

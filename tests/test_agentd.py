@@ -441,3 +441,156 @@ def test_place_for_a_selection_at_the_bottom_edge_stays_on_the_page():
     crowd = [hline(150, 1550, y) for y in range(100, 2100, 40) if not 400 <= y <= 700]
     occ2 = Occupancy(crowd + strokes, W, H)
     assert place(occ2, [Block(450, 170)], sel, page_bottom=H, max_gap=300) is None
+
+
+# ── the command line, streaming sentences, the streaming writer ─────────────────────────────
+
+
+def test_cli_points_at_another_terminal():
+    from codrawer_bridge.agentd.__main__ import _args, config
+
+    cfg = config(
+        _args(["--ws", "ws://t:8577/ws/s", "--term-url", "http://127.0.0.1:3457", "--speed", "3"])
+    )
+    assert cfg.term_url == "http://127.0.0.1:3457" and cfg.speed == 3.0
+    assert cfg.thinking == "dots"  # until the tablet draws the agent_status overlay
+
+
+def test_ready_sentences_as_the_text_streams():
+    text = "Yes. The derivative of x^2 is 2x, and 3.5 stays as it is. Then the"
+    out, used = prompt.ready_sentences(text, 0)
+    # "Yes." is too short alone and travels with the next; "3.5" does not end a sentence
+    assert out == ["Yes. The derivative of x^2 is 2x, and 3.5 stays as it is."]
+    assert text[used:].strip() == "Then the"
+    more = text + " sign flips? Check line 2. "
+    out2, used2 = prompt.ready_sentences(more, used)
+    assert out2 == ["Then the sign flips? Check line 2."]
+    assert more[used2:].strip() == ""
+    assert prompt.ready_sentences("no end yet", 0) == ([], 0)
+
+
+class _FakeHand:
+    """Layouts of one line per 40 characters, 10 mm apart, at the requested width."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def layouts(self, text, persona="archivist", widths=(80.0,), seed=7):
+        self.calls.append(text)
+        lines = 1 + len(text) // 40
+        pts = [[0.0, 0.0, 0.5, 0], [30.0, (lines - 1) * 10.0, 0.5, 100]]
+        return [
+            Layout(widths[0], (0.0, -5.0, 30.0, (lines - 1) * 10.0 + 1.0), 100, [(0, 100, pts)])
+        ]
+
+
+def test_the_stream_writes_the_first_sentence_before_the_turn_ends():
+    from codrawer_bridge.agentd.hand import Metrics
+    from codrawer_bridge.agentd.service import Config, Record
+    from codrawer_bridge.agentd.stream import InkStream
+
+    async def go():
+        class Agent:
+            pass
+
+        a = Agent()
+        a.model = PageModel()
+        a.model.observe(page_msg([]))
+        a.cfg = Config(ws="x", speed=10.0)
+        a.hand = _FakeHand()
+        played: list[list] = []
+        states: list[str] = []
+
+        async def status(rec, state, box):
+            states.append(state)
+
+        async def play(msgs, on_first=None, rec=None):
+            played.append(msgs)
+            if on_first:
+                on_first()
+            return True
+
+        a._status, a._play = status, play
+        rec = Record(n=1, kind="ask_selection", received=0.0)
+        met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
+        s = InkStream(a, rec, "r", 800.0, 400.0, 80.0, 1.0, met, lambda: 1.0, 2160.0)
+        s.feed("Reading you loud and clear, Testing circled. With two wa")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert len(played) == 1 and states == ["writing"]  # written while the model still writes
+        s.feed("Reading you loud and clear, Testing circled. With two wavy lines beside it.")
+        await s.finish(
+            "Reading you loud and clear, Testing circled. With two wavy lines beside it. What next?"
+        )
+        assert a.hand.calls == [
+            "Reading you loud and clear, Testing circled.",
+            "With two wavy lines beside it. What next?",
+        ]
+        # each chunk starts a line below the last, in ids of its own, at the block's left edge
+        firsts = [next(m for _, m in ms if m["t"] == "stroke_pts")["pts"][0] for ms in played]
+        assert len(firsts) == 2 and firsts[1][1] > firsts[0][1]
+        assert abs(firsts[0][0] * 1620 - 800) < 1 and abs(firsts[1][0] * 1620 - 800) < 1
+        assert {m["id"].split("_")[1] for ms in played for _, m in ms} == {"rc0", "rc1"}
+        assert [c["text"] for c in rec.chunks] == a.hand.calls and rec.first_stroke_at == 1.0
+
+    asyncio.run(go())
+
+
+def test_the_stream_stops_where_the_page_ends():
+    from codrawer_bridge.agentd.hand import Metrics
+    from codrawer_bridge.agentd.service import Config, Record
+    from codrawer_bridge.agentd.stream import InkStream
+
+    async def go():
+        class Agent:
+            pass
+
+        a = Agent()
+        a.model = PageModel()
+        a.model.observe(page_msg([]))
+        a.cfg = Config(ws="x")
+        a.hand = _FakeHand()
+        played: list = []
+
+        async def status(*_):
+            pass
+
+        async def play(msgs, on_first=None, rec=None):
+            played.append(msgs)
+            return True
+
+        a._status, a._play = status, play
+        rec = Record(n=1, kind="ask_selection", received=0.0)
+        met = Metrics(mm_per_char=4.5, pitch=10.0, ascent=-5.0, descent=1.5)
+        # the block starts 160 units above the page's end: room for one chunk, not two
+        s = InkStream(a, rec, "r", 800.0, 2000.0, 80.0, 1.0, met, lambda: 1.0, 2160.0)
+        await s.finish("A first sentence that fits here. A second one that would not fit.")
+        assert len(played) == 1 and "no room" in rec.note
+
+    asyncio.run(go())
+
+
+def test_a_scrolled_page_can_be_written_on_down_to_the_screen_bottom():
+    """Requests 9 and 10: a selection at the bottom of the ink, on a page scrolled down."""
+    from codrawer_bridge.agentd.page import View
+    from codrawer_bridge.agentd.service import _page_bottom, _page_top, _slug
+
+    m = PageModel()
+    word = [[x / 1620, y / 2160, 0.5] for x, y in ((280, 2780), (880, 2920))]
+    m.observe(page_msg([{"id": "1:1", "tool": "pen", "pts": word}]))
+    assert _page_bottom(m) == 2920  # unscrolled: the ink is the page's end
+    m.view = View(0.75, 202.5, -699.0)  # request 9's view
+    assert abs(_page_bottom(m) - (2160 + 699) / 0.75) < 1e-6
+    assert abs(_page_top(m) - 699 / 0.75) < 1e-6
+    occ = Occupancy([word], W, H, height=_page_bottom(m))
+    sel = (280, 2762, 886, 2929)
+    p = place(
+        occ,
+        [Block(560, 470, scale=0.65)],
+        sel,
+        page_bottom=_page_bottom(m),
+        page_top=_page_top(m),
+        max_gap=300,
+    )
+    assert p is not None and _page_top(m) <= p.y and p.y + p.block.h <= _page_bottom(m) - 70
+    assert _slug("http://127.0.0.1:3457") == "127.0.0.1-3457"

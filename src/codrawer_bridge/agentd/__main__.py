@@ -37,7 +37,10 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
         help="pairing code (ROUTER_TOKEN)",
     )
     ap.add_argument(
-        "--term-url", default=os.environ.get("CODRAWER_TERM_URL", "http://127.0.0.1:3456")
+        "--term-url",
+        default=os.environ.get("CODRAWER_TERM_URL", "http://127.0.0.1:3456"),
+        help="the even-terminal to ask; a second one started with ANTHROPIC_MODEL set picks the "
+        "model (even-terminal has no model option), e.g. Haiku on :3457 for faster answers",
     )
     ap.add_argument("--term-token", default=os.environ.get("CODRAWER_TERM_TOKEN", "sig-glasses"))
     ap.add_argument(
@@ -89,8 +92,9 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-async def _main(a: argparse.Namespace) -> int:
-    cfg = Config(
+def config(a: argparse.Namespace) -> Config:
+    """The service's configuration from the command line."""
+    return Config(
         ws=a.ws,
         token=a.token,
         term_url=a.term_url,
@@ -108,6 +112,10 @@ async def _main(a: argparse.Namespace) -> int:
         include_ai=a.include_ai,
         dry_run=a.dry_run,
     )
+
+
+async def _main(a: argparse.Namespace) -> int:
+    cfg = config(a)
     agent = Agentd(cfg)
     fh = logging.FileHandler(agent.state / "agentd.log", encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
