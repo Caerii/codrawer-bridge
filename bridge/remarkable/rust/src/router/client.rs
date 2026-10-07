@@ -89,9 +89,15 @@ pub(super) async fn read_loop(mut stream: WsStream, sess: &Mutex<Session>, cid: 
             // marks"), "take me there" and agent_status (protocol.md) and the typer's notes:
             // relayed as sent, like keys
             "key" | "cursor" | "doc" | "typer_note" | "primer" | "primer_request" | "dock_action"
-            | "dock_entries" | "dock_query" | "mark_seen" | "mark_ask" | "mark_define" | "mark_invoke"
+            | "dock_query" | "mark_seen" | "mark_ask" | "mark_define" | "mark_invoke"
             | "mark_feedback" | "mark_query" | "marks" | "goto" | "agent_status" => {
                 sess.lock().unwrap().broadcast(&raw, cid)
+            }
+            "dock_entries" => {
+                // an agent's dock rows: relayed, and withdrawn for it when it leaves (mod.rs)
+                let mut s = sess.lock().unwrap();
+                s.own_dock(cid, &m.owner, m.entries.as_ref().is_some_and(|e| !e.is_empty()));
+                s.broadcast(&raw, cid);
             }
             "typer_config" => {
                 // The bridge's acknowledgement is its current speed: kept for joiners.

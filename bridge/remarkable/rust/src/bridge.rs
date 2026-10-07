@@ -17,6 +17,8 @@
 //!   typer's gate ([`typer::gate`]): it waits while the pen or a hand is on the screen.
 //! - The agent ink task ([`crate::agent_ink`]) hands the router's ai-layer strokes to the
 //!   codrawer-layer extension inside xochitl (NATIVE_AGENT_INK) and brings its `dock_action`s back.
+//! - [`crate::dockfile`] writes agents' `dock_entries` into /run/codrawer/dock.json for the
+//!   extension's dock; every connection asks for them (`dock_query`) and a dropped one forgets them.
 //! - The page thread ([`crate::page_watch`]) publishes xochitl's saved page as `page` snapshots
 //!   (read-only); the latest one is sent on every connection.
 //! - [`run_connections`] dials the router and writes the outbox (and keys) until the socket dies,
@@ -151,6 +153,8 @@ pub struct Sources {
     /// The typer's speed, announced (as an acknowledgement) on every new connection so the
     /// router always holds the current one for late joiners.
     pub typer: Option<std::sync::Arc<typer::Shared>>,
+    /// The agents' dock entries file ([`crate::dockfile`]), when this is a tablet.
+    pub dock: Option<std::sync::Arc<crate::dockfile::DockFile>>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -260,8 +264,23 @@ pub async fn run_bridge_forever(cfg: Config) -> Result<(), String> {
         })),
         (a, b) => a.or(b),
     };
+    // Agents' dock rows into dock.json, beside whatever else reads the router's messages.
+    let dock = crate::dockfile::DockFile::from_env().map(std::sync::Arc::new);
+    let on_message: Option<OnMessage> = match (on_message, dock.clone()) {
+        (rest, Some(d)) => Some(std::sync::Arc::new(move |m: &str| {
+            match d.handle(m) {
+                Ok(true) => println!("[dock] entries now from {:?}", d.owners()),
+                Err(e) => println!("[dock] {e}"),
+                Ok(false) => {}
+            }
+            if let Some(r) = &rest {
+                r(m);
+            }
+        })),
+        (rest, None) => rest,
+    };
 
-    run_connections(cfg, Sources { out_rx, key_rx, pages, actions_rx, held: None, ctl_rx, typer }, on_message).await
+    run_connections(cfg, Sources { out_rx, key_rx, pages, actions_rx, held: None, ctl_rx, typer, dock }, on_message).await
 }
 
 /// Where xochitl keeps its settings, among them the keyboard language (`InputLocale`).
@@ -375,8 +394,16 @@ pub async fn run_connections(cfg: Config, mut src: Sources, on_message: Option<O
         println!("[bridge] connected ws={ws_url}");
         reconnect_delay = base_delay;
 
+        if src.dock.is_some() {
+            let _ = ws.write_text(crate::dockfile::DOCK_QUERY.to_string()).await; // the agents announce again
+        }
         let err = write_outbox(&mut src, &ws, &mut err_rx).await;
         ws.close();
+        if let Some(d) = &src.dock {
+            if let Err(e) = d.reset() {
+                println!("[dock] reset: {e}");
+            }
+        }
         println!("[bridge] disconnected; reconnecting in {} (err={err})", go_duration(reconnect_delay));
         tokio::time::sleep(reconnect_delay).await;
     }
@@ -599,7 +626,7 @@ mod tests {
         cfg.ws_url = format!("ws://{}/ws/s1", listener.local_addr().unwrap());
         let (_out_tx, out_rx) = mpsc::channel(8);
         let (page_tx, page_rx) = tokio::sync::watch::channel(Some(r#"{"t":"page","rev":1}"#.to_string()));
-        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), actions_rx: None, held: None, ctl_rx: None, typer: None };
+        let src = Sources { out_rx, key_rx: None, pages: Some(page_rx), actions_rx: None, held: None, ctl_rx: None, typer: None, dock: None };
         tokio::spawn(run_connections(cfg, src, None));
 
         let mut first = accept_ws(&listener).await;
@@ -627,7 +654,7 @@ mod tests {
         let shared = std::sync::Arc::new(typer::Shared::new(typer::Settings::preset(typer::Speed::Careful), typer::Keymap::named("UnitedStates")));
         let (ctl_tx, ctl_rx) = mpsc::channel(16);
         let hook: OnMessage = std::sync::Arc::new(typer_hook(reply_tx, None, shared.clone(), ctl_tx));
-        let src = Sources { out_rx, key_rx: None, pages: None, actions_rx: None, held: None, ctl_rx: Some(ctl_rx), typer: Some(shared.clone()) };
+        let src = Sources { out_rx, key_rx: None, pages: None, actions_rx: None, held: None, ctl_rx: Some(ctl_rx), typer: Some(shared.clone()), dock: None };
         tokio::spawn(run_connections(cfg, src, Some(hook)));
 
         let mut ws = accept_ws(&listener).await;

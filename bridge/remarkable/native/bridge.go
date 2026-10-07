@@ -18,6 +18,8 @@ package main
 //     connection starts by announcing the speed, so the router always has it.
 //   - agentInkForever (agent_ink.go) hands the router's ai-layer strokes to the codrawer-layer
 //     extension inside xochitl (NATIVE_AGENT_INK) and brings its `dock_action`s back.
+//   - dockLink (dock_link.go) writes agents' `dock_entries` into /run/codrawer/dock.json for the
+//     extension's dock, asks for them on every connection and forgets them when it drops.
 //   - RunBridgeForever dials the router and drains the outbox, keyC and the page feed into the
 //     socket until it dies, then reconnects with backoff. It also notices a suspend/resume and
 //     reconnects at once instead of writing into a socket that died while the tablet slept.
@@ -75,12 +77,13 @@ func RunBridgeForever(cfg BridgeConfig) error {
 	pages := startPageWatch(cfg)
 	inkHook, actions, ink := startAgentInk(cfg, pages)
 	typer := startTyper(cfg, ink)
-	onMessage := typer.onMessage
+	dock := startDock()
+	onMessage := func(b []byte) { typer.onMessage(b); dock.onMessage(b) }
 	if inkHook != nil {
-		onMessage = func(b []byte) { typer.onMessage(b); inkHook(b) }
+		onMessage = func(b []byte) { typer.onMessage(b); dock.onMessage(b); inkHook(b) }
 	}
 
-	connectForever(cfg, outC, keyC, actions, pages, onMessage, typer)
+	connectForever(cfg, outC, keyC, actions, pages, onMessage, typer, dock)
 	return nil
 }
 
@@ -216,7 +219,7 @@ func (l *typerLink) control() <-chan []byte {
 // ── the connection loop ─────────────────────────────────────────────────────
 
 // connectForever dials the router, runs one connection until it fails, and reconnects.
-func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, actions <-chan []byte, pages *pageFeed, onMessage func([]byte), typer *typerLink) {
+func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, actions <-chan []byte, pages *pageFeed, onMessage func([]byte), typer *typerLink, dock *dockLink) {
 	pingEvery := time.Duration(float64(time.Second) * math.Max(1, cfg.PingSeconds))
 	pongWait := time.Duration(float64(time.Second) * math.Max(2, cfg.PongTimeoutSeconds))
 	wsURL := sourceURL(cfg.WsURL)
@@ -235,7 +238,11 @@ func connectForever(cfg BridgeConfig, outC <-chan []byte, keyC chan outKey, acti
 
 		fmt.Printf("[bridge] connected ws=%s\n", wsURL)
 		reconnectDelay = reconnectMin
+		if q := dock.query(); q != nil {
+			_ = ws.WriteRaw(q) // the agents announce their dock entries again
+		}
 		err = runConnection(ws, outC, keyC, actions, pages, typer, &held)
+		dock.disconnected()
 		fmt.Printf("[bridge] disconnected; reconnecting in %s (err=%v)\n", reconnectDelay, err)
 		time.Sleep(reconnectDelay)
 	}

@@ -47,6 +47,20 @@ pub(super) struct Envelope<'a> {
     /// absent on a client's request.
     #[serde(default)]
     pub(super) ok: Option<bool>,
+    /// `dock_entries`: whose entries these are.
+    #[serde(default)]
+    pub(super) owner: String,
+    /// `dock_entries`: the list, kept raw (an empty one withdraws the owner's entries).
+    #[serde(default, borrow)]
+    pub(super) entries: Option<Vec<&'a RawValue>>,
+}
+
+/// `dock_entries` with an empty list: an owner's entries withdrawn for a client that left.
+#[derive(Serialize)]
+pub(super) struct DockWithdraw<'a> {
+    pub(super) t: &'static str,
+    pub(super) owner: &'a str,
+    pub(super) entries: [u8; 0],
 }
 
 /// A `stroke_delete` re-encoded with only the ids the router accepted, when it refused or did

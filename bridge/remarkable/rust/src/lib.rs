@@ -33,6 +33,7 @@
 pub mod agent_ink;
 pub mod bridge;
 pub mod devices;
+pub mod dockfile;
 pub mod flags;
 pub mod inotify;
 pub mod input;

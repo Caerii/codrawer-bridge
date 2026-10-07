@@ -647,9 +647,19 @@ pen is down.
 ### `dock_entries` and `dock_query` (agents → the tablet's dock)
 
 The dock's entries come from `/run/codrawer/dock.json` (`{"entries":[{"id","label"},…]}`, see
-`dock_action`). An agent announces the entries it answers, so the tablet's bridge can write them
-there (merging owners, each owner's list replaced whole; the bridge side is not built yet, and
-until it is the extension's built-in list carries the same ids):
+`dock_action`). An agent announces the entries it answers, and the tablet's bridge (Go
+`dockfile/`, Rust `src/dockfile.rs`) keeps each owner's latest list in that file under
+`"owners":{"<owner>":[…]}`, beside the user's own `entries`, which it never touches. The dock
+shows its base rows (the user's `entries`, or the built-in list), then each owner's rows in owner
+order; a row whose id is already shown updates that row's label, badge and hint instead. Labels
+and badges change as soon as the agent sends a new list (a list replaces the owner's previous one
+whole), and a tap sends `dock_action` with the row's id. An owner's rows go when it sends an empty
+list, when the client that announced them leaves (the tablet's Go and Rust routers then send
+`{"t":"dock_entries","owner":"<owner>","entries":[]}` for it), and when the bridge's own
+connection drops; on every new connection the bridge sends `{"t":"dock_query"}` so connected
+agents announce again. Kept per entry: `id` (≤ 48 characters), `label` (≤ 80), `badge` (a
+string ≤ 24, or a bool: true shows "on"; false, "" and "off" show nothing), `hint` (≤ 160),
+`kind`; at most 12 entries per owner and 16 owners:
 
 ```json
 {"t":"dock_entries","owner":"primer","entries":[

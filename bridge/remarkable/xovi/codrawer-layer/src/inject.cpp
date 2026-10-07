@@ -56,14 +56,17 @@ QList<Injection> &injections() {
 // ---------------------------------------------------------------------------------------------
 // What the injected UI shows.
 
-// The configured or built-in entries.
-QVariantList baseEntries() {
+// /run/codrawer/dock.json, parsed (an empty object when absent or not JSON).
+QJsonObject dockJson() {
     QFile f(QString::fromLatin1(kDockJson));
-    if (f.open(QIODevice::ReadOnly)) {
-        const QJsonDocument d = QJsonDocument::fromJson(f.read(1 << 16));
-        const QJsonArray a = d.object().value(QStringLiteral("entries")).toArray();
-        if (!a.isEmpty()) return a.toVariantList();
-    }
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return QJsonDocument::fromJson(f.read(1 << 16)).object();
+}
+
+// The configured (`entries` in dock.json) or built-in entries.
+QVariantList baseEntries(const QJsonObject &dock) {
+    const QJsonArray a = dock.value(QStringLiteral("entries")).toArray();
+    if (!a.isEmpty()) return a.toVariantList();
     auto e = [](const char *id, const char *label) {
         return QVariantMap{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("label"), QString::fromLatin1(label)}};
     };
@@ -71,9 +74,45 @@ QVariantList baseEntries() {
             e("ask_page", "Ask about this page"), e("ask_selection", "Ask about selection")};
 }
 
+constexpr int kMaxEntries = 12;  // rows in the panel at most (112 px each: the screen's height)
+
+// The agents' entries (`owners` in dock.json: the bridge keeps each owner's latest dock_entries
+// there and drops an owner when it disconnects or sends an empty list; docs/protocol.md) merged
+// below the base ones, owners in name order. An agent's entry with an id already shown updates
+// that row's label, badge and hint instead of adding a second row.
+QVariantList withOwners(QVariantList base, const QJsonObject &owners) {
+    QStringList names = owners.keys();
+    names.sort();
+    for (const QString &owner : names) {
+        for (const QJsonValue &v : owners.value(owner).toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString id = o.value(QStringLiteral("id")).toString();
+            const QString label = o.value(QStringLiteral("label")).toString();
+            if (id.isEmpty() || label.isEmpty()) continue;
+            QVariantMap e{{QStringLiteral("id"), id}, {QStringLiteral("label"), label}, {QStringLiteral("owner"), owner}};
+            for (const char *k : {"badge", "hint"}) {
+                const QJsonValue x = o.value(QLatin1String(k));
+                if (!x.isUndefined() && !x.isNull()) e.insert(QLatin1String(k), x.toVariant());
+            }
+            bool merged = false;
+            for (QVariant &b : base) {
+                QVariantMap m = b.toMap();
+                if (m.value(QStringLiteral("id")).toString() != id) continue;
+                for (auto it = e.constBegin(); it != e.constEnd(); ++it) m.insert(it.key(), it.value());
+                b = m;
+                merged = true;
+                break;
+            }
+            if (!merged && base.size() < kMaxEntries) base << e;
+        }
+    }
+    return base;
+}
+
 // The entries, with a pending "Go to …?" offer first (navigate.h).
 QVariantList dockEntries() {
-    QVariantList l = baseEntries();
+    const QJsonObject dock = dockJson();
+    QVariantList l = withOwners(baseEntries(dock), dock.value(QStringLiteral("owners")).toObject());
     const QString offer = offerLabel();
     if (!offer.isEmpty()) l.prepend(QVariantMap{{QStringLiteral("id"), QStringLiteral("goto_offer")}, {QStringLiteral("label"), offer}});
     return l;
@@ -385,7 +424,8 @@ void injectTick() {
             in.nextTry = now + (in.failures >= 10 ? 60000 : in.failures >= 3 ? 10000 : 0);
         }
     }
-    const qint64 dm = stat(kDockJson, &st) == 0 ? qint64(st.st_mtime) : 0;
+    // nanoseconds and size: the bridge may rewrite the file twice within a second
+    const qint64 dm = stat(kDockJson, &st) == 0 ? qint64(st.st_mtim.tv_sec) * 1000000000 + st.st_mtim.tv_nsec + st.st_size : 0;
     if (dm != dockMtime) {
         dockMtime = dm;
         for (Injection &in : injections()) refreshInjected(in);

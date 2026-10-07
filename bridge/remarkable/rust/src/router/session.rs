@@ -12,7 +12,7 @@
 //! began up to its `rev`, so those strokes leave the log ([`Session::set_page`]); a joiner is
 //! replayed the base first, then the log. `clear` drops both.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde_json::value::RawValue;
@@ -20,7 +20,7 @@ use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 use super::client::Client;
-use super::messages::{json_msg, Envelope, ReplayDoc, ReplayEnd, ReplayPts};
+use super::messages::{json_msg, DockWithdraw, Envelope, ReplayDoc, ReplayEnd, ReplayPts};
 use super::{DOC_COMPACT_AFTER, DOC_COMPACT_AT, DOC_REPLAY_N, MAX_POINTS, MAX_STROKES, MAX_STROKE_POINTS, REPLAY_PTS};
 
 /// A session: who is connected, the page and the shared document.
@@ -54,6 +54,9 @@ pub(super) struct Member {
     pub(super) client: Arc<Client>,
     /// `Some` while the client's replay is being queued: broadcasts wait here, in order.
     pub(super) held: Option<Vec<Utf8Bytes>>,
+    /// The owners whose `dock_entries` this client announced and has not withdrawn: withdrawn
+    /// for it when it leaves ([`Session::withdraw_dock_of`]).
+    pub(super) dock_owners: BTreeSet<String>,
 }
 
 /// Points per block: one replayed stroke_pts message.
@@ -282,6 +285,28 @@ impl Session {
                 Some(held) => held.push(raw.clone()), // flushed once its replay is queued
                 None => m.client.queue(raw.clone()),
             }
+        }
+    }
+
+    /// Records that `cid` announced (`has`) or withdrew `owner`'s dock entries.
+    pub(super) fn own_dock(&mut self, cid: u64, owner: &str, has: bool) {
+        let Some(m) = self.clients.get_mut(&cid) else { return };
+        if owner.is_empty() {
+            return;
+        }
+        if has {
+            m.dock_owners.insert(owner.to_string());
+        } else {
+            m.dock_owners.remove(owner);
+        }
+    }
+
+    /// `cid` is leaving: the dock entries it announced go with it (an empty list per owner, in
+    /// name order), so the tablet's dock never offers rows nobody answers.
+    pub(super) fn withdraw_dock_of(&mut self, cid: u64) {
+        let owners = self.clients.get_mut(&cid).map(|m| std::mem::take(&mut m.dock_owners)).unwrap_or_default();
+        for owner in owners {
+            self.broadcast(&json_msg(&DockWithdraw { t: "dock_entries", owner: &owner, entries: [] }), cid);
         }
     }
 

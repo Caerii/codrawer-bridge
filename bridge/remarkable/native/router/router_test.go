@@ -677,3 +677,29 @@ func TestGotoIsRelayed(t *testing.T) {
 	}
 	expectQuiet(t, phone, 150*time.Millisecond)
 }
+
+// An agent's dock entries are relayed; when the agent leaves, the router withdraws them for it
+// (an empty list per owner it announced), so the tablet's dock never keeps a dead agent's rows.
+// An owner the agent withdrew itself is not withdrawn again.
+func TestDockEntriesWithdrawnWhenOwnerLeaves(t *testing.T) {
+	srv := newServer(t)
+	tablet := dial(t, srv, "s1")
+	agent := dial(t, srv, "s1")
+	send(t, agent, `{"t":"dock_entries","owner":"agentd","entries":[{"id":"agentd_memory","label":"Memory: off","badge":"off"}]}`)
+	if m := read(t, tablet); m["t"] != "dock_entries" || m["owner"] != "agentd" {
+		t.Fatalf("got %v", m)
+	}
+	send(t, agent, `{"t":"dock_entries","owner":"other","entries":[{"id":"x","label":"X"}]}`)
+	read(t, tablet)
+	send(t, agent, `{"t":"dock_entries","owner":"other","entries":[]}`)
+	read(t, tablet)
+	_ = agent.Close()
+	m := read(t, tablet)
+	if m["t"] != "dock_entries" || m["owner"] != "agentd" {
+		t.Fatalf("want agentd's entries withdrawn, got %v", m)
+	}
+	if e, ok := m["entries"].([]any); !ok || len(e) != 0 {
+		t.Fatalf("want an empty list, got %v", m["entries"])
+	}
+	expectQuiet(t, tablet, 150*time.Millisecond) // "other" was withdrawn already
+}

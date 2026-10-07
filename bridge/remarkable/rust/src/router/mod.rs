@@ -276,7 +276,7 @@ impl Router {
         let (snap, n) = {
             let mut s = sess.lock().unwrap();
             let snap = want_replay.then(|| s.snapshot());
-            s.clients.insert(cid, Member { client: client.clone(), held: Some(Vec::new()) });
+            s.clients.insert(cid, Member { client: client.clone(), held: Some(Vec::new()), dock_owners: Default::default() });
             (snap, s.clients.len())
         };
         let replay = snap.map(|s| s.messages()).unwrap_or_default();
@@ -307,6 +307,7 @@ impl Router {
 
         let n = {
             let mut s = sess.lock().unwrap();
+            s.withdraw_dock_of(cid);
             s.clients.remove(&cid);
             if s.compact_who == Some(cid) {
                 s.compact_who = None; // ask someone else next time
