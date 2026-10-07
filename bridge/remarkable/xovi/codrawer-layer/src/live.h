@@ -62,7 +62,8 @@ namespace cdl {
 void liveOp(const QJsonObject &op);
 
 // The user just tapped Ask (inject.h): start a thinking doodle at once, as "pending", just below
-// `selection` (page units, x centred; left-aligned, 80 page units down, agentd's BELOW_GAP) or, for
+// `selection` (page units, x centred: the selected ink's bounds when known, else the lasso's rect;
+// left-aligned, 36 page units below its bottom, agentd's BELOW_GAP) or, for
 // the whole page (an invalid rect), a third of the way down the screen. Each Ask gets its own: the
 // overlay plays any number at once, one per request. An agent's first `overlay` status for a request
 // adopts the nearest pending one; with none in 8 s it shows a "?" and goes (the dock says so:

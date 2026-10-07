@@ -29,7 +29,7 @@ namespace {
 constexpr const char *kLiveQml = "/home/root/xovi/exthome/codrawer-layer/live.qml";
 constexpr int kRemoveAfterMs = 250;   // after the commit: the native line is on screen by then
 constexpr int kForgetAfterMs = 15000; // a stroke whose commit never reports goes anyway
-constexpr double kLineGap = 80;       // page units below a selection where its answer begins (agentd's BELOW_GAP)
+constexpr double kLineGap = 36;       // page units below the selected ink where its answer begins (agentd's BELOW_GAP)
 
 qint64 &lastAgentStatusAt() {
     static qint64 t = 0;
@@ -243,7 +243,7 @@ void liveLocalThinking(const QRectF &selection) {
     if (!item || !tv.isValid()) return;
     QRectF spot;  // page units
     if (selection.isValid() && !selection.isEmpty()) {
-        // just below the selection, left-aligned, a line's gap down: where an answer begins
+        // where agentd puts the answer: the ink's left edge, 36 page units below its bottom
         spot = QRectF(selection.left(), selection.bottom() + kLineGap, std::max(selection.width(), 600.0), 200);
     } else {
         // the whole page was asked about: a third of the way down the screen, centred
