@@ -24,6 +24,8 @@ Item {
     property int frames: 0      // frames observed while points were due
     property var lastHead: null
     property real maxBuffer: 0
+    property real lastBuffer: 0
+    property int shrinks: 0
     property real fpsFrom: 0
     property int drawnFrom: 0
     property string fps: ""
@@ -68,6 +70,8 @@ Item {
                 top.check(f >= 15, "live strokes at about 20 fps (" + top.fps + ")");
             }
             top.maxBuffer = Math.max(top.maxBuffer, L.bufferMs);
+            if (top.lastBuffer && L.bufferMs < top.lastBuffer) top.shrinks += 1;
+            top.lastBuffer = L.bufferMs;
             const s = L.strokes["f1"];
             if (s && top.tick > 4 && top.tick < 38) {
                 top.frames += 1;
@@ -83,14 +87,14 @@ Item {
         const L = live;
         check(moves >= frames * 0.8, "the head moves on nearly every frame (" + moves + " of " + frames + ")");
         check(maxBuffer > 70, "the buffer grew in the stall (max " + maxBuffer + " ms)");
-        check(L.bufferMs < maxBuffer, "and shrank back when steady (now " + L.bufferMs + " ms)");
+        check(shrinks > 0 && L.bufferMs <= L.bufferMax, "and shrank when steady (" + shrinks + " step(s), now " + L.bufferMs + " ms)");
         const s = L.strokes["f1"];
         check(s && s.idx === s.pts.length - 1, "the stroke played to its end");
-        const report = notes.filter(function(n) { return n.indexOf("live: answer of 1 stroke(s) played in") === 0; });
+        const report = notes.filter(function(n) { return n.indexOf("answer (none): 1 stroke(s) played in") === 0; });
         check(report.length === 1, "the answer's timing is reported once");
         const mode = L && L.animRegions ? "native" : "fallback";
         if (failures.length) console.log("fast_test: FAIL " + mode + ": " + failures.join("; ") + " NOTES " + notes.join(" / "));
-        else console.log("fast_test: PASS (" + mode + ") " + fps + "; " + (report[0] || "").substring(6));
+        else console.log("fast_test: PASS (" + mode + ") " + fps + "; " + (report[0] || ""));
         Qt.quit();
     }
 }

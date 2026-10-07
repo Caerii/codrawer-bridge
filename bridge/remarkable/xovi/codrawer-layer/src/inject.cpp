@@ -177,7 +177,18 @@ void dockAction(const QString &source, const QString &id) {
             if (!s.viewRect.isNull())
                 o.insert(QStringLiteral("view_bbox"), QJsonArray{s.viewRect.left(), s.viewRect.top(), s.viewRect.right(), s.viewRect.bottom()});
             o.insert(QStringLiteral("selected_ms_ago"), double(nowMs() - s.atMs));
+            if (s.inkRect.isValid() && !s.inkRect.isEmpty())
+                o.insert(QStringLiteral("ink"), QJsonArray{s.inkRect.left(), s.inkRect.top(), s.inkRect.right(), s.inkRect.bottom()});
         }
+    }
+    // The answer's spot, proposed by the tablet (spot.h): agentd writes there unless it collides
+    // or does not fit, so the doodle that starts there at once need not move.
+    QRectF spot;
+    if (id == QLatin1String("ask_selection") || id == QLatin1String("ask_page")) {
+        const Selection &s = lastSelection();
+        const bool sel = id == QLatin1String("ask_selection") && s.page == page && s.atMs > 0;
+        spot = liveProposedSpot(sel ? (s.inkRect.isValid() && !s.inkRect.isEmpty() ? s.inkRect : s.rect) : QRectF());
+        if (spot.isValid()) o.insert(QStringLiteral("spot"), QJsonArray{spot.left(), spot.top(), spot.right(), spot.bottom()});
     }
     const bool ask = id == QLatin1String("ask_page") || id == QLatin1String("ask_selection");
     if (ask) {
@@ -204,9 +215,7 @@ void dockAction(const QString &source, const QString &id) {
     if (ask && sent) {
         // The answer's thinking starts here, at once (live.h), not when an agent's first status
         // makes it across the network; if no agent speaks within 8 s, the dock says so.
-        const Selection &s = lastSelection();
-        const QRectF ink = s.inkRect.isValid() && !s.inkRect.isEmpty() ? s.inkRect : s.rect;
-        liveLocalThinking(id == QLatin1String("ask_selection") && s.page == page && s.atMs > 0 ? ink : QRectF());
+        liveLocalThinking(spot);
         const qint64 askedAt = nowMs();
         QTimer::singleShot(8000, QCoreApplication::instance(), [askedAt] {
             if (liveLastAgentStatusMs() >= askedAt) return;

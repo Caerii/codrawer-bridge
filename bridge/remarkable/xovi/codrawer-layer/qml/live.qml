@@ -31,7 +31,7 @@
 // stream that runs late against its own timestamps), and shrinks by 5 ms (to 60 at least)
 // after each second of steady arrival. When an answer's strokes have all played, the overlay reports the tablet's
 // wall-clock time from the first point's arrival to the last drawn against the hand's own time
-// (the points' timestamps). Each panel is
+// (the points' timestamps), once per answer (keyed by its request id, after its `done`). Each panel is
 // an e-paper Animation region (the fast waveform, created in a try like every xochitl module
 // here); no Pen region: that waveform is the user's pen's own.
 //
@@ -52,10 +52,17 @@
 // A doodle's life:
 //
 //   pending   started on the tablet the moment the user taps Ask (thinkPending), not when the
-//             agent's first status arrives over the network (that took seconds on the device)
+//             agent's first status arrives over the network (that took seconds on the device), at
+//             the spot the tablet proposes with the Ask (src/spot.h: the ink's left edge, 36 page
+//             units below it), which agentd uses unless it collides or does not fit
 //   adopted   the agent's first `thinking` status (thinkStart with its id) takes the nearest
-//             pending doodle and the doodle glides to the agent's spot; with no status in 8 s, a
-//             calm "?" says so and the doodle goes
+//             pending doodle. When the agent confirms the spot (within 20 page units) the doodle
+//             does not move. Otherwise the nib travels there once, on an arc, at a hand's speed
+//             (300-500 ms, lognormal velocity), and doodles on where it lands; it never moves
+//             twice, and later corrections of up to 20 units are ignored. A spot off screen: the
+//             nib waits at the nearest screen edge with "answer below ↓" (or above ↑) and goes
+//             on when the spot scrolls into view. With no status in 8 s, a calm "?" says so and
+//             the doodle goes
 //   hand-off  the first live stroke near it: the nib leaves the doodle and travels on a curve to
 //             where the stroke begins, the doodle dissolving behind it, and the stroke starts to
 //             write as the nib arrives
@@ -112,8 +119,11 @@ Item {
     property bool lastStarved: false
     property int starvedFrames: 0
     property real lastDoodleAt: 0
-    // the answer being played: first arrival (clock ms), the hand's first and last timestamps
-    property var answer: null
+    // answers being played, by request id ("" for ink no request claimed): first arrival and
+    // last drawn (clock ms), the hand's first and last timestamps, strokes, stalls, done
+    property var answers: ({})
+    property string writingId: ""   // the request whose ink arrives now (its clear / hand-off)
+    readonly property real ignoreMove: 20   // page units: a correction this small is ignored
     readonly property int handoffMs: 700   // the nib's travel from a doodle to its answer
     readonly property int clearWaitMs: 4000
     readonly property int thinkMaxMs: 120000
@@ -142,6 +152,15 @@ Item {
     property real statsSince: 0
 
     function clock() { return Date.now() - pausedTotal; }
+
+    // While the pen is down the panels' Animation regions are dropped, so xochitl's own pen
+    // rendering is not overridden over a live stroke; they come back when it lifts.
+    onPausedChanged: {
+        const all = [];
+        for (const id in strokes) all.push(strokes[id].panel);
+        for (const id in doodles) all.push(doodles[id].panel);
+        for (let i = 0; i < all.length; ++i) if (all[i].region) all[i].region.visible = !paused;
+    }
 
     onHaltedChanged: {
         if (halted) {
@@ -196,6 +215,8 @@ Item {
         property var jobs: []
         // draws everything this panel shows (after the canvas is reallocated)
         property var redraw: null
+        // its e-paper Animation region, if xochitl's module is there
+        property var region: null
         x: area ? area.x0 : 0
         y: area ? area.y0 : 0
         width: area ? area.x1 - area.x0 : 0
@@ -259,6 +280,8 @@ Item {
                                  'Epaper.ScreenModeItem { objectName: "codrawer-live-anim"; anchors.fill: parent; enabled: false; ' +
                                  'mode: Epaper.ScreenModeItem.Animation }', p, "codrawer-live-anim");
         animRegions = region !== null;
+        p.region = region;
+        if (region) region.visible = !paused;
         return p;
     }
 
@@ -268,7 +291,8 @@ Item {
         let any = false, some = false;
         const on = function(p) { return !p.area || onScreen(p.area); };
         for (const id in strokes) { some = true; any = any || on(strokes[id].panel); }
-        for (const id in doodles) { some = true; any = any || on(doodles[id].panel); }
+        // a parked doodle keeps the clock going: it must notice its spot scrolling into view
+        for (const id in doodles) { some = true; any = any || !!doodles[id].parked || on(doodles[id].panel); }
         offscreen = some && !any;
     }
 
@@ -278,7 +302,11 @@ Item {
     function paintItem(ctx, it) {
         ctx.strokeStyle = "black";
         ctx.fillStyle = "black";
-        if (it.dot) {
+        if (it.text) {
+            ctx.font = "28px sans-serif";
+            ctx.textBaseline = "top";
+            ctx.fillText(it.text, it.at.x, it.at.y);
+        } else if (it.dot) {
             ctx.beginPath();
             ctx.arc(it.dot.x, it.dot.y, Math.max(0.5, it.r), 0, 2 * Math.PI);
             ctx.fill();
@@ -329,13 +357,17 @@ Item {
             strokes[id] = s;
             if (pts.length > 0) s.local0 = Math.max(now, handOffNear(pts[0][0], pts[0][1]));
         }
-        if (!answer) answer = { firstAt: now, handT0: -1, handT1: -1, strokes: 0, starved: 0 };
-        if (s.pts.length === 0) answer.strokes += 1;
+        if (s.answerId === undefined) {
+            s.answerId = writingId;
+            if (!answers[s.answerId]) answers[s.answerId] = { firstAt: now, handT0: -1, handT1: -1, strokes: 0, starved: 0, done: false };
+            answers[s.answerId].strokes += 1;
+        }
+        const ans = answers[s.answerId];
         for (let i = 0; i < pts.length; ++i) {
             const p = pts[i];
-            if (p[3] > 0) {
-                if (answer.handT0 < 0 || p[3] < answer.handT0) answer.handT0 = p[3];
-                answer.handT1 = Math.max(answer.handT1, p[3]);
+            if (p[3] > 0 && ans) {
+                if (ans.handT0 < 0 || p[3] < ans.handT0) ans.handT0 = p[3];
+                ans.handT1 = Math.max(ans.handT1, p[3]);
             }
             const arrival = now - s.local0;
             let due;
@@ -378,7 +410,7 @@ Item {
 
     // Plays every stroke up to the current clock; draws the new parts.
     function stepStrokes(now) {
-        let starved = false, live = false;
+        let starved = false, live = false, starvedAnswer = null;
         for (const id in strokes) {
             const s = strokes[id];
             if (s.pts.length === 0) continue;
@@ -386,7 +418,10 @@ Item {
             if (play < 0) continue;
             if (!s.ended) {
                 live = true;
-                if (play > s.pts[s.pts.length - 1].due) starved = true;  // caught up with a stroke still coming
+                if (play > s.pts[s.pts.length - 1].due) {  // caught up with a stroke still coming
+                    starved = true;
+                    starvedAnswer = s.answerId;
+                }
             }
             let idx = s.idx;
             while (idx + 1 < s.pts.length && s.pts[idx + 1].due <= play) ++idx;
@@ -423,7 +458,7 @@ Item {
             if (!wasStarved) {
                 bufferMs = Math.min(bufferMax, bufferMs + 20);
                 starvedFrames = 0;
-                if (answer) answer.starved += 1;
+                if (starvedAnswer !== null && answers[starvedAnswer]) answers[starvedAnswer].starved += 1;
             } else if (++starvedFrames >= 500 / frameMs) {
                 bufferMs = Math.min(bufferMax, bufferMs + 10);
                 starvedFrames = 0;
@@ -433,14 +468,28 @@ Item {
             bufferMs = Math.max(bufferMin, bufferMs - 5);
             steadyFrames = 0;
         }
-        // the answer has played out: its wall-clock time against the hand's
-        if (answer && !anyLiveActive()) {
-            const wall = now - answer.firstAt, hand = answer.handT1 - answer.handT0;
-            note("live: answer of " + answer.strokes + " stroke(s) played in " + Math.round(wall) + " ms on the tablet, the hand's own " +
-                 (answer.handT0 >= 0 ? Math.round(hand) + " ms" : "unknown (no timestamps)") + "; buffer now " + Math.round(bufferMs) +
-                 " ms, " + answer.starved + " stall(s)");
-            answer = null;
+        // an answer that is done and has played out: its wall-clock time against the hand's
+        for (const id in answers) {
+            const a = answers[id];
+            if (!a.done && id !== "") continue;
+            let playing = false;
+            for (const k in strokes) {
+                const t = strokes[k];
+                if (t.answerId === id && (!t.ended || t.idx + 1 < t.pts.length)) playing = true;
+            }
+            if (!playing) reportAnswer(id, now);
         }
+    }
+
+    // One line per answer: `answer <id>: N stroke(s) played in X ms on the tablet, the hand's own
+    // Y ms; buffer B ms, K stall(s)` (ink no request claimed is reported as it ends, as "(none)").
+    function reportAnswer(id, now) {
+        const a = answers[id];
+        if (!a) return;
+        delete answers[id];
+        note("answer " + (id === "" ? "(none)" : id) + ": " + a.strokes + " stroke(s) played in " + Math.round(now - a.firstAt) +
+             " ms on the tablet, the hand's own " + (a.handT0 >= 0 ? Math.round(a.handT1 - a.handT0) + " ms" : "unknown (no timestamps)") +
+             "; buffer " + Math.round(bufferMs) + " ms, " + a.starved + " stall(s)" + (a.done || id === "" ? "" : " (no done status)"));
     }
 
     function anyLiveActive() {
@@ -501,13 +550,56 @@ Item {
             }
         }
         if (d) {
-            if (Math.abs(d.cx - at.x) > 0.5 || Math.abs(d.cy - at.y) > 0.5) d.move = { fx: d.cx, fy: d.cy, tx: at.x, ty: at.y, t0: now };
             d.pending = false;
+            goTo(d, at.x, at.y, now);
             frames.start();
             return;
         }
-        d = newDoodle(id, at.x, at.y, style);
-        note("thinking: " + id + " " + d.style + " at " + Math.round(at.x) + "," + Math.round(at.y));
+        // a new doodle for a spot off screen starts at the screen edge, parked, with its cue
+        const edge = edgeFor(at.x, at.y);
+        d = newDoodle(id, edge ? edge.x : at.x, edge ? edge.y : at.y, style);
+        if (edge) {
+            d.final = { x: at.x, y: at.y };
+            d.parked = { cue: edge.cue };
+        }
+        note("thinking: " + id + " " + d.style + " at " + Math.round(at.x) + "," + Math.round(at.y) + (edge ? " (off screen: " + edge.cue + ")" : ""));
+    }
+
+    // The doodle's one move (see the header): none when the agent confirms the spot (within
+    // ignoreMove page units) or after it has moved once; else an arc to (x, y), or, when that is
+    // off screen, to the nearest screen edge first (parked, with a cue), then on when it shows.
+    function goTo(d, x, y, now) {
+        const dist = Math.hypot(x - (d.final ? d.final.x : d.cx), y - (d.final ? d.final.y : d.cy));
+        if (dist <= ignoreMove) {
+            if (!d.final) note("thinking: " + d.id + " spot confirmed (" + Math.round(dist) + " units off): stays");
+            return;
+        }
+        if (d.final) {
+            note("thinking: " + d.id + " moves only once; a later spot " + Math.round(dist) + " units away is ignored");
+            return;
+        }
+        d.final = { x: x, y: y };
+        travel(d, now);
+    }
+
+    // The screen-edge point nearest a spot (x, y) that is off screen, with its cue, or null when
+    // the spot is on screen.
+    function edgeFor(x, y) {
+        const half = thinkSize / 2, v = visibleArea;
+        if (onScreen(rect(x - half, y - half, x + half, y + half)) || v.width >= 100000) return null;
+        return { x: Math.max(v.x + half, Math.min(v.x + v.width - half, x)), y: Math.max(v.y + half, Math.min(v.y + v.height - half, y)),
+                 cue: y > v.y + v.height ? "answer below \u2193" : y < v.y ? "answer above \u2191" : "answer here" };
+    }
+
+    // Starts the nib's arc to d.final, or to the screen edge nearest it while it is off screen.
+    function travel(d, now) {
+        const f = d.final, edge = edgeFor(f.x, f.y);
+        const tx = edge ? edge.x : f.x, ty = edge ? edge.y : f.y;
+        d.parked = edge ? { cue: edge.cue } : null;
+        const dist = Math.hypot(tx - d.cx, ty - d.cy);
+        d.move = { fx: d.cx, fy: d.cy, tx: tx, ty: ty, t0: now, ms: Math.max(300, Math.min(500, 300 + dist * 0.25)), path: [] };
+        note("thinking: " + d.id + " travels " + Math.round(dist) + " units in " + Math.round(d.move.ms) + " ms" +
+             (d.parked ? " to the screen edge (" + d.parked.cue + ")" : ""));
     }
 
     // Started on the tablet the moment the user taps Ask, before any agent has said a word: a
@@ -529,6 +621,7 @@ Item {
         const d = doodles[id];
         if (!d) return;
         if (!d.clearAt) d.clearAt = clock();
+        writingId = id;
         if (typeof tx === "number" && typeof ty === "number") d.target = { x: tx, y: ty };
     }
 
@@ -544,6 +637,8 @@ Item {
             d.done = { ok: ok !== false, t0: clock() };
             frames.start();
         }
+        if (answers[id]) answers[id].done = true;
+        if (writingId === id) writingId = "";
         if (ok === false && text !== "" && at) showCaption(text, at.x, at.y);
     }
 
@@ -572,6 +667,7 @@ Item {
         const now = clock();
         const from = best.trail.length ? best.trail[best.trail.length - 1] : { x: best.cx, y: best.cy };
         best.handoff = { from: from, to: { x: x, y: y }, t0: now, path: [] };
+        if (!writingId) writingId = best.id;
         return now + handoffMs;
     }
 
@@ -701,10 +797,38 @@ Item {
         if (now - d.t0 > thinkMaxMs) return thinkEnd(d.id, "timeout");
         // adopted or moved: glide to the agent's spot (eased, 600 ms); the doodle keeps moving
         if (d.move) {
-            const m = d.move, u = Math.min(1, (now - m.t0) / 600), e = u * u * (3 - 2 * u);
-            d.cx = m.fx + (m.tx - m.fx) * e;
-            d.cy = m.fy + (m.ty - m.fy) * e;
-            if (u >= 1) d.move = null;
+            // the nib's arc: a curve that leaves sideways, with a hand's bell-shaped speed
+            const m = d.move, u = Math.min(1, (now - m.t0) / m.ms), e = lognormalCdf(u);
+            const mx = (m.fx + m.tx) / 2 - (m.ty - m.fy) * 0.2, my = (m.fy + m.ty) / 2 + (m.tx - m.fx) * 0.2;
+            const x = (1 - e) * (1 - e) * m.fx + 2 * (1 - e) * e * mx + e * e * m.tx;
+            const y = (1 - e) * (1 - e) * m.fy + 2 * (1 - e) * e * my + e * e * m.ty;
+            m.path.push({ x: x, y: y });
+            while (m.path.length > 6) m.path.shift();
+            d.cx = x;
+            d.cy = y;
+            if (u >= 1) {
+                d.move = null;
+                d.trail = [];  // the doodle begins afresh where the nib landed
+            } else {
+                const items = [];
+                for (let i = 1; i < m.path.length; ++i) items.push({ pts: [m.path[i - 1], m.path[i]], width: 0.8 + 2.4 * i / m.path.length });
+                items.push({ dot: { x: x, y: y }, r: 3 });
+                return paintDoodle(d, items);
+            }
+        }
+        // parked at the screen edge: on to the spot once it shows
+        if (d.parked && !d.move) {
+            const f = d.final, half = thinkSize / 2;
+            if (onScreen(rect(f.x - half, f.y - half, f.x + half, f.y + half))) {
+                // the view scrolled: the nib enters from the edge it waited at, out of sight
+                // until then, and arcs to the spot
+                const v = visibleArea;
+                if (!onScreen(rect(d.cx - half, d.cy - half, d.cx + half, d.cy + half))) {
+                    d.cx = Math.max(v.x + half, Math.min(v.x + v.width - half, d.cx));
+                    d.cy = Math.max(v.y + half, Math.min(v.y + v.height - half, d.cy));
+                }
+                travel(d, now);
+            }
         }
         // nobody answered: dissolve the doodle (0.8 s), show a calm "?" (2.4 s), end
         if (d.pending && !d.noAgent && now - d.t0 > pendingLimitMs) {
@@ -759,9 +883,15 @@ Item {
 
     // Queues one frame of doodle d: `all` replaces the last frame's items on its panel.
     function paintDoodle(d, all) {
+        if (d.parked && !d.move) all = all.concat([{ text: d.parked.cue, at: { x: d.cx - thinkSize / 2, y: d.cy + thinkSize / 2 + 6 } }]);
         let r = null;
         for (let i = 0; i < all.length; ++i) {
-            const it = all[i], pts = it.pts || it.fill || [it.dot];
+            const it = all[i];
+            if (it.text) {
+                r = grow(grow(r, it.at.x, it.at.y, 4), it.at.x + 280, it.at.y + 36, 4);
+                continue;
+            }
+            const pts = it.pts || it.fill || [it.dot];
             for (let j = 0; j < pts.length; ++j) r = grow(r, pts[j].x, pts[j].y, (it.width || it.r || 2) + 4);
         }
         // the panel covers the doodle's square and, during a hand-off, the flight to its target
@@ -828,6 +958,7 @@ Item {
     // overlay must leave nothing over the page).
     function checkIdle() {
         if (!isIdle()) return;
+        for (const id in answers) reportAnswer(id, clock());
         frames.stop();
         offscreen = false;
         root.idle();
