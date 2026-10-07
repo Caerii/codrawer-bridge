@@ -276,16 +276,26 @@ codrawer-agentd (`src/codrawer_bridge/agentd`) for each `ask_page` / `ask_select
 ```
 
 Fields: `id` one request (the three states of a request share it); `state` `thinking` (the model
-is reading; `bbox` is the spot reserved for a typical answer, or the selection when agent ink is
-off), `writing` (the hand is writing; `bbox` is the answer's actual block), `done` (finished or
-failed, `ok` says which; clear the overlay); `bbox` `[x0, y0, x1, y1]` in xochitl's page units
-with x centred, like `dock_action`'s (normalize with `x = (x_rm + w/2)/w`, `y = y_rm/h`).
-`thinking` may be followed directly by `done` (no answer, or text only).
+is reading; `bbox` is the spot reserved for the answer, under the selection and never over it,
+also when agent ink is off), `writing` (the hand is writing; `bbox` is the answer's actual
+block), `done` (finished or failed, `ok` says which; clear the overlay); `bbox` `[x0, y0, x1,
+y1]` in xochitl's page units with x centred, like `dock_action`'s (normalize with `x = (x_rm +
+w/2)/w`, `y = y_rm/h`). `thinking` may be followed directly by `done` (no answer, or text only).
+Every request that sent `thinking` ends with `done`, answered or not (replaced, cancelled, failed);
+agentd re-sends a lost `done` after it rejoins, so no overlay is left spinning.
+
+`done` may carry `note`, one line (at most 100 characters) for the tablet's dock: why there is no
+ink when the answer went elsewhere, e.g. `"Answered on your glasses (agent ink off on the
+desktop)"`, `"No room near the selection - answer on your glasses"`, `"Couldn't answer just now -
+try again"`. The bridge shows it on the dock's "codrawer status" row (`status … · <note>`) until
+the next `thinking`, and passes `ok` and `note` on in the overlay line, so the extension can end
+the overlay with a clear cue (a tick, or the note) rather than let it vanish.
 
 Relay: the Go, Rust and Python routers relay `agent_status` to every other client like
 `dock_action`, and the tablet bridge (agentink/live.go, agent_ink.rs) forwards it to the
 extension's ink socket as `{"op":"overlay","id","kind":"thinking"|"clear","state","bbox",
-"style"}` (`writing` and `done` clear; `writing` keeps the answer block's bbox). The extension
+"style","ok","note"}` (`writing` and `done` clear; `writing` keeps the answer block's bbox;
+`ok` and `note` only on `done`, when sent). The extension
 (codrawer-layer `src/live.h`, `qml/live.qml`) plays a small animation at the top left of the
 reserved spot (`style`: `pen`, the default, a nib doodling with a comet trail; `drop`; `glyph`)
 and, when the answer's first stroke streams in (the bridge also sends ai strokes live, point by

@@ -380,8 +380,68 @@ pub fn overlay(raw: &str) -> Result<String, String> {
         b.push_str(r#","style":"#);
         push_string(&mut b, style);
     }
+    // done: whether the agent answered, and its one-line note, so the overlay can end with a
+    // clear cue (a tick, or the note) rather than vanish
+    if state == "done" {
+        if let Some(ok) = m.get("ok").and_then(|v| v.as_bool()) {
+            b.push_str(if ok { r#","ok":true"# } else { r#","ok":false"# });
+        }
+    }
+    let note = clean_note(m.get("note").and_then(|v| v.as_str()).unwrap_or(""));
+    if !note.is_empty() {
+        b.push_str(r#","note":"#);
+        push_string(&mut b, &note);
+    }
     b.push('}');
     Ok(b)
+}
+
+/// The longest agent note the dock's status line carries, in chars (Go: `NoteMax`).
+pub const NOTE_MAX: usize = 100;
+
+/// An agent_status note as one short line: control characters become spaces, runs of spaces
+/// fold, cut to NOTE_MAX chars (Go: `CleanNote`).
+pub fn clean_note(s: &str) -> String {
+    let mut out = String::new();
+    let (mut n, mut space) = (0usize, false);
+    for c in s.chars() {
+        if c.is_control() || c == ' ' {
+            if !space && n > 0 {
+                out.push(' ');
+                n += 1;
+            }
+            space = true;
+            continue;
+        }
+        space = false;
+        out.push(c);
+        n += 1;
+        if n >= NOTE_MAX {
+            break;
+        }
+    }
+    out.trim_end_matches(' ').to_string()
+}
+
+/// What an agent_status means for the dock's status line (Go: `StatusNote`): Some(note) after a
+/// `done` with a note, Some("") when a new request starts thinking, None otherwise.
+pub fn status_note(raw: &str) -> Option<String> {
+    let m: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw).ok()?;
+    if m.get("t").and_then(|v| v.as_str()) != Some("agent_status") {
+        return None;
+    }
+    match m.get("state").and_then(|v| v.as_str()) {
+        Some("thinking") => Some(String::new()),
+        Some("done") => {
+            let n = clean_note(m.get("note").and_then(|v| v.as_str()).unwrap_or(""));
+            if n.is_empty() {
+                None
+            } else {
+                Some(n)
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Maps one stroke to page units; refuses points off the page by more than half a page.
@@ -730,9 +790,16 @@ pub fn initial_agent_ink(path: &str, env: bool) -> bool {
     }
 }
 
-/// What the dock shows for "codrawer status" (Go: `statusLine`).
-pub fn status_line(engine: &str, agent_on: bool) -> String {
-    format!("status codrawer {engine} bridge: connected, agent ink {}", if agent_on { "on" } else { "off" })
+/// What the dock shows for "codrawer status" (Go: `statusLine`): the bridge's state, then the
+/// last agent's note when it has one (an answer that went to the glasses only says so here).
+pub fn status_line(engine: &str, agent_on: bool, note: &str) -> String {
+    let mut line =
+        format!("status codrawer {engine} bridge: connected, agent ink {}", if agent_on { "on" } else { "off" });
+    if !note.is_empty() {
+        line.push_str(" · ");
+        line.push_str(note);
+    }
+    line
 }
 
 impl Link {
@@ -910,7 +977,8 @@ async fn forever(
         logged = false;
         let (rd, mut wr) = conn.into_split();
         let mut lines = BufReader::new(rd).lines();
-        let first = status_line("rust", link.agent_on()) + "\n";
+        let first = status_line("rust", link.agent_on(), "") + "\n";
+        let mut note = String::new(); // the last agent's note for the status line
         if !matches!(tokio::time::timeout(Duration::from_secs(2), wr.write_all(first.as_bytes())).await, Ok(Ok(()))) {
             println!("[ink] write failed");
             continue;
@@ -957,15 +1025,28 @@ async fn forever(
                     }
                     _ => break,
                 },
-                _ = status.recv() => Some(status_line("rust", link.agent_on())),
+                _ = status.recv() => Some(status_line("rust", link.agent_on(), &note)),
                 g = gotos.recv() => match g {
-                    Some(raw) if raw.contains("\"agent_status\"") => match overlay(&raw) {
-                        Ok(line) => Some(line),
-                        Err(why) => {
-                            println!("[ink] agent_status refused: {why}");
-                            None
+                    Some(raw) if raw.contains("\"agent_status\"") => {
+                        let mut out = match overlay(&raw) {
+                            Ok(line) => Some(line),
+                            Err(why) => {
+                                println!("[ink] agent_status refused: {why}");
+                                None
+                            }
+                        };
+                        if let Some(n) = status_note(&raw) {
+                            if n != note {
+                                note = n;
+                                let st = status_line("rust", link.agent_on(), &note);
+                                out = Some(match out {
+                                    Some(line) => line + "\n" + &st,
+                                    None => st,
+                                });
+                            }
                         }
-                    },
+                        out
+                    }
                     Some(raw) => {
                         seq += 1;
                         match goto_op(&raw, &format!("g{seq}"), consent_allows) {
@@ -1273,7 +1354,11 @@ mod tests {
         assert!(link.toggle_agent_ink(&f));
         assert!(rx.try_recv().is_ok(), "a new status line was asked for");
         assert!(initial_agent_ink(&f, false), "the choice was kept");
-        assert_eq!(status_line("go", true), "status codrawer go bridge: connected, agent ink on");
+        assert_eq!(status_line("go", true, ""), "status codrawer go bridge: connected, agent ink on");
+        assert_eq!(
+            status_line("rust", false, "Answered on your glasses (agent ink is off)"),
+            "status codrawer rust bridge: connected, agent ink off · Answered on your glasses (agent ink is off)"
+        );
     }
 
     const G_DOC: &str = "4c0e2d44-91ad-4d94-a473-ac8187400cd7";
@@ -1394,6 +1479,22 @@ mod tests {
     }
 
     /// Go: `TestOverlayFromAgentStatus`.
+    #[test]
+    fn overlay_done_carries_outcome_and_note() {
+        assert_eq!(
+            overlay(r#"{"t":"agent_status","state":"done","id":"q1","ok":false,"note":"No room near the\nselection —  answer on your glasses"}"#).unwrap(),
+            r#"{"op":"overlay","id":"q1","kind":"clear","state":"done","ok":false,"note":"No room near the selection — answer on your glasses"}"#
+        );
+        assert_eq!(clean_note(&"é".repeat(300)).chars().count(), NOTE_MAX);
+        assert_eq!(
+            status_note(r#"{"t":"agent_status","state":"done","id":"q","note":"Answered on your glasses"}"#),
+            Some("Answered on your glasses".to_string())
+        );
+        assert_eq!(status_note(r#"{"t":"agent_status","state":"thinking","id":"q","bbox":[0,0,1,1]}"#), Some(String::new()));
+        assert_eq!(status_note(r#"{"t":"agent_status","state":"done","id":"q","ok":true}"#), None);
+        assert_eq!(status_note(r#"{"t":"goto","doc":"d"}"#), None);
+    }
+
     #[test]
     fn overlay_from_agent_status() {
         assert_eq!(

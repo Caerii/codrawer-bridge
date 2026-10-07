@@ -63,7 +63,8 @@ type inkLink struct {
 	fallback atomic.Value // func(string): the uinput typer, for refused inserts
 	pending  sync.Map     // id → text, until the extension answers
 	seq      atomic.Int64
-	gotoC    chan []byte // router `goto` and `agent_status` messages, checked in the writer
+	gotoC    chan []byte  // router `goto` and `agent_status` messages, checked in the writer
+	note     atomic.Value // string: the last agent's note for the status line (agentink.StatusNote)
 }
 
 // insertText queues s for the focused text box; false when the extension cannot take it now.
@@ -98,13 +99,19 @@ var agentInkStateFile = "/home/root/codrawer/state/native_agent_ink"
 // engineName is the status line's engine word.
 const engineName = "go"
 
-// statusLine is what the dock shows for "codrawer status".
+// statusLine is what the dock shows for "codrawer status": the bridge's state, then the last
+// agent's note when it has one (an answer that went to the glasses only says so here, on the
+// tablet, rather than ending silently; docs/protocol.md, agent_status).
 func (l *inkLink) statusLine() []byte {
 	on := "off"
 	if l.agentOn.Load() {
 		on = "on"
 	}
-	return []byte(fmt.Sprintf("status codrawer %s bridge: connected, agent ink %s", engineName, on))
+	line := fmt.Sprintf("status codrawer %s bridge: connected, agent ink %s", engineName, on)
+	if n, _ := l.note.Load().(string); n != "" {
+		line += " · " + n
+	}
+	return []byte(line)
 }
 
 // toggleAgentInk flips native agent ink, keeps the choice, and asks for a new status line.
@@ -261,6 +268,13 @@ func serveInk(conn net.Conn, msgs <-chan []byte, link *inkLink, fwd *agentink.Fo
 					fmt.Printf("[ink] agent_status refused: %s\n", why)
 				} else if !write(line) {
 					return
+				}
+				if n, set := agentink.StatusNote(raw); set {
+					old, _ := link.note.Load().(string)
+					link.note.Store(n)
+					if n != old && !write(link.statusLine()) {
+						return
+					}
 				}
 				continue
 			}

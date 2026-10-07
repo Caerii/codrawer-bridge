@@ -54,17 +54,34 @@ def ink_in(occ_strokes: list[list[list[float]]], rect: tuple, grow: float = 0.0)
 # ── placement ────────────────────────────────────────────────────────────────────────────────
 
 
-def test_place_right_of_selection_in_free_space():
+def test_place_directly_below_the_selection_left_aligned():
     # a line of writing at y≈400 from x=200 to 700: the selection
     strokes = [hline(200, 700, 400), hline(220, 680, 440)]
+    sel = (200, 380, 700, 450)
     occ = Occupancy(strokes, W, H)
-    blocks = [Block(500, 120)]
-    p = place(occ, blocks, (200, 380, 700, 450))
+    p = place(occ, [Block(500, 120)], sel)
     assert p is not None
-    assert p.side == "right"
-    assert p.x >= 700 + 36  # past the selection by the clearance
-    assert abs(p.y - 380) <= 18 + 1e-6  # tops aligned (within one search step)
+    assert p.side == "below"
+    assert p.x == 200  # left edges aligned
+    assert p.y == 450 + placement.BELOW_GAP  # about one line under the selection's bottom
     assert not ink_in(strokes, p.rect, grow=36)
+
+
+def test_the_answer_never_overlaps_the_selection():
+    # a lasso around a sparse area: its box is mostly empty, and still never written over
+    strokes = [hline(300, 320, 300), hline(1100, 1120, 900)]
+    sel = (300, 300, 1120, 900)
+    occ = Occupancy(strokes, W, H)
+    for blocks in ([Block(400, 100)], [Block(300, 80, scale=0.65)], [Block(1300, 1800)]):
+        p = place(occ, blocks, sel)
+        if p is None:
+            continue
+        x0, y0, x1, y1 = p.rect
+        assert x1 <= sel[0] or x0 >= sel[2] or y1 <= sel[1] or y0 >= sel[3], p
+    # below is full: right of it next, tops aligned
+    crowded = strokes + [hline(150, 1550, y) for y in range(920, 2100, 40)]
+    p = place(Occupancy(crowded, W, H), [Block(300, 120)], sel)
+    assert p is not None and p.side == "right" and abs(p.y - 300) <= 18
 
 
 def test_place_below_when_right_margin_is_full():
@@ -247,46 +264,109 @@ def test_a_second_ask_for_the_same_selection_replaces_the_first():
     asyncio.run(go())
 
 
-def test_a_double_tap_gives_one_answer(tmp_path):
-    import json
-
+def _agent_with_fakes(tmp_path, delay: float = 0.3):
+    """An Agentd with a fake terminal, hand and socket: (agent, sent, asked)."""
     from codrawer_bridge.agentd.service import Agentd, Config
     from codrawer_bridge.agentd.terminal import Reply
 
+    a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off", thinking="overlay"))
+    a.hand = _FakeHand()
+    sent: list[dict] = []
+    asked: list[str] = []
+
+    async def send(msg):
+        sent.append(msg)
+        return True
+
+    async def ask(text, timeout_s=90.0, on_text=None):
+        asked.append(text)
+        await asyncio.sleep(delay)
+        return Reply(text="A circled word.", ok=True)
+
+    a.send = send  # type: ignore[method-assign]
+    a.terminal.ask = ask  # type: ignore[method-assign]
+    word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
+    a.handle(page_msg([word]))
+    return a, sent, asked
+
+
+TAP = {
+    "t": "dock_action",
+    "id": "ask_selection",
+    "doc": "d",
+    "page": "p1",
+    "bbox": [-500.0, 300.0, -300.0, 360.0],
+}
+
+
+def _now_ms() -> int:
+    import time
+
+    return int(time.time() * 1000)
+
+
+def test_a_second_ask_after_the_debounce_replaces_the_first(tmp_path, monkeypatch):
+    import json
+
+    from codrawer_bridge.agentd import service
+
+    monkeypatch.setattr(service, "DEBOUNCE_S", 0.05)
+
     async def go():
-        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off"))
-        sent: list[dict] = []
-        asked: list[str] = []
-
-        async def send(msg):
-            sent.append(msg)
-            return True
-
-        async def ask(text, timeout_s=90.0, on_text=None):
-            asked.append(text)
-            await asyncio.sleep(0.3)
-            return Reply(text="A circled word.", ok=True)
-
-        a.send = send  # type: ignore[method-assign]
-        a.terminal.ask = ask  # type: ignore[method-assign]
-        word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
-        a.handle(page_msg([word]))
-        tap = {
-            "t": "dock_action",
-            "id": "ask_selection",
-            "doc": "d",
-            "page": "p1",
-            "bbox": [-500.0, 300.0, -300.0, 360.0],
-        }
-        a.handle(tap)
+        a, sent, asked = _agent_with_fakes(tmp_path)
+        a.handle({**TAP, "ts": _now_ms()})
         await asyncio.sleep(0.1)  # the first ask is with the model
-        a.handle({**tap, "ts": 2})
+        a.handle({**TAP, "ts": _now_ms()})
         await a.queue.drain()
         recs = [json.loads(x) for x in (a.state / "requests.jsonl").read_text().splitlines()]
         assert [r["error"] for r in recs] == ["replaced by a newer ask for the same selection", ""]
         assert len(asked) == 2 and recs[1]["answer"] == "A circled word."
         answers = [m for m in sent if m["t"] == "primer" and m["move"]["text"] == "A circled word."]
         assert len(answers) == 1  # one answer reaches the glasses
+        # the replaced request ended its overlay too: no orphan left spinning
+        done = [m["id"] for m in sent if m["t"] == "agent_status" and m["state"] == "done"]
+        assert sorted(done) == sorted({f"agentd_{r['n']}" for r in recs}) and not a._open_status
+
+    asyncio.run(go())
+
+
+def test_rapid_taps_are_one_ask_and_replays_are_none(tmp_path):
+    import time
+
+    async def go():
+        a, sent, asked = _agent_with_fakes(tmp_path, delay=0.05)
+        for _ in range(4):  # the user tapped because nothing seemed to happen
+            a.handle({**TAP, "ts": _now_ms()})
+            await asyncio.sleep(0.02)
+        await a.queue.drain()
+        assert len(asked) == 1
+        # right after a (re)join, an old dock_action is the router's replay, not a tap
+        a._joined_at = time.monotonic()
+        a._last_tap.clear()
+        a.handle({**TAP, "ts": _now_ms() - 60_000})
+        await a.queue.drain()
+        assert len(asked) == 1
+        a.handle({**TAP, "ts": _now_ms()})  # a fresh tap is a tap
+        await a.queue.drain()
+        assert len(asked) == 2
+
+    asyncio.run(go())
+
+
+def test_a_narrow_selection_gets_a_comfortable_measure(tmp_path):
+    from codrawer_bridge.agentd.page import Box  # noqa: F401  (documentation of units)
+
+    async def go():
+        a, _, _ = _agent_with_fakes(tmp_path)
+        # a short word lassoed near the left: 160 page units wide (~18 mm)
+        sel: tuple = ((300 + 0) / W, 300 / H, 460 / W, 360 / H)
+        spot, width_mm, met = await a._reserve(sel)
+        assert 110 <= width_mm <= 125  # the page's width, not the selection's
+        assert spot.side == "below" and spot.x == 300
+        # glyph tops (the block's top: it includes the ascent) clear the selection by a line
+        assert spot.y >= 360 + placement.BELOW_GAP
+        x0, y0, x1, y1 = spot.rect
+        assert x1 <= 300 or x0 >= 460 or y1 <= 300 or y0 >= 360
 
     asyncio.run(go())
 
@@ -402,13 +482,14 @@ def test_agent_status_thinking_then_done_in_scene_units(tmp_path):
 
     async def go():
         a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off", thinking="overlay"))
+        a.hand = _FakeHand()
         sent: list[dict] = []
 
         async def send(msg):
             sent.append(msg)
             return True
 
-        async def ask(text, timeout_s=90.0):
+        async def ask(text, timeout_s=90.0, on_text=None):
             return Reply(error="timed out after 90 s")
 
         a.send = send  # type: ignore[method-assign]
@@ -426,9 +507,51 @@ def test_agent_status_thinking_then_done_in_scene_units(tmp_path):
         )
         st = [m for m in sent if m["t"] == "agent_status"]
         assert [m["state"] for m in st] == ["thinking", "done"]
-        assert st[0]["bbox"] == [-500.0, 300.0, -300.0, 360.0]  # the selection, x centred
+        # the overlay marks where the answer would go, never the selection itself: under it,
+        # left edges aligned, one line down, a comfortable measure wide (scene units, x centred)
+        x0, y0, x1, _ = st[0]["bbox"]
+        assert x0 == -500.0 and y0 == 360.0 + placement.BELOW_GAP
+        assert (x1 - x0) * placement.MM_PER_PU >= 70 * 0.65
         assert st[1]["ok"] is False and st[0]["id"] == st[1]["id"] == f"agentd_{rec.n}"
+        assert st[1]["note"].startswith("Couldn't answer")  # said on the tablet, not silent
         assert rec.error and not [m for m in sent if m["t"].startswith("stroke_")]
+
+    asyncio.run(go())
+
+
+def test_ink_off_says_so_on_the_tablet(tmp_path):
+    from codrawer_bridge.agentd.service import Agentd, Config
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go():
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="off", thinking="overlay"))
+        a.hand = _FakeHand()
+        sent: list[dict] = []
+
+        async def send(msg):
+            sent.append(msg)
+            return True
+
+        async def ask(text, timeout_s=90.0, on_text=None):
+            return Reply(text="Mitochondria hold their own DNA.", ok=True)
+
+        a.send = send  # type: ignore[method-assign]
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        word = {"id": "1:1", "tool": "pen", "pts": [[0.2, 0.15, 0.5], [0.3, 0.16, 0.5]]}
+        a.handle(page_msg([word]))
+        await a.answer(
+            {
+                "t": "dock_action",
+                "id": "ask_selection",
+                "doc": "d",
+                "page": "p1",
+                "bbox": [-500.0, 300.0, -300.0, 360.0],
+            }
+        )
+        done = [m for m in sent if m["t"] == "agent_status" and m["state"] == "done"]
+        assert done and done[0]["ok"] is True
+        assert done[0]["note"].startswith("Answered on your glasses")
+        assert not [m for m in sent if m["t"].startswith("stroke_")]
 
     asyncio.run(go())
 
@@ -477,6 +600,7 @@ def test_an_empty_selection_is_never_sent_to_the_model(tmp_path):
 
     async def go():
         a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), ink="on", save_wait_s=0.3))
+        a.hand = _FakeHand()
         sent: list[dict] = []
         asked: list[str] = []
 
@@ -568,6 +692,11 @@ class _FakeHand:
         return [
             Layout(widths[0], (0.0, -5.0, 30.0, (lines - 1) * 10.0 + 1.0), 100, [(0, 100, pts)])
         ]
+
+    async def metrics(self, persona="archivist"):
+        from codrawer_bridge.agentd.hand import Metrics
+
+        return Metrics(mm_per_char=4.7, pitch=11.4, ascent=-5.7, descent=1.7)
 
 
 def test_the_stream_writes_the_first_sentence_before_the_turn_ends():

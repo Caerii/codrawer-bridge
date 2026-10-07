@@ -128,6 +128,8 @@ func Overlay(raw []byte) ([]byte, string) {
 		ID    string    `json:"id"`
 		BBox  []float64 `json:"bbox"`
 		Style string    `json:"style"`
+		OK    *bool     `json:"ok"`
+		Note  string    `json:"note"`
 	}
 	if json.Unmarshal(raw, &m) != nil || m.T != "agent_status" {
 		return nil, "not an agent_status"
@@ -180,5 +182,66 @@ func Overlay(raw []byte) ([]byte, string) {
 		b = append(b, `,"style":`...)
 		b = appendString(b, style)
 	}
+	// done: whether the agent answered, and its one-line note, so the overlay can end with a
+	// clear cue (a tick, or the note) rather than vanish
+	if m.State == "done" && m.OK != nil {
+		b = append(b, `,"ok":`...)
+		b = strconv.AppendBool(b, *m.OK)
+	}
+	if n := CleanNote(m.Note); n != "" {
+		b = append(b, `,"note":`...)
+		b = appendString(b, n)
+	}
 	return append(b, '}'), ""
+}
+
+// NoteMax is the longest agent note the dock's status line carries, in runes.
+const NoteMax = 100
+
+// CleanNote makes an agent_status note one short line: control characters become spaces, runs
+// of spaces fold, and it is cut to NoteMax runes.
+func CleanNote(s string) string {
+	out := make([]rune, 0, len(s))
+	space := false
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == ' ' {
+			if !space && len(out) > 0 {
+				out = append(out, ' ')
+			}
+			space = true
+			continue
+		}
+		space = false
+		out = append(out, r)
+		if len(out) >= NoteMax {
+			break
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == ' ' {
+		out = out[:len(out)-1]
+	}
+	return string(out)
+}
+
+// StatusNote is what an agent_status means for the dock's status line: the note to show
+// (set true) after a `done` with a note, or nothing to show (set true, note "") when a new
+// request starts thinking; set is false for everything else, which leaves the line alone.
+func StatusNote(raw []byte) (note string, set bool) {
+	var m struct {
+		T     string `json:"t"`
+		State string `json:"state"`
+		Note  string `json:"note"`
+	}
+	if json.Unmarshal(raw, &m) != nil || m.T != "agent_status" {
+		return "", false
+	}
+	switch m.State {
+	case "thinking":
+		return "", true
+	case "done":
+		if n := CleanNote(m.Note); n != "" {
+			return n, true
+		}
+	}
+	return "", false
 }
