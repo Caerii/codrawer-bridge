@@ -46,7 +46,14 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--term-cwd",
         default=os.environ.get("CODRAWER_TERM_CWD", ""),
-        help="Claude Code's working directory (default: here)",
+        help="the repository; the state directory (logs, images) goes under it (default: here)",
+    )
+    ap.add_argument(
+        "--agent-cwd",
+        default="",
+        help="Claude Code's working directory, where the images it Reads go (default: the "
+        "--term-cwd). An empty directory outside any repository loads no project context and "
+        "answers faster, e.g. ~/.codrawer-agentd/cwd",
     )
     ap.add_argument(
         "--state-dir", default="", help="logs and images (default <term-cwd>/.codrawer/agentd)"
@@ -100,6 +107,7 @@ def config(a: argparse.Namespace) -> Config:
         term_url=a.term_url,
         term_token=a.term_token,
         term_cwd=a.term_cwd,
+        agent_cwd=a.agent_cwd,
         state_dir=a.state_dir,
         persona=a.persona,
         color=a.color,
