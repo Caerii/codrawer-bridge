@@ -167,8 +167,10 @@ class Occupancy:
 #: Extra cost by side (page units): a reply is looked for under the question first.
 SIDE_COST = {"below": 0.0, "right": 120.0, "left": 280.0, "above": 320.0}
 
-#: The gap under the anchor a block below it keeps, page units (about one written line).
-BELOW_GAP = 80.0
+#: The gap between the anchor's ink bottom and the first line's glyph tops (the block's top: its
+#: height starts at the hand's ascent), page units: 36 is 4 mm, about half a ruled line. It was 80
+#: (9 mm) until the user found answers "a little too much lower down" (2026-10-07).
+BELOW_GAP = 36.0
 
 
 def _side(rect: Box, anchor: Box) -> tuple[str, float, float]:
@@ -199,7 +201,7 @@ def place(
     anchor: Box,
     *,
     prefer: tuple[float, float] | None = None,
-    clearance: float = 36.0,
+    clearance: float = 24.0,
     margins: tuple[float, float, float, float] = (150.0, 70.0, 60.0, 70.0),
     step: float = 18.0,
     page_bottom: float | None = None,
