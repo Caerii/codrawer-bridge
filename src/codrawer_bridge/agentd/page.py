@@ -103,6 +103,8 @@ class Stroke:
     begin_ts: float | None = None
     ended: bool = True
     screen: bool = False  # pts are screen-normalized (the tablet's pen, live): map through a View
+    widths: list[float] | None = None  # per point, xochitl's drawn width as a fraction of the
+    #                                    page width (snapshots only: their 4th point value)
 
     def bbox(self) -> Box:
         xs = [p[0] for p in self.pts] or [0.0]
@@ -209,7 +211,11 @@ class PageModel:
                 continue
             layer = "ai" if st.get("layer") == "ai" else "user"
             sid = str(st.get("id", f"page_{i}"))
-            self.strokes[f"snap:{sid}"] = Stroke(id=sid, layer=layer, tool=tool, pts=pts)
+            raw = [p for p in st.get("pts") or [] if isinstance(p, list) and len(p) >= 2]
+            widths = [float(p[3]) for p in raw] if all(len(p) >= 4 for p in raw) else None
+            self.strokes[f"snap:{sid}"] = Stroke(
+                id=sid, layer=layer, tool=tool, pts=pts, widths=widths
+            )
         self.has_snapshot = True
         self.version += 1
 
