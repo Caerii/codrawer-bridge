@@ -131,9 +131,19 @@ To ship a release that runs on a new OS version, add its `IMG_VERSION` to `boot/
 - Test without hardware: `scripts/dev/README.md` (keysend / termlisten / replay_to) + the simulator's
   automation API on 9898.
 
-## Where things stand (2026-09-27)
+## Where things stand (2026-10-07)
 
-Verified on hardware: tablet → router → glasses ink; keyboard transcript + `/` completion; `/term`
+Ask on paper works end to end on the Paper Pro (`docs/checkpoints/2026-10-07.md`):
+- lasso, then the selection menu's "c" (or the dock);
+- a local thinking doodle;
+- `codrawer-agentd` on the PC: warm `claude -p` processes, Sonnet reads the handwriting;
+- the answer writes itself in as native ink under the selection, in about 3–4 s, while the user
+  keeps writing.
+
+Direction: `docs/design/ask-experience.md`. After every XOVI reload, check first that the user's
+pen writes, with `scripts/dev/pentest.py`.
+
+Earlier (2026-09-27), verified on hardware: tablet → router → glasses ink; keyboard transcript + `/` completion; `/term`
 to Claude Code with the turn's ink attached (the agent Reads the PNG + geometry and answers);
 replies typed into the tablet's focused text field; `/snap`, `/text`, New drawing. Verified in the
 simulator only: the `/edit` document editor and `doc` sharing. Next: smart_remarkable as a
