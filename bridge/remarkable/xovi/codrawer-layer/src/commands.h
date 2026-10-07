@@ -11,6 +11,7 @@
 // unless the visible DocumentView and its controller are on that page (scene.h, findOpenPage).
 //
 //   probes.h    dump linetest pencolor layers stroke textprobe tree xform
+//   layerprobe.h atomic
 //   watch.h     watch unwatch pending save dumpscene
 //   inject.h    inject uninject
 //   navigate.h  goto_doc doc=<uuid> [page=] [region=x0,y0,x1,y1] [flash=0], folder action=enter|up|home [id=]

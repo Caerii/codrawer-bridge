@@ -42,14 +42,14 @@ on, the data flow, the threading). Read them in this order:
 | 9 | `src/ink_protocol.h` *(pure)*, `src/inksock.{h,cpp}` | 521 | `/run/codrawer/ink.sock`: agent ink and its governance, text ops, goto, status, actions |
 | 10 | `src/selection.{h,cpp}` | 171 | the last lasso selection (`areaSelected`) |
 | 11 | `src/goto_req.h` *(pure)*, `src/navigate.{h,cpp}` | 491 | "take me there": open a document by id, turn to a page, flash a region; folders; offers |
-| 12 | `src/live.{h,cpp}`, `qml/live.qml` | 234 + 555 | agent ink drawn as it streams in (Pen region), removed at commit; the "thinking" animation |
-| 13 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 439 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
+| 12 | `src/live.{h,cpp}`, `qml/live.qml` | 350 + 807 | agent ink drawn as it streams in, removed at commit; "thinking" doodles, any number at once (a small Animation-region panel per drawing) |
+| 13 | `src/inject_conf.h` *(pure)*, `src/inject.{h,cpp}` | 475 | QML injected into xochitl (the dock), `inject.conf`, dock actions to the bridge |
 | 14 | `src/auto_rules.h` *(pure)*, `src/autostate.{h,cpp}` | 294 | automation's guardrails; `state`, `find`, pause and lock |
 | 15 | `src/procmaps.h` *(pure)*, `src/grab.{h,cpp}` | 140 | `grab`: the display buffer copied out of xochitl's memory |
 | 16 | `src/autoinput.{h,cpp}` | 258 | synthesized taps and swipes behind the deny list; navigation; text |
 | 17 | `src/automation.{h,cpp}` | 244 | `auto.sock` and `127.0.0.1:8579`, the opt-in, request dispatch |
-| 18 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 242 | the command file `/tmp/codrawer-layer/cmd` |
-| 19 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}` | 631 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch` |
+| 18 | `src/cmdline.h` *(pure)*, `src/cmdline_qt.h`, `src/commands.{h,cpp}` | 245 | the command file `/tmp/codrawer-layer/cmd` |
+| 19 | `src/probes.{h,cpp}`, `src/watch.{h,cpp}`, `src/layerprobe.{h,cpp}` | 808 | **probes**: `dump`, `linetest`, `stroke`, `tree`, `xform`, …; the erase probe `watch`; the atomic-commit probe `atomic` |
 
 What each module uses (besides `log`, `paths` and `qtmeta`, which nearly all use); the graph has
 no cycle:
@@ -67,12 +67,12 @@ live       <- toolfollow
 inksock    <- ink, text, navigate, live, ink_protocol
 selection  <- scene, toolfollow
 autostate  <- scene, toolfollow
-inject     <- inksock, selection, autostate, navigate, inject_conf
+inject     <- inksock, selection, autostate, navigate, live, inject_conf
 grab       <- procmaps
 autoinput  <- autostate, grab, text, navigate, auto_rules
 automation <- autoinput, autostate, inksock, auto_rules
-probes     <- ink, line, scene;  watch <- line, scene
-commands   <- probes, watch, inject, navigate, toolfollow
+probes     <- ink, line, scene;  watch <- line, scene;  layerprobe <- ink, line, scene, toolfollow
+commands   <- probes, layerprobe, watch, inject, navigate, toolfollow
 entry      <- everything it wires
 ```
 
@@ -149,6 +149,7 @@ that page is the one on screen.
 | `dumpscene page=<uuid>` | Calls xochitl's debug slot `SceneController::dumpScene()`; output, if any, goes to xochitl's journal. |
 | `tool` | Logs the tool line last written to `/run/codrawer/tool` (see below). |
 | `stroke … adopt=<n> restore=<n>` | Probe options: name an existing last layer instead of adding one; select layer `n` afterwards. |
+| `atomic page=<uuid>` | Probe: does a line added between `setCurrentLayer(test)` and `setCurrentLayer(user)` in one GUI job land on `codrawer: test` while the user's layer stays selected? Refused unless the test layer exists, is not selected, and the pen has been off the page for 800 ms. Logs `currentLayer` after each call, its changes for 2 s, and the layers; the landing layer comes from `save` then `-page-dump` (red `ffd02020`, y 435-525). See `src/layerprobe.h`. |
 | `xform page=<uuid>` | Logs every view↔scene transform xochitl exposes for the page (read-only). |
 | `tree [match=<spec>] [depth=<n>]` | Logs the live QML item tree, or the items matching `class:`/`name:`/`text:`/`prop:` with their ancestry (read-only; for finding where to inject). |
 | `inject name=<n> parent=<spec>[^] qml=<file> [after=1]` | Creates our QML file in xochitl's engine, parented into the matched item (`^`: its parent; `after=1`: stacked after it). `uninject name=<n>` removes it. `exthome/codrawer-layer/inject.conf` lists the ones to make from load on. |
