@@ -111,7 +111,8 @@ QJsonObject autoFind(const QString &selector) {
         QJsonObject o{{QStringLiteral("class"), QString::fromLatin1(it->metaObject()->className())},
                       {QStringLiteral("name"), it->objectName()},
                       {QStringLiteral("bounds"), QJsonArray{p.x(), p.y(), it->width(), it->height()}},
-                      {QStringLiteral("visible"), it->isVisible()}};
+                      {QStringLiteral("visible"), it->isVisible()},
+                      {QStringLiteral("enabled"), it->isEnabled()}};
         if (it->metaObject()->indexOfProperty("text") >= 0) o.insert(QStringLiteral("text"), it->property("text").toString());
         out << o;
         if (out.size() >= 50) break;
