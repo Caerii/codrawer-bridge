@@ -64,7 +64,7 @@ def test_place_directly_below_the_selection_left_aligned():
     assert p.side == "below"
     assert p.x == 200  # left edges aligned
     assert p.y == 450 + placement.BELOW_GAP  # about one line under the selection's bottom
-    assert not ink_in(strokes, p.rect, grow=36)
+    assert not ink_in(strokes, p.rect, grow=24)  # placement's clearance
 
 
 def test_the_answer_never_overlaps_the_selection():
@@ -92,7 +92,7 @@ def test_place_below_when_right_margin_is_full():
     assert p is not None
     assert p.side == "below"
     assert p.y >= 450
-    assert not ink_in(strokes, p.rect, grow=36)
+    assert not ink_in(strokes, p.rect, grow=24)  # placement's clearance
     # close below, not at the bottom of the page
     assert p.y - 450 < 150
 
@@ -104,7 +104,7 @@ def test_place_never_over_ink_and_inside_margins():
     p = place(occ, [Block(600, 150)], (150, 380, 1550, 420))
     assert p is not None
     assert 1140 < p.y and p.y + 150 < 1560
-    assert not ink_in(strokes, p.rect, grow=36)
+    assert not ink_in(strokes, p.rect, grow=24)  # placement's clearance
     assert p.x >= 150 and p.x + 600 <= W - 60
 
 
@@ -585,7 +585,10 @@ def test_agent_status_thinking_then_done_in_scene_units(tmp_path):
         # the overlay marks where the answer would go, never the selection itself: under it,
         # left edges aligned, one line down, a comfortable measure wide (scene units, x centred)
         x0, y0, x1, _ = st[0]["bbox"]
-        assert x0 == -500.0 and y0 == 360.0 + placement.BELOW_GAP
+        # under the selected ink (x 0.2-0.3, y 0.15-0.16 of the page), not the lasso's box
+        assert (
+            x0 == round(0.2 * 1620 - 810, 1) and abs(y0 - (0.16 * 2160 + placement.BELOW_GAP)) < 0.2
+        )
         assert (x1 - x0) * placement.MM_PER_PU >= 70 * 0.65
         assert st[1]["ok"] is False and st[0]["id"] == st[1]["id"] == f"agentd_{rec.n}"
         assert st[1]["note"].startswith("Couldn't answer")  # said on the tablet, not silent
@@ -760,7 +763,7 @@ def test_place_for_a_selection_at_the_bottom_edge_stays_on_the_page():
     assert p is not None
     assert p.y + p.block.h <= H - 70  # inside the page and its bottom margin
     assert p.side in ("right", "left", "above")
-    assert not ink_in(strokes, p.rect, grow=36)
+    assert not ink_in(strokes, p.rect, grow=24)  # placement's clearance
     # nothing fits within reach: no placement (the glasses only), rather than far away
     crowd = [hline(150, 1550, y) for y in range(100, 2100, 40) if not 400 <= y <= 700]
     occ2 = Occupancy(crowd + strokes, W, H)

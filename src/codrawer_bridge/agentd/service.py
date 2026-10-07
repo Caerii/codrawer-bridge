@@ -545,14 +545,19 @@ class Agentd:
             rec.live_user = m.live_user()
             rec.ink = await self.ink_enabled()
             if sel_box is not None:
-                # where the answer will go, and the overlay at once (before any wait for a save)
-                reserved = await self._reserve(sel_box, rec.n)
+                # The answer goes just under the selected ink itself, not under the lasso's box: a
+                # lasso is often drawn much taller than the writing (placement keeps clear of every
+                # stroke on the page). The overlay goes there at once; only when the ink is not
+                # all known yet (an unsaved selection) does it start under the box and move.
+                want = int(msg.get("items") or 0) if msg.get("contains_stroke", True) else 0
+                known = m.selected(sel_box)
+                first = _bounds(known) if known and len(known) >= want else sel_box
+                reserved = await self._reserve(first, rec.n)
                 if reserved is not None and not self.cfg.dry_run:
                     await self._status(rec, "thinking", reserved[0].rect)
                 selected = await self._selection(msg, sel_box, rec)
-                # the larger of the lasso's box and its strokes' bounds (the box can be smaller)
-                anchor = _union(sel_box, _bounds(selected)) if selected else sel_box
-                if anchor != sel_box:
+                anchor = _bounds(selected) if selected else sel_box
+                if anchor != first:
                     reserved = await self._reserve(anchor, rec.n)
                     if reserved is not None and not self.cfg.dry_run:
                         await self._status(rec, "thinking", reserved[0].rect)
@@ -988,10 +993,6 @@ def _bounds(strokes) -> Box:
         max(b[2] for b in bs),
         max(b[3] for b in bs),
     )
-
-
-def _union(a: Box, b: Box) -> Box:
-    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
 #: The farthest an answer may sit from what it answers, page units (~33 mm); farther away it
