@@ -92,7 +92,7 @@ class Terminal:
         provider: str = "claude",
         poll_s: float = 0.25,
         settle_s: float = 1.5,
-        max_turns: int = 4,
+        max_turns: int = 3,
     ) -> None:
         self.url = url.rstrip("/")
         self.token = token
@@ -104,6 +104,7 @@ class Terminal:
         self.session_id = self._load()
         self._last_id = 0  # the last event id this client has read in its session
         self._open_turn = False  # the last turn was accepted before its `result` arrived
+        self._tainted = False  # the last turn timed out, was interrupted or failed: start afresh
         self.max_turns = max_turns
         self._turns = self._load_turns()
 
@@ -187,11 +188,17 @@ class Terminal:
         try:
             async with httpx.AsyncClient(timeout=30) as c:
                 after = 0
-                if self.session_id and self._turns >= self.max_turns and not self._open_turn:
+                if self.session_id and (
+                    self._tainted or (self._turns >= self.max_turns and not self._open_turn)
+                ):
                     # Every turn adds its image to the session's context, and each later turn
                     # carries them all: on 2026-10-06 Haiku's turns grew from 28 s to 74 s in
-                    # one session. A fresh session costs a few seconds once instead.
-                    self.session_id, self._turns = "", 0
+                    # one session. A fresh session costs a few seconds once instead. And after a
+                    # turn that timed out, was interrupted or failed, never reuse its session:
+                    # request 24 read the interrupted request 23's late error result
+                    # ("[ede_diagnostic] … stop_reason=tool_use") and wrote its late text.
+                    self.session_id, self._turns, self._open_turn = "", 0, False
+                    self._tainted = False
                 if self.session_id:
                     # A turn accepted before its `result` may still be finishing: wait for that
                     # result, so its trailing events are not read as this turn's. (Not for
@@ -225,7 +232,7 @@ class Terminal:
                 except asyncio.CancelledError:
                     # replaced by a newer ask (queue.py): stop the model, and let the next turn
                     # wait for this one's (interrupted) result before reading its own events
-                    self._open_turn = True
+                    self._open_turn = self._tainted = True
                     task = asyncio.ensure_future(self._interrupt())
                     _background.add(task)
                     task.add_done_callback(_background.discard)
@@ -253,7 +260,7 @@ class Terminal:
                 await self._post(c, "/api/interrupt", {"sessionId": self.session_id})
                 out.error = f"timed out after {timeout_s:.0f} s"
                 out.text = segments[-1] if segments else "".join(segment)
-                self._last_id, self._open_turn = after, True
+                self._last_id, self._open_turn, self._tainted = after, True, True
                 return out
             msgs, _ = await self._messages(c, after)
             for m in msgs:
@@ -311,6 +318,7 @@ class Terminal:
                     if not out.ok and not out.error:
                         out.error = out.text[:200] or "the turn failed"
                     self._last_id, self._open_turn = after, False
+                    self._tainted = not out.ok
                     return out
                 elif t == "error":
                     out.error = str(m.get("message") or "error")[:200]

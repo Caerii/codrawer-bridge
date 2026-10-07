@@ -330,6 +330,50 @@ def test_a_second_ask_after_the_debounce_replaces_the_first(tmp_path, monkeypatc
     asyncio.run(go())
 
 
+def test_a_failed_turn_is_retried_once(tmp_path):
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go():
+        a, sent, asked = _agent_with_fakes(tmp_path, delay=0.01)
+        replies = [
+            Reply(
+                error="Claude Code returned an error result: [ede_diagnostic] stop_reason=tool_use"
+            ),
+            Reply(text="A circled word.", ok=True),
+        ]
+
+        async def ask(text, timeout_s=90.0, on_text=None):
+            asked.append(text)
+            return replies.pop(0)
+
+        a.terminal.ask = ask  # type: ignore[method-assign]
+        rec = await a.answer({**TAP, "ts": _now_ms()})
+        assert len(asked) == 2 and rec.answer == "A circled word." and not rec.error
+        assert "ede_diagnostic" in rec.retry_of["error"]
+
+    asyncio.run(go())
+
+
+def test_a_turn_after_a_failure_starts_a_fresh_session(tmp_path):
+    from codrawer_bridge.agentd.terminal import Terminal
+
+    t = Terminal("http://x", "t", str(tmp_path), tmp_path / "s.json")
+    t.session_id, t._turns = "old", 1
+    t._tainted = True  # set by a timeout, an interrupt or a failed result
+    calls: list[dict] = []
+
+    async def post(c, path, body):
+        calls.append(body)
+        return 500, "stop here"
+
+    async def messages(c, after):
+        return [], "idle"
+
+    t._post, t._messages = post, messages  # type: ignore[method-assign]
+    asyncio.run(t.ask("hi", 5))
+    assert calls and "sessionId" not in calls[0]  # a new session, not the tainted one
+
+
 def test_rapid_taps_are_one_ask_and_replays_are_none(tmp_path):
     import time
 
