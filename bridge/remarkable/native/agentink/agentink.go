@@ -57,6 +57,9 @@ const (
 	// DefaultARGB is agent ink's colour when a stroke names none: a clear blue, distinct from the
 	// user's black ink and close to the viewers' ai blue.
 	DefaultARGB = 0xff1f6fe0
+	// MaxPageY is the lowest a point may be on a page, page units: xochitl pages grow as the user
+	// scrolls, and the extension's overlay accepts the same range.
+	MaxPageY = 40000.0
 )
 
 // Page is what the conversion needs from the latest `page` snapshot.
@@ -255,8 +258,9 @@ func (f *Forwarder) take() bool {
 	return true
 }
 
-// Convert maps one stroke to page coordinates (see the package comment). It refuses points off
-// the page by more than half a page, which no reply needs and which would land out of sight.
+// Convert maps one stroke to page coordinates (see the package comment). It refuses points more
+// than half a page beside the page or above it, or below MaxPageY (a long, scrolled page is fine:
+// an answer goes under the writing it answers, wherever the user has scrolled to).
 func Convert(brush, color string, size float64, pts [][]float64, page Page) (LineStroke, string) {
 	w, h := page.W, page.H
 	if w <= 0 || h <= 0 {
@@ -271,7 +275,10 @@ func Convert(brush, color string, size float64, pts [][]float64, page Page) (Lin
 	widthPx := 2 * thickness
 	for _, p := range pts {
 		x, y := p[0], p[1]
-		if math.IsNaN(x) || math.IsNaN(y) || x < -0.5 || x > 1.5 || y < -0.5 || y > 1.5 {
+		// y may run far below the first screen: xochitl pages grow as the user scrolls down, and an
+		// answer belongs under the writing it answers (the overlay's bbox check allows the same
+		// 40000 page units). x stays within half a page of the page.
+		if math.IsNaN(x) || math.IsNaN(y) || x < -0.5 || x > 1.5 || y < -0.5 || y*h > MaxPageY {
 			return LineStroke{}, fmt.Sprintf("point (%g, %g) is off the page", x, y)
 		}
 		pr := 0.6

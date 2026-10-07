@@ -81,7 +81,17 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument("--color", default="#3a6ea5", help="agent ink colour hint")
     ap.add_argument(
-        "--speed", type=float, default=1.5, help="hand speed factor (1 = the persona's own pace)"
+        "--speed",
+        type=float,
+        default=1.0,
+        help="an extra playback factor on top of the writing-speed setting (calm/fast/very fast)",
+    )
+    ap.add_argument(
+        "--max-page-y",
+        type=float,
+        default=1.5,
+        help="page heights: no agent ink below this (the deployed bridge's limit; 18 once it takes "
+        "long pages)",
     )
     ap.add_argument(
         "--ink",
@@ -134,6 +144,7 @@ def config(a: argparse.Namespace) -> Config:
         persona=a.persona,
         color=a.color,
         speed=a.speed,
+        max_page_y=a.max_page_y,
         ink=a.ink,
         ssh=a.ssh,
         thinking=a.thinking,

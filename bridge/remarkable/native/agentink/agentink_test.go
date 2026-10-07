@@ -60,10 +60,14 @@ func TestSizeCapsDropWholeStrokes(t *testing.T) {
 	}
 	_, whys = feed(f, testPage,
 		`{"t":"stroke_begin","id":"off","layer":"ai"}`,
-		`{"t":"stroke_pts","id":"off","pts":[[0.5,3.0]]}`,
+		`{"t":"stroke_pts","id":"off","pts":[[0.5,30.0]]}`,
 		`{"t":"stroke_end","id":"off"}`)
 	if len(whys) != 1 || !strings.Contains(whys[0], "off the page") {
 		t.Fatalf("off-page point: %v", whys)
+	}
+	// far down a scrolled page (request 48, 2026-10-07: y 1.69 page heights) is on the page
+	if _, why := Convert("pen", "", 2, [][]float64{{0.25, 1.69}, {0.26, 1.70}}, testPage); why != "" {
+		t.Fatalf("scrolled page refused: %s", why)
 	}
 	g := &Forwarder{MaxOpen: 1}
 	_, whys = feed(g, testPage, `{"t":"stroke_begin","id":"x","layer":"ai"}`, `{"t":"stroke_begin","id":"y","layer":"ai"}`)

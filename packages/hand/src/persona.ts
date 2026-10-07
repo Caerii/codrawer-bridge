@@ -387,6 +387,58 @@ export interface UserStats {
 }
 
 /**
+ * The same hand in a hurry, `k` times its tempo (k ≥ 1). Speed in handwriting is not a playback
+ * rate: a hurried writer's strokes get faster (motor tempo × k), but the pen-up time between them
+ * (lifts, flights, the pauses between words and phrases) shrinks more, as dwell is the first thing
+ * a fast writer cuts (here by k^1.4); and the writing gets a little looser: motor commands overlap
+ * more (toward joined-up letters), and size, slant and baseline vary more, with slightly more
+ * lean. Legible up to k = 2 (the Archivist: 1.4 → 3.3 letters/s, pen down 51% → 62% of the
+ * time); at k = 3 the motor plan outruns the letters' shapes (2026-10-07, also with a stiffer
+ * arm), so callers wanting more speed play the strokes back faster instead (agentd's writing
+ * speed). `k` ≤ 1 returns `p` unchanged; k is capped at MAX_HURRY.
+ */
+export const MAX_HURRY = 2
+
+export function hurried(p: Persona, k: number): Persona {
+  if (!(k > 1)) return p
+  k = Math.min(k, MAX_HURRY)
+  const pause = Math.pow(k, 1.4)
+  const loose = Math.min(2, 1 + 0.3 * (k - 1))
+  const t = p.timing
+  return {
+    ...p,
+    id: `${p.id}-x${k}`,
+    name: `${p.name}, hurried`,
+    letters: {
+      ...p.letters,
+      sizeJitter: p.letters.sizeJitter * loose,
+      slantJitter: p.letters.slantJitter * loose,
+      baselineWander: p.letters.baselineWander * loose,
+      slant: p.letters.slant + Math.min(0.1, 0.04 * (k - 1)),
+    },
+    motor: {
+      ...p.motor,
+      tempo: p.motor.tempo * k,
+      overlap: Math.min(0.6, p.motor.overlap + 0.06 * (k - 1)),
+      noise: Object.fromEntries(Object.entries(p.motor.noise).map(([key, v]) => [key, v * loose])) as MotorParams['noise'],
+    },
+    timing: {
+      ...t,
+      lift: t.lift / pause,
+      flightBase: t.flightBase / pause,
+      flightPerRootMm: t.flightPerRootMm / pause,
+      word: t.word / pause,
+      phrase: t.phrase / pause,
+      sentence: t.sentence / pause,
+      line: t.line / pause,
+      afterResult: t.afterResult / pause,
+      hesitation: t.hesitation / pause,
+      beforeSymbol: Object.fromEntries(Object.entries(t.beforeSymbol).map(([key, v]) => [key, v / pause])),
+    },
+  }
+}
+
+/**
  * The Mirror: a persona that adapts its tempo, size, pressure and lean to the user's recent
  * strokes, so the agent answers at the user's own pace and scale. Starts from `base` (the
  * Sketcher by default) and moves each parameter `follow` of the way toward the user's.

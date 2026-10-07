@@ -40,6 +40,9 @@ use serde_json::value::RawValue;
 pub const DEFAULT_MAX_OPEN: usize = 32;
 pub const DEFAULT_MAX_POINTS: usize = 4000;
 pub const DEFAULT_BURST: f64 = 40.0;
+
+/// The lowest a point may be on a page, page units: a long, scrolled page (Go: `MaxPageY`).
+pub const MAX_PAGE_Y: f64 = 40000.0;
 pub const DEFAULT_PER_SECOND: f64 = 15.0;
 /// Agent ink's colour when a stroke names none: a clear blue, distinct from the user's black.
 pub const DEFAULT_ARGB: u32 = 0xff1f_6fe0;
@@ -444,7 +447,8 @@ pub fn status_note(raw: &str) -> Option<String> {
     }
 }
 
-/// Maps one stroke to page units; refuses points off the page by more than half a page.
+/// Maps one stroke to page units; refuses points more than half a page beside or above the page,
+/// or below MAX_PAGE_Y (a long, scrolled page is fine).
 pub fn convert(
     brush: &str,
     color: &str,
@@ -467,7 +471,10 @@ pub fn convert(
     };
     for p in pts {
         let (x, y) = (p[0], p[1]);
-        if x.is_nan() || y.is_nan() || !(-0.5..=1.5).contains(&x) || !(-0.5..=1.5).contains(&y) {
+        // y may run far below the first screen: xochitl pages grow as the user scrolls down, and an
+        // answer belongs under the writing it answers (the overlay's bbox check allows the same
+        // 40000 page units). x stays within half a page of the page. (Go: `Convert`.)
+        if x.is_nan() || y.is_nan() || !(-0.5..=1.5).contains(&x) || y < -0.5 || y * h > MAX_PAGE_Y {
             return Err(format!("point ({}, {}) is off the page", go_g(x), go_g(y)));
         }
         let pr = match p.get(2) {
@@ -1203,7 +1210,7 @@ mod tests {
             Instant::now(),
             &[
                 r#"{"t":"stroke_begin","id":"off","layer":"ai"}"#,
-                r#"{"t":"stroke_pts","id":"off","pts":[[0.5,3.0]]}"#,
+                r#"{"t":"stroke_pts","id":"off","pts":[[0.5,30.0]]}"#,
                 r#"{"t":"stroke_end","id":"off"}"#,
             ],
         );
@@ -1479,6 +1486,13 @@ mod tests {
     }
 
     /// Go: `TestOverlayFromAgentStatus`.
+    #[test]
+    fn a_scrolled_page_is_on_the_page() {
+        // request 48, 2026-10-07: the answer under writing at y 1.69 page heights was refused
+        assert!(convert("pen", "", 2.0, &[vec![0.25, 1.69], vec![0.26, 1.70]], &page()).is_ok());
+        assert!(convert("pen", "", 2.0, &[vec![0.25, 30.0]], &page()).is_err());
+    }
+
     #[test]
     fn overlay_done_carries_outcome_and_note() {
         assert_eq!(

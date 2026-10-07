@@ -127,7 +127,12 @@ class InkStream:
             try:
                 lay = (
                     await a.hand.layouts(
-                        chunk, a.cfg.persona, (self.width_mm,), seed=7 + k, pitch=self.metrics.pitch
+                        chunk,
+                        a.cfg.persona,
+                        (self.width_mm,),
+                        seed=7 + k,
+                        pitch=self.metrics.pitch,
+                        tempo=a.hurry,
                     )
                 )[0]
                 # a compact pitch must never let one line's descenders touch the next's ascenders
@@ -158,7 +163,7 @@ class InkStream:
                 origin,
                 s,
                 time.time() * 1000 + 30,
-                speed=a.cfg.speed,
+                speed=a.playback,
                 run=f"{self.run}c{k}",
                 color=a.cfg.color,
                 author=f"agentd:{a.cfg.persona}",

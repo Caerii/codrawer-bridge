@@ -27,7 +27,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { definePersona, persona as byId, PERSONAS } from '../src/persona'
+import { definePersona, hurried, persona as byId, PERSONAS } from '../src/persona'
 import { simulate } from '../src/simulate'
 
 interface Request {
@@ -37,6 +37,8 @@ interface Request {
   widths?: number[]
   /** line pitch, mm (baseline to baseline); default: the persona's own lineSpacing x capHeight */
   pitch?: number
+  /** a hurried hand, this many times the persona's tempo (persona.ts `hurried`); default 1 */
+  tempo?: number
 }
 
 const r3 = (v: number) => Math.round(v * 1e3) / 1e3
@@ -46,10 +48,11 @@ function answer(req: Request): { persona: string; layouts: unknown[] } {
   const base = byId(req.persona ?? 'archivist')
   if (!base) throw new Error(`unknown persona ${req.persona}; one of ${PERSONAS.map((q) => q.id).join(', ')}`)
   // a requested pitch becomes the persona's lineSpacing (in cap heights) for this layout only
-  const p =
+  const spaced =
     req.pitch && req.pitch > 0
       ? definePersona({ ...base, letters: { ...base.letters, lineSpacing: req.pitch / base.letters.capHeight } })
       : base
+  const p = hurried(spaced, req.tempo ?? 1)
   const layouts = (req.widths?.length ? req.widths : [80]).map((width) => {
     const res = simulate(req.text, p, { seed: req.seed ?? 1, width })
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
