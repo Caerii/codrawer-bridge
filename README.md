@@ -3,7 +3,7 @@
 <h1 align="center">codrawer-bridge</h1>
 
 <p align="center">
-Stroke-native co-drawing. A reMarkable Paper Pro streams your pen as vector strokes; glasses,
+Stroke-native co-drawing. A reMarkable Paper Pro or reMarkable 2 streams your pen as vector strokes; glasses,
 phones, browsers and agents join the same page in real time.
 </p>
 
@@ -26,6 +26,16 @@ participant in a session, in a few tens of milliseconds. That makes the page a s
 
 It is the hardware half of Superintelligent Group's fluid-interface plan
 ([`docs/sig-integration.md`](docs/sig-integration.md)).
+
+## Tablet models
+
+Paper Pro and reMarkable 2 use the same Go bridge, Python AI agent, native Qt
+extension and G2 app. Select `CODRAWER_TABLET_MODEL=paper-pro` (the default) or
+`rm2` in both the bridge and agent environments. Hardware-specific builds and
+firmware validation remain separate; shared fixes belong in the common code.
+See [the model support guide](docs/tablet-models.md) and
+[reMarkable 2 setup](docs/remarkable2-setup.md). The existing Paper Pro release
+installer remains unchanged; the rM2 installer is experimental and firmware-gated.
 
 ## What works today
 

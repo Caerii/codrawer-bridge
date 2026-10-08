@@ -37,10 +37,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .geometry import GEOMETRY
 from .page import Box
 
-#: Millimetres per page unit on a Paper Pro (179.6 mm over 1620 units).
-MM_PER_PU = 179.6 / 1620
+#: Physical conversion for the configured tablet; shared with the transmitted handwriting.
+MM_PER_PU = GEOMETRY.mm_per_pu
 
 
 @dataclass(frozen=True)

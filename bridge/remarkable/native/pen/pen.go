@@ -78,8 +78,10 @@ type Ranges struct {
 
 // Config is how the machine detects contact and paces its output.
 type Config struct {
-	Brush string // brush hint for pen strokes ("pen"); the rubber end is always "eraser"
-	Color string // optional colour hint ("#00ff88"); raw input does not carry the UI's colour
+	// SwapXY is applied before page-axis inversion, for rotated digitizers such as rM2.
+	SwapXY, InvertX, InvertY bool
+	Brush                    string // brush hint for pen strokes ("pen"); the rubber end is always "eraser"
+	Color                    string // optional colour hint ("#00ff88"); raw input does not carry the UI's colour
 	// TouchMode decides what counts as contact: "auto" (BTN_TOUCH when set, else pressure), "btn",
 	// "pressure", "distance" or "tool". Unknown values behave as "btn".
 	TouchMode         string
@@ -310,8 +312,7 @@ func (m *Machine) addPoint(tsMS int64) {
 	if !m.dev.hasX || !m.dev.hasY {
 		return
 	}
-	x := norm(m.dev.x, m.rng.XMin, m.rng.XMax)
-	y := norm(m.dev.y, m.rng.YMin, m.rng.YMax)
+	x, y := m.position()
 	if m.haveLast {
 		dx, dy := x-m.lastX, y-m.lastY
 		if dx*dx+dy*dy < 1e-8 { // sub-pixel jitter (0.0001 of the axis)
@@ -395,8 +396,7 @@ func (m *Machine) hover(now time.Time, tsMS int64) {
 	if !m.dev.hasX || !m.dev.hasY || now.Sub(m.lastHover) < m.cfg.HoverEvery {
 		return
 	}
-	x := norm(m.dev.x, m.rng.XMin, m.rng.XMax)
-	y := norm(m.dev.y, m.rng.YMin, m.rng.YMax)
+	x, y := m.position()
 	if m.hovering && math.Abs(x-m.hoverX) < 0.002 && math.Abs(y-m.hoverY) < 0.002 {
 		return // still: nothing new to show
 	}
@@ -431,4 +431,20 @@ func norm(v, lo, hi int32) float64 {
 func appendFixed(b []byte, v float64, n int) []byte {
 	s := math.Pow(10, float64(n))
 	return strconv.AppendFloat(b, math.Round(v*s)/s, 'f', -1, 64)
+}
+
+// position maps the digitizer into page coordinates for both ink and hover.
+func (m *Machine) position() (float64, float64) {
+	x := norm(m.dev.x, m.rng.XMin, m.rng.XMax)
+	y := norm(m.dev.y, m.rng.YMin, m.rng.YMax)
+	if m.cfg.SwapXY {
+		x, y = y, x
+	}
+	if m.cfg.InvertX {
+		x = 1 - x
+	}
+	if m.cfg.InvertY {
+		y = 1 - y
+	}
+	return x, y
 }

@@ -100,3 +100,12 @@ class PageQueue:
         """Wait until every line is empty (tests, shutdown)."""
         while any(not t.done() for t in self._workers.values()):
             await asyncio.gather(*[t for t in self._workers.values() if not t.done()])
+
+    def cancel_page(self, doc: str, page: str) -> None:
+        """Deleting the native answer layer cancels pending answers on that page."""
+        prefix = f"{doc}/{page}|"
+        for key, worker in list(self._workers.items()):
+            if key.startswith(prefix):
+                self._lines.pop(key, None)
+                if not worker.done():
+                    worker.cancel()

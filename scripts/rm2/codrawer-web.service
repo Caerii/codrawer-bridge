@@ -1,0 +1,14 @@
+[Unit]
+Description=Codrawer Even G2 app from reMarkable 2
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/root/codrawer-agent/bin/python -m http.server 5188 --bind 0.0.0.0 --directory /home/root/codrawer-agent/web
+Restart=on-failure
+RestartSec=8
+MemoryMax=64M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

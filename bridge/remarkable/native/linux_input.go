@@ -163,3 +163,16 @@ func decodeEvent(rec []byte) pen.Event {
 		TimeMS: sec*1000 + usec/1000,
 	}
 }
+
+// inputEventSize follows Linux's native timeval ABI: 16 bytes on ARM32, 24 on ARM64.
+const inputEventSize = 2*int(unsafe.Sizeof(uintptr(0))) + 8
+
+// appendInputEvent emits a zero-timestamp uinput event; the kernel supplies its time.
+func appendInputEvent(dst []byte, typ, code uint16, value int32) []byte {
+	var event [inputEventSize]byte
+	off := inputEventSize - 8
+	binary.LittleEndian.PutUint16(event[off:], typ)
+	binary.LittleEndian.PutUint16(event[off+2:], code)
+	binary.LittleEndian.PutUint32(event[off+4:], uint32(value))
+	return append(dst, event[:]...)
+}

@@ -23,11 +23,12 @@ type session struct {
 	clients map[*client]bool
 	// page: the tablet's latest saved page (a `page` snapshot, or nil), then the live strokes
 	// recorded after it, in arrival order, for replay to late joiners.
-	page    []byte
-	pageKey string   // "doc/page" of the latest snapshot ("" before the first)
-	order   []string // stroke ids in arrival order
-	strokes map[string]*stroke
-	points  int // recorded points over all strokes
+	page        []byte
+	aiDeletedAt int64    // suppress pre-deletion saved snapshots
+	pageKey     string   // "doc/page" of the latest snapshot ("" before the first)
+	order       []string // stroke ids in arrival order
+	strokes     map[string]*stroke
+	points      int // recorded points over all strokes
 	// shared document: Yjs updates (base64) in arrival order; survives clear (it is not ink)
 	docLog       []string
 	compactWho   *client   // asked for a doc_state, or nil

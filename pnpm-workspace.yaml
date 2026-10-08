@@ -4,3 +4,5 @@ packages:
   - apps/even-g2
   - apps/hand-lab
   - packages/*
+allowBuilds:
+  esbuild: true

@@ -247,3 +247,46 @@ func TestHoverShowsToolbarEraser(t *testing.T) {
 		t.Fatalf("hover: %v", r.out)
 	}
 }
+
+// The rM2 digitizer's axes differ from the portrait page. Ink and the loupe's hover
+// pointer must use the same transform; otherwise the view jumps at pen-down.
+func TestRotatedDigitizerInkAndHover(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		swap, ix, iy bool
+		x, y         float64
+	}{
+		{"unchanged", false, false, false, .2, .7},
+		{"swap", true, false, false, .7, .2},
+		{"clockwise", true, true, false, .3, .2},
+		{"counterclockwise", true, false, true, .7, .8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.m.cfg.SwapXY, r.m.cfg.InvertX, r.m.cfg.InvertY = tc.swap, tc.ix, tc.iy
+			r.m.rng = Ranges{XMin: 100, XMax: 1100, YMin: 200, YMax: 2200, PMax: 4096}
+			r.ev(EvKey, BtnToolPen, 1)
+			r.ev(EvAbs, AbsX, 300)
+			r.ev(EvAbs, AbsY, 1600)
+			r.syn()
+			c := r.out[len(r.out)-1]
+			if c["t"] != "cursor" || c["x"] != tc.x || c["y"] != tc.y {
+				t.Fatalf("hover: %v", c)
+			}
+			r.point(300, 1600)
+			var found bool
+			for _, msg := range r.out {
+				if msg["t"] == "stroke_pts" {
+					p := msg["pts"].([]any)[0].([]any)
+					if p[0] != tc.x || p[1] != tc.y {
+						t.Fatalf("ink: %v", p)
+					}
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("missing ink")
+			}
+		})
+	}
+}

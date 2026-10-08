@@ -81,7 +81,7 @@ export const hud = {
   /** One line of feedback for the last command or event ('saved', 'not connected', …). */
   notice: '',
   /** performance.now() of the last keystroke (or terminal output), ms: the typing view's clock. */
-  typingAt: 0,
+  typingAt: Number.NEGATIVE_INFINITY, // no typing has occurred at startup
   /** The line being typed. */
   input: '',
   /** Highlighted entry of the `/` completion popup. */

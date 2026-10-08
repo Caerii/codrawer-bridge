@@ -103,8 +103,15 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 			s.broadcastLocked(mustJSON(strokeDelete{"stroke_delete", gone, m.Ts}), c)
 		}
 		s.mu.Unlock()
+	case "dock_action":
+		s.mu.Lock()
+		if m.ID == "agent_layer_deleted" {
+			s.agentLayerDeletedLocked(m, c)
+		}
+		s.broadcastLocked(raw, c)
+		s.mu.Unlock()
 	case "key", "cursor", "doc", "typer_note",
-		"primer", "primer_request", "dock_action", "dock_query", "goto", "agent_status", "settings", // as sent (ADR 010; protocol.md)
+		"primer", "primer_request", "dock_query", "goto", "agent_status", "settings", // as sent (ADR 010; protocol.md)
 		"mark_seen", "mark_ask", "mark_define", "mark_invoke", "mark_feedback", "mark_query", "marks": // personal marks (protocol.md)
 		s.mu.Lock()
 		s.broadcastLocked(raw, c)
@@ -129,6 +136,12 @@ func (s *session) dispatch(m envelope, raw []byte, c *client) {
 		s.mu.Unlock()
 	case "page":
 		s.mu.Lock()
+		if s.pageKey != m.Doc+"/"+m.Page {
+			s.aiDeletedAt = 0
+		}
+		if s.aiDeletedAt > 0 && m.Rev <= s.aiDeletedAt {
+			raw = withoutAgentInk(raw)
+		}
 		s.setPageLocked(m, raw)
 		s.broadcastLocked(raw, c)
 		s.mu.Unlock()

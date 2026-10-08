@@ -4,9 +4,12 @@
 # forward within the major version, so an extension compiled against 6.8 headers and linked
 # against 6.8 libraries runs inside xochitl's 6.10 libraries (all symbols carry the Qt_6 tag).
 FROM debian:trixie-slim
-RUN dpkg --add-architecture arm64 \
+ARG TARGET_ARCH=arm64
+ARG TARGET_TRIPLE=aarch64-linux-gnu
+ARG CROSS_LIBC=libc6-dev-arm64-cross
+RUN dpkg --add-architecture ${TARGET_ARCH} \
  && apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
-      g++-aarch64-linux-gnu libc6-dev-arm64-cross python3 make file \
-      qt6-base-dev:arm64 qt6-declarative-dev:arm64 \
+      g++-${TARGET_TRIPLE} ${CROSS_LIBC} binutils python3 make file \
+      qt6-base-dev:${TARGET_ARCH} qt6-declarative-dev:${TARGET_ARCH} \
  && rm -rf /var/lib/apt/lists/*

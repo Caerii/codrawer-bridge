@@ -37,10 +37,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .aio import within
+from .geometry import GEOMETRY
 from .placement import MM_PER_PU, Block
 
-#: The Paper Pro page in millimetres (packages/hand/src/protocol.ts PAPER_PRO_MM).
-PAGE_MM = (179.6, 239.5)
+#: Physical dimensions of the configured tablet, shared with placement and streaming.
+PAGE_MM = GEOMETRY.page_mm
 
 #: The repository root, where ``packages/hand`` lives in a checkout.
 REPO = Path(__file__).resolve().parents[3]
@@ -200,6 +201,9 @@ class HandWorker:
     def _cmd(self) -> list[str]:
         cli = self.repo / "packages" / "hand" / "node_modules" / "tsx" / "dist" / "cli.mjs"
         node = shutil.which("node")
+        bundled = self.repo / "packages" / "hand" / "scripts" / "layouts.cjs"
+        if node and bundled.exists():
+            return [node, str(bundled), "--serve"]
         if not node or not cli.exists():
             raise HandUnavailable("node or packages/hand/node_modules/tsx missing (pnpm install)")
         return [node, str(cli), "scripts/layouts.ts", "--serve"]

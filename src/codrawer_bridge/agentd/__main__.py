@@ -50,10 +50,11 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--backend",
-        choices=("claude-stream", "even-terminal"),
+        choices=("claude-stream", "even-terminal", "anthropic-api"),
         default="claude-stream",
         help="claude-stream: warm `claude -p` processes, the image attached (claude_stream.py; "
-        "~1 s warm); even-terminal: the --term-url server, the image Read from a file (~23 s)",
+        "~1 s warm); even-terminal: the --term-url server; "
+        "anthropic-api: direct Messages API using ANTHROPIC_API_KEY (both tablet models)",
     )
     ap.add_argument(
         "--model",
@@ -162,7 +163,7 @@ async def _main(a: argparse.Namespace) -> int:
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger("agentd").addHandler(fh)
     log = logging.getLogger("agentd")
-    if not a.dry_run and not await agent.terminal.reachable():
+    if cfg.backend == "even-terminal" and not a.dry_run and not await agent.terminal.reachable():
         log.warning(
             "even-terminal does not answer at %s; requests will fail until it does", cfg.term_url
         )

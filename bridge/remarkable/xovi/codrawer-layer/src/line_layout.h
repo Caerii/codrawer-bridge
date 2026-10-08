@@ -56,9 +56,13 @@ struct RmPoint {
 } __attribute__((packed));
 static_assert(sizeof(RmPoint) == 14, "xochitl's Line point is 14 bytes");
 
-constexpr int kLineSize = 88;
-constexpr int kOffTool = 0, kOffColor = 4, kOffArgb = 8, kOffPoints = 16, kOffThickness = 40,
-              kOffBounds = 56;
+// ARM32: OS 3.28.0.172 reports size 72 and the default double at +24.
+// QList has three native-width words; gadget read-back in buildLine validates the layout.
+constexpr bool kArm32 = sizeof(uintptr_t) == 4;
+constexpr int kLineSize = kArm32 ? 72 : 88;
+constexpr int kOffTool = 0, kOffColor = 4, kOffArgb = 8,
+              kOffPoints = kArm32 ? 12 : 16, kOffThickness = kArm32 ? 24 : 40,
+              kOffBounds = kArm32 ? 40 : 56;
 
 // Line::Color value that makes the ARGB word at +8 the stroke's colour.
 constexpr uint32_t kColorArgbCode = 9;
@@ -67,7 +71,7 @@ constexpr uint32_t kColorArgbCode = 9;
 struct Header {
     uint32_t tool = 0, color = 0, argb = 0;
     uintptr_t listD = 0, listPtr = 0;  // the point QList's d and ptr
-    int64_t listSize = 0;              // its element count
+    intptr_t listSize = 0;              // its element count
     double thickness = 0;
 };
 
@@ -76,9 +80,9 @@ inline Header readHeader(const unsigned char *p) {
     std::memcpy(&h.color, p + kOffColor, 4);
     std::memcpy(&h.tool, p + kOffTool, 4);
     std::memcpy(&h.argb, p + kOffArgb, 4);
-    std::memcpy(&h.listD, p + kOffPoints, 8);
-    std::memcpy(&h.listPtr, p + kOffPoints + 8, 8);
-    std::memcpy(&h.listSize, p + kOffPoints + 16, 8);
+    std::memcpy(&h.listD, p + kOffPoints, sizeof(uintptr_t));
+    std::memcpy(&h.listPtr, p + kOffPoints + sizeof(uintptr_t), sizeof(uintptr_t));
+    std::memcpy(&h.listSize, p + kOffPoints + 2 * sizeof(uintptr_t), sizeof(intptr_t));
     std::memcpy(&h.thickness, p + kOffThickness, 8);
     return h;
 }

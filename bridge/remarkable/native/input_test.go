@@ -9,12 +9,22 @@ import (
 	"encoding/binary"
 	"reflect"
 	"testing"
+	"unsafe"
 
 	"codrawer-bridge-native/pen"
 )
 
-// record encodes one 24-byte input_event (64-bit timeval).
+// record encodes the current Linux architecture's input_event, including ARM32.
 func record(sec, usec int64, typ, code uint16, value int32) []byte {
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		b := make([]byte, 16)
+		binary.LittleEndian.PutUint32(b[0:], uint32(sec))
+		binary.LittleEndian.PutUint32(b[4:], uint32(usec))
+		binary.LittleEndian.PutUint16(b[8:], typ)
+		binary.LittleEndian.PutUint16(b[10:], code)
+		binary.LittleEndian.PutUint32(b[12:], uint32(value))
+		return b
+	}
 	b := make([]byte, 24)
 	binary.LittleEndian.PutUint64(b[0:], uint64(sec))
 	binary.LittleEndian.PutUint64(b[8:], uint64(usec))
@@ -34,7 +44,7 @@ func TestInputParserSplitsAndJoins(t *testing.T) {
 	var got []pen.Event
 	p := &inputParser{}
 	buf := make([]byte, 0, 64)
-	for _, cut := range [][2]int{{0, 10}, {10, 40}, {40, 72}} {
+	for _, cut := range [][2]int{{0, 10}, {10, 40}, {40, len(stream)}} {
 		buf = append(buf[:0], stream[cut[0]:cut[1]]...)
 		p.feed(buf, func(ev pen.Event) { got = append(got, ev) })
 		for i := range buf {
@@ -138,5 +148,16 @@ func TestPickKeyboard(t *testing.T) {
 	}
 	if got := pickKeyboard(devs[:3]); got != "" {
 		t.Fatalf("picked %q from power key and virtual keyboard", got)
+	}
+}
+
+func TestUinputNativeRecord(t *testing.T) {
+	b := appendInputEvent(nil, pen.EvKey, pen.BtnTouch, -1)
+	if len(b) != inputEventSize {
+		t.Fatalf("size %d", len(b))
+	}
+	e := decodeEvent(b)
+	if e.Type != pen.EvKey || e.Code != pen.BtnTouch || e.Value != -1 || e.TimeMS != 0 {
+		t.Fatalf("decoded %+v", e)
 	}
 }

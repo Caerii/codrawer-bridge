@@ -9,6 +9,9 @@
 using namespace linelayout;
 
 int main() {
+    CHECK(kLineSize == (sizeof(uintptr_t) == 4 ? 72 : 88));
+    CHECK(kOffThickness == (sizeof(uintptr_t) == 4 ? 24 : 40));
+
     // the point record is the .rm v6 one: 14 packed bytes
     CHECK(sizeof(RmPoint) == 14);
     CHECK(offsetof(RmPoint, x) == 0 && offsetof(RmPoint, y) == 4 && offsetof(RmPoint, speed) == 8);
@@ -21,7 +24,7 @@ int main() {
     const double one = 1.0;
     std::memcpy(line + 0, &tool9, 4);
     std::memcpy(line + 8, &black, 4);
-    std::memcpy(line + 40, &one, 8);
+    std::memcpy(line + kOffThickness, &one, 8);
     Header h = readHeader(line);
     CHECK(h.tool == 9 && h.color == 0 && h.argb == black && h.listD == 0 && h.listPtr == 0 && h.listSize == 0 && h.thickness == 1.0);
     CHECK(defaultLooksRight(h));
@@ -46,8 +49,8 @@ int main() {
     writeHeader(line, 17, 0xff1f6fe0u, 2.0);
     h = readHeader(line);
     CHECK(h.tool == 17 && h.color == kColorArgbCode && h.argb == 0xff1f6fe0u && h.thickness == 2.0);
-    CHECK(std::memcmp(line + 12, before + 12, 28) == 0);  // +12..+40: padding and the point list
-    CHECK(std::memcmp(line + 48, before + 48, kLineSize - 48) == 0);  // length, bounds
+    CHECK(std::memcmp(line + 12, before + 12, kOffThickness - 12) == 0);  // +12..+40: padding and the point list
+    CHECK(std::memcmp(line + kOffThickness + 8, before + kOffThickness + 8, kLineSize - kOffThickness - 8) == 0);  // length, bounds
 
     // direction bytes: 0..255 over a full turn, negative angles wrapped
     CHECK(directionByte(0) == 0);

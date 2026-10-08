@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, "codex/rm2-support"]
   pull_request:
 
 concurrency:
@@ -23,13 +23,23 @@ jobs:
           go-version-file: bridge/remarkable/native/go.mod
           cache-dependency-path: bridge/remarkable/native/go.sum
       - name: vet (tablet target)
-        run: GOOS=linux GOARCH=arm64 go vet ./...
+        run: |
+          GOOS=linux GOARCH=arm64 go vet ./...
+          GOOS=linux GOARCH=arm GOARM=7 go vet ./...
       - name: test
         run: go test -count=1 . ./router/ ./pen/ ./release/ ./rmlines/ ./pagewatch/   # . = main package (Linux-only, fine on the runner)
       - name: router ordering tests, repeated
         run: go test -count=20 -run 'LiveMessagesDuringReplay|LeavingMidStroke|BigPage|HelloSays' ./router/
-      - name: build for the Paper Pro
-        run: GOOS=linux GOARCH=arm64 go build -o /tmp/codrawer_bridge_native . && ls -l /tmp/codrawer_bridge_native
+      - name: build and test both tablet ABIs
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-user
+          for arch in arm arm64; do
+            GOOS=linux GOARCH=$arch GOARM=7 CGO_ENABLED=0 go build -o /tmp/bridge-$arch .
+            GOOS=linux GOARCH=$arch GOARM=7 CGO_ENABLED=0 go test -c -o /tmp/input-$arch.test .
+          done
+          qemu-arm /tmp/input-arm.test
+          qemu-aarch64 /tmp/input-arm64.test
 
   app:
     name: Glasses app
@@ -106,8 +116,40 @@ jobs:
           cache-dependency-path: bridge/remarkable/native/go.sum
       - name: shell syntax
         run: |
-          for f in bridge/remarkable/boot/*.sh bridge/remarkable/boot/test/*.sh scripts/dev/*.sh; do
+          for f in bridge/remarkable/boot/*.sh bridge/remarkable/boot/test/*.sh scripts/dev/*.sh scripts/rm2/*.sh; do
             sh -n "$f" 2>/dev/null || bash -n "$f"
           done
       - name: boot.sh scenarios (Docker, fake systemctl)
         run: bash bridge/remarkable/boot/test/run.sh
+
+  agent:
+    name: Shared AI agent and tablet geometry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e . pytest
+      - run: pytest tests/test_agentd*.py
+
+  native-layer:
+    name: Native layer (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [arm64, armhf]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the shared Qt extension
+        env:
+          CODRAWER_ARCH: ${{ matrix.arch }}
+        run: bash bridge/remarkable/xovi/codrawer-layer/build.sh
+      - name: Check Line layout with both pointer widths
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y g++-multilib
+          for bits in 32 64; do
+            g++ -m$bits -std=c++17 -Wall -Wextra -Werror -Ibridge/remarkable/xovi/codrawer-layer/src bridge/remarkable/xovi/codrawer-layer/tests/line_layout_test.cpp -o /tmp/line-$bits
+            /tmp/line-$bits
+          done

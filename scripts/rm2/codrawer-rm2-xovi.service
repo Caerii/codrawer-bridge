@@ -1,0 +1,13 @@
+[Unit]
+Description=Guarded Codrawer reMarkable 2 notebook integration
+After=xochitl.service codrawer-rm2.service
+Wants=codrawer-rm2.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /home/root/rm2-xovi/xovi.sh boot
+RemainAfterExit=yes
+TimeoutStartSec=420
+
+[Install]
+WantedBy=multi-user.target
