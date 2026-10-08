@@ -105,9 +105,9 @@ export function askPairingCode() {
     label: link.code ? 'That pairing code was not accepted. ' : 'This tablet needs its pairing code: ',
     placeholder: 'XXXX-XXXX',
     width: '9em',
-    caps: true,
+    caps: false,
     submit: (code) => {
-      link.usePairingCode(code.toUpperCase())
+      link.usePairingCode(code)
       return true
     },
   })
