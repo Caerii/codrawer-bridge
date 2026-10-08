@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+R=/home/root/codrawer-agent/runtime
+exec "$R/lib/ld-linux-armhf.so.3" --library-path "$R/lib" "$R/bin/node" --max-old-space-size=96 "$@"

@@ -54,6 +54,7 @@
 #include "inject.h"
 #include "inksock.h"
 #include "live.h"
+#include "layerfollow.h"
 #include "log.h"
 #include "navigate.h"
 #include "paths.h"
@@ -88,6 +89,7 @@ void worker() {
     wireHooks();
     QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
         addTickHook([] { selectionTick(); });
+        addTickHook([] { layerTick(); });
         addTickHook([] { injectTick(); });
         startToolFollow();
     }, Qt::QueuedConnection);

@@ -31,13 +31,8 @@ export type PageMode = 'canvas' | 'text' | 'edit'
 export const SCREEN_W = 576
 export const SCREEN_H = 288
 
-/** Container ids, fixed across layouts so updates address the same id whatever the page. */
-export const IMG_ID = 1
-export const TEXT_ID = 2
-export const LOUPE_ID = 3
-
-/** Contextual-menu item ids (non-zero, unique); glasses/input.ts maps them to actions. */
-export const MENU = { newDrawing: 1, toggleAi: 2, cycleView: 3, cycleHighlight: 4, zoomIn: 5, zoomOut: 6, clearAi: 7, textView: 8, sendDrawing: 9, editDoc: 10 } as const
+import { IMG_ID, TEXT_ID, LOUPE_ID, MENU } from './ids'
+export { IMG_ID, TEXT_ID, LOUPE_ID, MENU } from './ids'
 
 /**
  * The host refuses a page whose menu has more than 10 items (`TOO_MANY_MENU_ITEMS`: create and

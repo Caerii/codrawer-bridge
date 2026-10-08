@@ -1,3 +1,7 @@
+> Both tablet models use this extension. Default builds target Paper Pro;
+> `CODRAWER_ARCH=armhf ./build.sh` targets rM2 in `out/armhf/`.
+> See [model support](../../../../docs/tablet-models.md) for ABI and firmware limits.
+
 # codrawer-layer (XOVI extension)
 
 > **Status (2026-10-06): runs at every boot on the device (3.29.0.149).** Verified there: `dump`,

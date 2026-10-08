@@ -98,6 +98,10 @@ void cmdDump() {
     logLine(QStringLiteral("Line metatype: valid=%1 id=%2 size=%3 align=%4 flags=0x%5")
                 .arg(lt.isValid()).arg(lt.id()).arg(lt.sizeOf()).arg(lt.alignOf()).arg(uint(lt.flags()), 0, 16));
     if (lt.metaObject()) dumpMetaObject(lt.metaObject(), "Line (gadget)");
+    if (lt.isValid() && lt.sizeOf() > 0 && lt.sizeOf() <= 256) {
+        QVariant fresh(lt);
+        logLine(QStringLiteral("Line default layout: %1").arg(hex(fresh.constData(), lt.sizeOf())));
+    }
     for (const char *from : {"QVariantList", "QVariantMap", "QPolygonF", "QString", "QJsonObject", "QByteArray"}) {
         const QMetaType ft = QMetaType::fromName(from);
         logLine(QStringLiteral("Line converter from %1: %2").arg(QString::fromLatin1(from)).arg(QMetaType::canConvert(ft, lt)));

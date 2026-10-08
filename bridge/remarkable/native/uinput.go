@@ -14,7 +14,6 @@ package main
 // (keyboard.go) knows to skip it.
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -105,13 +104,9 @@ func ioctlInt(fd uintptr, req uintptr, val int) error {
 
 // writeBurst writes one burst's events in a single write(), then pauses (typer.go plans them).
 func (k *VirtualKeyboard) writeBurst(b burst) error {
-	buf := make([]byte, 0, 24*len(b.events))
+	buf := make([]byte, 0, inputEventSize*len(b.events))
 	for _, e := range b.events {
-		var ev [24]byte
-		binary.LittleEndian.PutUint16(ev[16:18], e.etype)
-		binary.LittleEndian.PutUint16(ev[18:20], e.code)
-		binary.LittleEndian.PutUint32(ev[20:24], uint32(e.value))
-		buf = append(buf, ev[:]...)
+		buf = appendInputEvent(buf, e.etype, e.code, e.value)
 	}
 	if _, err := k.f.Write(buf); err != nil {
 		return err

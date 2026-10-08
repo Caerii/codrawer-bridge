@@ -127,6 +127,7 @@ func deviceState(fd int, tsMS int64) []pen.Event {
 // through it, and a timer flushes a pending batch when its window closes.
 func penMachineForever(cfg BridgeConfig, rng pen.Ranges, evC <-chan pen.Event, outC chan<- []byte) {
 	m := pen.New(pen.Config{
+		SwapXY: cfg.SwapXY, InvertX: cfg.InvertX, InvertY: cfg.InvertY,
 		Brush:             cfg.Brush,
 		Color:             cfg.Color,
 		TouchMode:         cfg.TouchMode,

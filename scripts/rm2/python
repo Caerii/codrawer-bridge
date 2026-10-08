@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+ROOT=/home/root/codrawer-agent
+R=$ROOT/runtime
+export PYTHONHOME="$R"
+export PYTHONPATH="$ROOT/src:$R/python"
+export PYTHONDONTWRITEBYTECODE=1
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export PATH="$ROOT/bin:$PATH"
+exec "$R/lib/ld-linux-armhf.so.3" --library-path "$R/lib" "$R/bin/python3.11" "$@"

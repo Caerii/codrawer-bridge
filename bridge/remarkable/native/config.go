@@ -7,6 +7,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strings"
@@ -18,6 +19,9 @@ import (
 // BridgeConfig is the bridge's whole configuration. Field comments give the env var and the
 // unit; the flag name is in loadConfig.
 type BridgeConfig struct {
+	SwapXY         bool   // PEN_SWAP_XY: swap normalized axes before inversion
+	InvertX        bool   // PEN_INVERT_X: reverse the page horizontal axis
+	InvertY        bool   // PEN_INVERT_Y: reverse the page vertical axis
 	WsURL          string // DESKTOP_WS: the router session to stream into, ws://host:port/ws/<session>
 	Brush          string // BRUSH: brush hint for pen strokes; the eraser end is always "eraser"
 	Color          string // COLOR: optional colour hint (#rrggbb); raw input carries no colour
@@ -76,11 +80,18 @@ type BridgeConfig struct {
 
 // loadConfig reads the environment, then the flags. pageDump reports -page-dump.
 func loadConfig() (cfg BridgeConfig, pageDump bool) {
+	profile, err := profileFor(os.Getenv("CODRAWER_TABLET_MODEL"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	cfg = BridgeConfig{
+		SwapXY:             getenvBoolDefault("PEN_SWAP_XY", profile.swapXY),
+		InvertX:            getenvBoolDefault("PEN_INVERT_X", profile.invertX),
+		InvertY:            getenvBoolDefault("PEN_INVERT_Y", profile.invertY),
 		WsURL:              getenvDefault("DESKTOP_WS", "ws://127.0.0.1:8000/ws/session1"),
 		Brush:              getenvDefault("BRUSH", "pen"),
 		Color:              os.Getenv("COLOR"),
-		InputDevice:        os.Getenv("INPUT_DEVICE"),
+		InputDevice:        getenvDefault("INPUT_DEVICE", profile.input),
 		BatchHz:            getenvIntDefault("BATCH_HZ", 60),
 		MaxBatchPoints:     getenvIntDefault("MAX_BATCH_POINTS", 64),
 		NoGrab:             getenvBoolDefault("NO_GRAB", true),
@@ -138,6 +149,9 @@ func loadConfig() (cfg BridgeConfig, pageDump bool) {
 	flag.StringVar(&cfg.InkSocket, "ink-socket", cfg.InkSocket, "The codrawer-layer XOVI extension's socket (agent ink in, dock actions out); off disables")
 	flag.BoolVar(&cfg.NativeAgentInk, "native-agent-ink", cfg.NativeAgentInk, "Commit the router's ai-layer strokes as native xochitl ink on the codrawer: agent layer (needs the extension)")
 	flag.BoolVar(&pageDump, "page-dump", false, "Print the `page` message for the open document and page, then exit (read-only)")
+	flag.BoolVar(&cfg.SwapXY, "pen-swap-xy", cfg.SwapXY, "Swap normalized pen axes before inversion")
+	flag.BoolVar(&cfg.InvertX, "pen-invert-x", cfg.InvertX, "Reverse horizontal page coordinates")
+	flag.BoolVar(&cfg.InvertY, "pen-invert-y", cfg.InvertY, "Reverse vertical page coordinates")
 	flag.Parse()
 	return cfg, pageDump
 }

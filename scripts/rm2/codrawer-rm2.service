@@ -1,0 +1,13 @@
+[Unit]
+Description=Codrawer reMarkable 2 pen and session bridge
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/home/root/codrawer-rm2.env
+ExecStart=/home/root/codrawer_bridge_rm2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

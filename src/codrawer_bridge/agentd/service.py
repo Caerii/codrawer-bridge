@@ -85,7 +85,7 @@ class Config:
     term_token: str = "sig-glasses"
     term_cwd: str = ""  # the repository: the state directory (logs, images) lives under it
     agent_cwd: str = ""  # Claude Code's working directory (default term_cwd); empty is faster
-    backend: str = "even-terminal"  # claude-stream (warm claude -p processes) | even-terminal
+    backend: str = "even-terminal"  # claude-stream | even-terminal | anthropic-api
     model: str = "claude-sonnet-5-5"  # "careful", the default (claude-stream)
     fast_model: str = "claude-haiku-4-5-20251001"  # "fast", from the dock's Model entry
     pool: int = 1  # asks answered at once (claude-stream keeps one more process warm as a spare)
@@ -295,6 +295,10 @@ class Agentd:
         if msg.get("t") != "dock_action":
             return
         aid = msg.get("id")
+        if aid == "agent_layer_deleted":
+            if msg.get("doc") == self.model.doc and msg.get("page") == self.model.page:
+                self.queue.cancel_page(self.model.doc, self.model.page)
+            return
         if aid == "agent_ink":
             self._ink_checked = 0.0  # the user toggled it: read the setting again next time
             return
@@ -669,7 +673,9 @@ class Agentd:
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
-                image=None if self.claude is not None else rec.image,  # attached: no Read
+                image=None
+                if self.claude is not None or self.cfg.backend == "anthropic-api"
+                else rec.image,  # attached: no Read
                 n_strokes=len(selected),
                 region=sel_box,
                 title=m.title,
@@ -739,7 +745,7 @@ class Agentd:
         except asyncio.CancelledError:
             # a newer ask for the same selection replaced this one (queue.py); terminal.py has
             # interrupted the model's turn, and the hand stops after its current stroke
-            rec.error = "replaced by a newer ask for the same selection"
+            rec.error = "canceled (newer ask, layer deletion, or shutdown)"
             if stream is not None:
                 stream.stop()
             raise
@@ -756,6 +762,10 @@ class Agentd:
 
     async def _turn_once(self, text: str, png: bytes, timeout_s: float, on_text) -> Reply:
         """One model turn on the configured backend (claude_stream.py, or terminal.py)."""
+        if self.cfg.backend == "anthropic-api":
+            from .anthropic_api import ask
+
+            return await ask(text, png, self.model_id, timeout_s, on_text)
         if self.claude is not None:
             return await self.claude.ask(text, png, timeout_s, on_text)
         async with self._turn:

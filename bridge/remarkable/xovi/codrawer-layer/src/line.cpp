@@ -100,7 +100,7 @@ bool buildLine(int tool, quint32 argb, double thickness, QList<RmPoint> pts, QVa
         // handler leaves it, then read it back.
         std::memcpy(p + kOffBounds, &bounds, sizeof(QRectF));
         br = readGadget(lt, p, "boundingRect").toRectF();
-        logLine(QStringLiteral("line: bounds stored at +56; wrote %1, reads %2").arg(show(bounds), show(br)));
+        logLine(QStringLiteral("line: bounds wrote %1, reads %2").arg(show(bounds), show(br)));
         if (!covers(br)) return false;
     }
     if (verbose) {

@@ -15,47 +15,13 @@
  * scrolls the transcript, in the editor it moves the cursor by line, and a click in the editor
  * saves and shares the document (the common action there).
  */
-import { OsEventTypeList, type EvenHubEvent } from '@evenrealities/even_hub_sdk'
-import { applyAction, type Action } from '../actions'
+import { type EvenHubEvent } from '@evenrealities/even_hub_sdk'
+import { applyAction } from '../actions'
 import { saveDoc } from '../doc/document'
 import { commitLine } from '../hud/commands'
 import { onKey } from '../hud/keyboard'
 import { dirty, glasses, hud, view } from '../state'
-import { MENU, TEXT_ID } from './layout'
-
-const MENU_ACTION: Record<number, Action> = {
-  [MENU.newDrawing]: 'new-drawing',
-  [MENU.editDoc]: 'edit-doc',
-  [MENU.sendDrawing]: 'send-drawing',
-  [MENU.textView]: 'text-view',
-  [MENU.clearAi]: 'clear-ai',
-  [MENU.toggleAi]: 'toggle-ai',
-  [MENU.cycleView]: 'cycle-view',
-  [MENU.cycleHighlight]: 'cycle-highlight',
-  [MENU.zoomIn]: 'zoom-in',
-  [MENU.zoomOut]: 'zoom-out',
-}
-
-/** The action an event asks for, or '' when it asks for none. */
-function actionFor(event: EvenHubEvent): Action | '' {
-  const sys = event.sysEvent
-  const text = event.textEvent
-  const menu = event.menuItemClickEvent
-  if (menu && menu.itemID !== undefined) return MENU_ACTION[menu.itemID] ?? ''
-  if (sys && sys.eventSource !== undefined) {
-    const type = sys.eventType ?? OsEventTypeList.CLICK_EVENT
-    if (type === OsEventTypeList.CLICK_EVENT) return 'toggle-mode'
-    if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) return 'cycle-highlight'
-    if (type === OsEventTypeList.SCROLL_TOP_EVENT) return 'zoom-in'
-    if (type === OsEventTypeList.SCROLL_BOTTOM_EVENT) return 'zoom-out'
-    return ''
-  }
-  if (text && text.containerID === TEXT_ID) {
-    if (text.eventType === 1) return 'zoom-in'
-    if (text.eventType === 2) return 'zoom-out'
-  }
-  return ''
-}
+import { actionFor } from './gesture'
 
 /** Handle one glasses input event (subscribed by glasses/page.ts once the page is up). */
 export function onGlassesEvent(event: EvenHubEvent) {

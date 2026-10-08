@@ -1,0 +1,22 @@
+[Unit]
+Description=Codrawer AI answers on reMarkable 2
+After=network.target codrawer-rm2.service
+Wants=codrawer-rm2.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/root/codrawer-agent
+EnvironmentFile=/home/root/.smart_remarkable.systemd.env
+EnvironmentFile=/home/root/codrawer-rm2.env
+Environment=CODRAWER_TABLET_MODEL=rm2
+ExecStart=/home/root/codrawer-agent/bin/python /home/root/codrawer-agent/launch_agent.py
+Restart=on-failure
+RestartSec=8
+Nice=5
+MemoryMax=320M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
