@@ -15,6 +15,7 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 | `termdirect.py` | sends one `term_prompt` (edit the text / `attach` field) and prints the reply |
 | `inktest.py [--host …] [--allow-doc <title>]` | **on the tablet** (not the harness): native agent ink regression. Reads the automation `state` and `-page-dump`, sends an X in a circle as `ai` strokes through the tablet's router to a free spot on the visible page, waits for `ink: ok` and the save, and checks the saved strokes land on target (PASS/FAIL with the numbers). Refuses unless native agent ink is on and the open notebook is "codrawer: test". Writes one mark into that notebook. |
 | `showcase.py` | the README showcase: eight scripted scenes (pens, a simulated agent, `stroke_delete` animation) played into a Rust router on :8580 and recorded from the simulator (:9902) and a headless browser into `docs/media/showcase.{mp4,gif}`; `--preview DIR` renders each scene's page without a router. Run line in its header. |
+| `demo_story.py --gif … --mp4 …` | plays and records the README demo (four acts, three participants) in the simulator; see its header |
 
 Simulator automation (`evenhub-simulator --automation-port 9898 …`):
 `curl http://127.0.0.1:9898/api/screenshot/glasses -o shot.png`,

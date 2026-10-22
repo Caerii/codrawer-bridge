@@ -8,6 +8,14 @@ phones, browsers and agents join the same page in real time.
 </p>
 
 <p align="center">
+<img src="docs/media/demo.gif" width="960" alt="Demo, Even G2 glasses on the left and a phone on the right. A tablet pen writes 'what if ink could travel?' and the glasses' loupe follows it while the phone shows the page; keystrokes from the tablet's keyboard open the slash-command popup on the glasses; three people play tic-tac-toe on the same page at once, in black, red and blue; a ring tap switches the glasses to fit and then wide fit, and the phone follows.">
+<br>
+<sub>Recorded in the Even Hub simulator against a real router; the pens and the keyboard are
+scripted (<a href="scripts/dev/demo_story.py"><code>scripts/dev/demo_story.py</code></a>).
+<a href="docs/media/demo.mp4">MP4 version</a>.</sub>
+</p>
+
+<p align="center">
 <a href="https://github.com/Caerii/codrawer-bridge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Caerii/codrawer-bridge/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
 <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
 </p>
