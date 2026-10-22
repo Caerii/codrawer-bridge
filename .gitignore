@@ -56,6 +56,8 @@ _tmp_*
 Thumbs.db
 .idea/
 .vscode/
+# Local agent worktrees and settings
+/.claude/
 
 # Logs
 *.log
