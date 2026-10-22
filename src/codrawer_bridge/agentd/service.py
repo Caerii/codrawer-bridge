@@ -66,6 +66,7 @@ from . import hand as handmod
 from . import placement, prompt, render
 from .aio import within
 from .claude_stream import ClaudePool
+from .health import HealthMonitor
 from .page import Box, PageModel
 from .queue import REPLACED, PageQueue
 from .stream import InkStream
@@ -192,6 +193,11 @@ class Agentd:
         self._joined_at = 0.0  # monotonic s of the latest join (replayed taps are not taps)
         self._last_tap: dict[tuple, float] = {}  # ask signature -> monotonic s (debounce)
         self._open_status: dict[str, tuple] = {}  # agent_status id -> page-unit box, until done
+        self.health = HealthMonitor(self)
+
+    @property
+    def connected(self) -> bool:
+        return self._connected.is_set() and self._ws is not None
 
     # ── the connection ─────────────────────────────────────────────────────────────────────
 
@@ -204,12 +210,13 @@ class Agentd:
         import websockets
 
         self._spawn(self._warm())
+        self._spawn(self.health.run(until))
         if self.claude is not None:
             self.claude.fill()  # warm Claude Code processes before the first ask
         backoff = 2.0
         while until is None or not until.is_set():
             try:
-                log.info("connecting to %s", self.cfg.ws)
+                log.info("connecting to %s", self.cfg.ws.split("?", 1)[0])
                 async with websockets.connect(
                     self._url(),
                     open_timeout=self.cfg.open_timeout_s,
@@ -225,7 +232,7 @@ class Agentd:
                     self._joined_at = time.monotonic()
                     self._connected.set()
                     backoff = 2.0
-                    log.info("joined %s", self.cfg.ws)
+                    log.info("joined %s", self.cfg.ws.split("?", 1)[0])
                     self._spawn(self._dock_entries())
                     self._spawn(
                         self.send(
@@ -387,6 +394,7 @@ class Agentd:
                 ],
             }
         )
+        await self.health.publish(force=True)
 
     def setting(self, key: str) -> str:
         """A user setting with a fixed set of values (SETTINGS), from settings.json."""
@@ -989,6 +997,7 @@ class Agentd:
         await self.send({"t": "ai_intent", "plan": text[:120]})
 
     def _log(self, rec: Record) -> None:
+        self.health.observe(rec)
         line = json.dumps(asdict(rec), ensure_ascii=False)
         with open(self.state / "requests.jsonl", "a", encoding="utf-8") as f:
             f.write(line + "\n")

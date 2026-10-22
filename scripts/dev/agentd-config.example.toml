@@ -1,0 +1,27 @@
+# Copy to ~/.codrawer-agentd/config.toml and edit before installing the service.
+# Keep this file outside the repository. Empty token reads ROUTER_TOKEN over SSH and caches it.
+[tablet]
+host = "root@192.0.2.10"
+ws = "ws://192.0.2.10:8577/ws/session1"
+token = ""
+
+[agentd]
+backend = "claude-stream"
+model = "claude-sonnet-5-5"
+fast_model = "claude-haiku-4-5-20251001"
+pool = 2
+thinking = "overlay"
+ink = "auto"
+max_page_y = 18.0
+agent_cwd = "~/.codrawer-agentd/live"
+# term_cwd and state_dir default to [service] source and source/.codrawer/agentd.
+# lock_path defaults to ~/.codrawer-agentd/agentd.lock.
+keep_images_days = 14
+log_max_bytes = 5000000
+log_backups = 3
+
+[service]
+source = "C:/Github/tool-codrawer-bridge"
+checkout = "C:/Github/codrawer-agentd-live"
+ref = "origin/dev"
+task_name = "codrawer-agentd"

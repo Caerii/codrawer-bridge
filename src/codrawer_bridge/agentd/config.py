@@ -1,63 +1,21 @@
-"""
-Proposed agentd service configuration: one TOML file instead of a terminal command.
+"""Typed TOML configuration for the managed responder.
 
-**The problem.** Until 2026-10-07 agentd ran from a terminal with a dozen flags
-(docs/checkpoints/2026-10-07.md, "Run agentd"), the pairing code among them. A service that
-starts with the PC (scripts/dev/agentd-service.ps1) needs the same choices written down once, and
-the pairing code must not be written into anything that could be committed. This module reads
-``~/.codrawer-agentd/config.toml`` and turns it into the argument list of
-``python -m codrawer_bridge.agentd`` (__main__.py), so the service and a terminal run take exactly
-the same options and nothing in the service duplicates __main__'s defaults.
+``~/.codrawer-agentd/config.toml`` maps to the existing agentd CLI, so a scheduled task and a
+terminal invocation use one runtime contract. The file is explicit for managed startup; the
+library's ``parse`` also works on strings for tests and tools. Unknown sections, unknown keys,
+wrong types and invalid ranges fail early. See ``scripts/dev/agentd-config.example.toml``.
 
-**The facts it rests on.**
-
-- The pairing code is ``ROUTER_TOKEN`` in the tablet's ``/home/root/codrawer/bridge.env``
-  (CLAUDE.md, "Bring the stack up"; inktest.py reads it the same way). The tablet sleeps within
-  minutes and drops SSH, and the PC usually logs on while it sleeps: so the code is read over SSH
-  when the tablet answers and cached in ``~/.codrawer-agentd/token`` (the user's profile, never a
-  repository), and the cache is used when it does not.
-- The service runs a pinned checkout (``[service] checkout``) but keeps its state where the
-  terminal runs kept it, ``C:/Github/tool-codrawer-bridge/.codrawer/agentd`` (the user's dock
-  settings and page threads live there, threads.py), so switching to the service loses nothing.
-
-**The file**, every key optional (the defaults are the checkpoint's live command line)::
-
-    [tablet]
-    host = "root@192.168.50.156"            # ssh target: the token, the ink setting
-    ws = "ws://192.168.50.156:8577/ws/session1"   # default: from host
-    token = ""                              # empty: ROUTER_TOKEN over ssh, else the cache
-
-    [agentd]
-    backend = "claude-stream"
-    model = "claude-sonnet-5-5"
-    fast_model = "claude-haiku-4-5-20251001"
-    pool = 2
-    thinking = "overlay"
-    ink = "auto"
-    max_page_y = 18.0
-    agent_cwd = "~/.codrawer-agentd/live"
-    state_dir = "C:/Github/tool-codrawer-bridge/.codrawer/agentd"
-    term_cwd = "C:/Github/tool-codrawer-bridge"
-    extra_args = []                         # anything else __main__ takes, verbatim
-    keep_images_days = 14                   # req-*.png older than this are pruned at start
-
-    [service]                               # read by agentd-service.ps1 (plain strings only)
-    source = "C:/Github/tool-codrawer-bridge"     # the main checkout
-    checkout = "C:/Github/codrawer-agentd-live"   # the pinned worktree the service runs
-    ref = "origin/dev"                      # what `agentd-service.ps1 update` moves it to
-
-    [nightly]
-    test_notebooks = ["Test", "codrawer: test"]
-    live_ask = true                         # a real Ask round trip, only in a test notebook
-    report_dir = "C:/Github/tool-codrawer-bridge/.codrawer/nightly"
-
-Unknown sections and keys are errors, so a typo is caught at start rather than ignored.
+The tablet address must be configured. The pairing code can come from the file, environment,
+the tablet's ``bridge.env`` over SSH, or the cache under ``~/.codrawer-agentd``. Service paths
+are absolute; ``term_cwd`` and ``state_dir`` default to the configured source checkout so
+existing page threads and settings survive a move to a pinned worktree.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import time
 import tomllib
@@ -73,7 +31,9 @@ CONFIG_PATH = HOME / "config.toml"
 TOKEN_CACHE = HOME / "token"
 
 #: The main checkout on this PC (CLAUDE.md); the state stays under it.
-MAIN_REPO = "C:/Github/tool-codrawer-bridge"
+MAIN_REPO = os.environ.get(
+    "CODRAWER_AGENTD_SOURCE", str(Path(__file__).resolve().parents[3])
+).replace("\\", "/")
 
 
 class ConfigError(ValueError):
@@ -82,7 +42,7 @@ class ConfigError(ValueError):
 
 @dataclass
 class TabletConfig:
-    host: str = "root@192.168.50.156"
+    host: str = ""
     ws: str = ""  # derived from host when empty (ws_url)
     token: str = ""
 
@@ -109,13 +69,25 @@ class AgentdConfig:
     term_cwd: str = MAIN_REPO
     extra_args: list[str] = field(default_factory=list)
     keep_images_days: float = 14.0
+    term_url: str = "http://127.0.0.1:3456"
+    term_token: str = "sig-glasses"
+    persona: str = "archivist"
+    color: str = "#3a6ea5"
+    speed: float = 1.0
+    timeout: float = 90.0
+    open_timeout: float = 60.0
+    include_ai: bool = False
+    log_max_bytes: int = 5_000_000
+    log_backups: int = 3
+    lock_path: str = ""
 
 
 @dataclass
 class ServiceConfig:
     source: str = MAIN_REPO
-    checkout: str = "C:/Github/codrawer-agentd-live"
+    checkout: str = f"{MAIN_REPO}-agentd-live"
     ref: str = "origin/dev"
+    task_name: str = "codrawer-agentd"
 
 
 @dataclass
@@ -183,6 +155,12 @@ def parse(text: str) -> Config:
         if name in raw:
             setattr(cfg, name, _section(type(getattr(cfg, name)), raw[name], name))
     a = cfg.agentd
+    if "term_cwd" not in raw.get("agentd", {}):
+        a.term_cwd = cfg.service.source
+    if "state_dir" not in raw.get("agentd", {}):
+        a.state_dir = f"{cfg.service.source}/.codrawer/agentd"
+    if "checkout" not in raw.get("service", {}):
+        cfg.service.checkout = f"{cfg.service.source}-agentd-live"
     if a.backend not in ("claude-stream", "even-terminal"):
         raise ConfigError(f"[agentd] backend = {a.backend!r}: claude-stream or even-terminal")
     if a.ink not in ("auto", "on", "off"):
@@ -191,6 +169,12 @@ def parse(text: str) -> Config:
         raise ConfigError(f"[agentd] thinking = {a.thinking!r}: dots, overlay or none")
     if a.pool < 1:
         raise ConfigError("[agentd] pool must be at least 1")
+    if a.log_max_bytes < 1 or a.log_backups < 0:
+        raise ConfigError("[agentd] log_max_bytes must be positive and log_backups nonnegative")
+    if a.timeout <= 0 or a.open_timeout <= 0 or a.speed <= 0:
+        raise ConfigError("[agentd] timeout, open_timeout and speed must be positive")
+    if a.max_page_y <= 0 or a.keep_images_days < 0:
+        raise ConfigError("[agentd] max_page_y must be positive and keep_images_days nonnegative")
     return cfg
 
 
@@ -214,6 +198,8 @@ def expand(p: str) -> str:
 def agentd_argv(cfg: Config, token: str) -> list[str]:
     """The arguments for ``python -m codrawer_bridge.agentd`` (__main__.py) this file asks for."""
     a = cfg.agentd
+    if not cfg.tablet.ws and not cfg.tablet.host:
+        raise ConfigError("[tablet] host or ws is required")
     argv = [
         "--ws",
         cfg.tablet.ws_url,
@@ -235,11 +221,32 @@ def agentd_argv(cfg: Config, token: str) -> list[str]:
         a.ink,
         "--max-page-y",
         f"{a.max_page_y:g}",
+        "--term-url",
+        a.term_url,
+        "--term-token",
+        a.term_token,
+        "--persona",
+        a.persona,
+        "--color",
+        a.color,
+        "--speed",
+        f"{a.speed:g}",
+        "--timeout",
+        f"{a.timeout:g}",
+        "--open-timeout",
+        f"{a.open_timeout:g}",
+        "--log-max-bytes",
+        str(a.log_max_bytes),
+        "--log-backups",
+        str(a.log_backups),
     ]
+    if a.include_ai:
+        argv.append("--include-ai")
     for flag, value in (
         ("--agent-cwd", a.agent_cwd),
         ("--state-dir", a.state_dir),
         ("--term-cwd", a.term_cwd),
+        ("--lock-path", a.lock_path),
     ):
         if value:
             argv += [flag, expand(value)]
@@ -250,8 +257,10 @@ def redacted(argv: list[str]) -> list[str]:
     """``argv`` with the pairing code replaced, for logs and ``status``."""
     out = list(argv)
     for i, v in enumerate(out[:-1]):
-        if v == "--token":
+        if v in ("--token", "--term-token"):
             out[i + 1] = "***" if out[i + 1] else ""
+        elif v == "--ws":
+            out[i + 1] = re.sub(r"([?&]token=)[^&]+", r"\1***", out[i + 1])
     return out
 
 

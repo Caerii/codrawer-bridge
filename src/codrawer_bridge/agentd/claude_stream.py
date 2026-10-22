@@ -276,6 +276,15 @@ class ClaudePool:
     def _alive(self) -> int:
         return self._starting + self._ready.qsize() + self._busy
 
+    def stats(self) -> dict[str, int]:
+        """Current pool capacity for health reporting; no process internals escape."""
+        return {
+            "ready": self._ready.qsize(),
+            "starting": self._starting,
+            "busy": self._busy,
+            "size": self.size,
+        }
+
     async def _start_one(self) -> None:
         p = ClaudeProcess(self.cmd, self.cwd, self.env)
         try:

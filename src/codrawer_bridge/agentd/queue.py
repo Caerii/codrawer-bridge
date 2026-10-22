@@ -51,6 +51,10 @@ class PageQueue:
         running = 1 if key in self._workers and not self._workers[key].done() else 0
         return running + len(self._lines.get(key, []))
 
+    def busy(self) -> int:
+        """Requests accepted but not finished, across all pages."""
+        return sum(self.pending(key) for key in self._workers)
+
     def submit(self, key: str, job: Job, sig: Hashable = None) -> int | None:
         """
         Queue ``job``; returns how many run before it (0: it starts now), :data:`REPLACED` when it

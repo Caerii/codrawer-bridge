@@ -1,10 +1,9 @@
 """
-Proposed responder health, as one row in the tablet's dock and one file on the PC.
+Responder health, as one row in the tablet's dock and one file on the PC.
 
 **Why.** "A beautiful thing that sometimes does nothing feels broken" (docs/design/
 ask-experience.md, "Reliability is part of beauty"). Before this, the only way to know whether
-an Ask would be answered was to tap and wait. When wired into agentd, this monitor keeps a row
-in the dock,
+an Ask would be answered was to tap and wait. The monitor keeps a row in the dock,
 
     Responder: online · Sonnet            badge ok
     Responder: degraded · claude not ready   badge degraded

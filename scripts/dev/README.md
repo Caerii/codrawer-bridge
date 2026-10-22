@@ -16,6 +16,28 @@ touches the real tablet/glasses session (`CODRAWER_WS=ws://127.0.0.1:8577/ws/ses
 | `inktest.py [--host …] [--allow-doc <title>]` | **on the tablet** (not the harness): native agent ink regression. Reads the automation `state` and `-page-dump`, sends an X in a circle as `ai` strokes through the tablet's router to a free spot on the visible page, waits for `ink: ok` and the save, and checks the saved strokes land on target (PASS/FAIL with the numbers). Refuses unless native agent ink is on and the open notebook is "codrawer: test". Writes one mark into that notebook. |
 | `showcase.py` | the README showcase: eight scripted scenes (pens, a simulated agent, `stroke_delete` animation) played into a Rust router on :8580 and recorded from the simulator (:9902) and a headless browser into `docs/media/showcase.{mp4,gif}`; `--preview DIR` renders each scene's page without a router. Run line in its header. |
 | `demo_story.py --gif … --mp4 …` | plays and records the README demo (four acts, three participants) in the simulator; see its header |
+| `agentd-service.ps1 install/status/restart/update/uninstall` | manages the per-user agentd task from a pinned worktree; see below |
+
+## Managed agentd on Windows
+
+Copy `agentd-config.example.toml` to `~/.codrawer-agentd/config.toml`. Set the tablet address
+and the absolute `source` and `checkout` paths. The config parser rejects unknown fields and
+wrong types; `term_cwd` and `state_dir` default to the source checkout, preserving the existing
+page threads and dock settings. The TOML and token cache stay outside Git.
+
+```powershell
+pwsh -File scripts/dev/agentd-service.ps1 validate
+pwsh -File scripts/dev/agentd-service.ps1 install
+pwsh -File scripts/dev/agentd-service.ps1 status
+pwsh -File scripts/dev/agentd-service.ps1 restart
+```
+
+`install` creates a detached worktree, installs Python and hand-worker dependencies, and registers
+an interactive per-user logon task; it does not start another responder. `restart` refuses while
+an Ask is accepted or health is stale. After testing a candidate worktree, `update` stops the
+task between Asks, advances the pinned checkout, and restarts it, restoring the previous commit
+if the switch fails. `uninstall` removes only the task; it retains checkout, configuration, and
+state. `status` reports the Task Scheduler state separately from the OS lock and health snapshot.
 
 Simulator automation (`evenhub-simulator --automation-port 9898 …`):
 `curl http://127.0.0.1:9898/api/screenshot/glasses -o shot.png`,

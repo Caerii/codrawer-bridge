@@ -1,11 +1,11 @@
 """
-Proposed one-agentd-per-PC guard: a lock released by the OS when its holder dies.
+One-agentd-per-PC guard: a lock released by the OS when its holder dies.
 
 **Why.** Two agentds on one tablet session both answer every Ask: two doodles' worth of
 ``agent_status``, two answers written over each other in ink, two warm pools. On 2026-10-07 the
 live agentd ran as a background task of another agent's worktree, and a service started beside
-it would have done exactly that. The service entry point must take this lock before talking to
-the tablet (except ``--dry-run``) and exit with :data:`EXIT_LOCKED` when another holds it.
+it would have done exactly that. The CLI takes this lock before talking to the tablet (except
+``--dry-run``) and exits with :data:`EXIT_LOCKED` when another holds it.
 
 **How.** An operating-system lock on one byte of ``~/.codrawer-agentd/agentd.lock``
 (``msvcrt.locking`` on Windows, ``fcntl.flock`` elsewhere), taken without waiting. The OS drops
@@ -28,7 +28,7 @@ from typing import IO
 
 from .config import HOME
 
-__all__ = ["EXIT_LOCKED", "LOCK_PATH", "AlreadyRunning", "Lock", "acquire", "holder"]
+__all__ = ["EXIT_LOCKED", "LOCK_PATH", "AlreadyRunning", "Lock", "acquire", "holder", "is_held"]
 
 #: The lock file (``CODRAWER_AGENTD_LOCK`` overrides, e.g. for a deliberate second instance on
 #: another tablet).
@@ -110,6 +110,20 @@ def holder(path: Path = LOCK_PATH) -> dict:
             return json.loads(f.read().decode("utf-8") or "{}")
     except (OSError, ValueError):
         return {}
+
+
+def is_held(path: Path = LOCK_PATH) -> bool:
+    """Whether another process holds the OS lock, independent of stale file contents."""
+    try:
+        with open(path, "r+b") as f:
+            try:
+                _lock(f)
+            except OSError:
+                return True
+            _unlock(f)
+    except FileNotFoundError:
+        pass
+    return False
 
 
 def acquire(path: Path = LOCK_PATH, argv: list[str] | None = None) -> Lock:

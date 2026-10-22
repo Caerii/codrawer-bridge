@@ -18,7 +18,10 @@ import logging
 import os
 import sys
 import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
+from .instance import LOCK_PATH, AlreadyRunning, Lock, acquire
 from .service import Agentd, Config
 
 
@@ -124,6 +127,9 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument("--bbox", default="", help="x0,y0,x1,y1 for --simulate ask_selection")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--lock-path", default=str(LOCK_PATH), help="single-instance lock file")
+    ap.add_argument("--log-max-bytes", type=int, default=5_000_000)
+    ap.add_argument("--log-backups", type=int, default=3)
     return ap.parse_args(argv)
 
 
@@ -155,14 +161,19 @@ def config(a: argparse.Namespace) -> Config:
     )
 
 
-async def _main(a: argparse.Namespace) -> int:
+async def _serve(a: argparse.Namespace) -> int:
     cfg = config(a)
     agent = Agentd(cfg)
-    fh = logging.FileHandler(agent.state / "agentd.log", encoding="utf-8")
+    fh = RotatingFileHandler(
+        agent.state / "agentd.log",
+        maxBytes=a.log_max_bytes,
+        backupCount=a.log_backups,
+        encoding="utf-8",
+    )
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger("agentd").addHandler(fh)
     log = logging.getLogger("agentd")
-    if not a.dry_run and not await agent.terminal.reachable():
+    if not a.dry_run and cfg.backend == "even-terminal" and not await agent.terminal.reachable():
         log.warning(
             "even-terminal does not answer at %s; requests will fail until it does", cfg.term_url
         )
@@ -196,7 +207,19 @@ async def _main(a: argparse.Namespace) -> int:
     return 0 if not rec.error else 1
 
 
-def main(argv: list[str] | None = None) -> int:
+async def _main(a: argparse.Namespace, held_lock: Lock | None = None) -> int:
+    """Own the tablet session for the whole process, including connection retries."""
+    lock = None if a.dry_run or held_lock is not None else acquire(
+        Path(a.lock_path), argv=["agentd", a.ws.split("?", 1)[0]]
+    )
+    try:
+        return await _serve(a)
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def main(argv: list[str] | None = None, held_lock: Lock | None = None) -> int:
     a = _args(argv)
     for stream in (sys.stdout, sys.stderr):  # a Windows console is cp1252: ≤ and … would raise
         if hasattr(stream, "reconfigure"):
@@ -209,7 +232,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
-        return asyncio.run(_main(a))
+        return asyncio.run(_main(a, held_lock))
+    except AlreadyRunning as e:
+        logging.getLogger("agentd").error("%s", e)
+        return 3
     except KeyboardInterrupt:
         return 0
 

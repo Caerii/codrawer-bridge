@@ -696,6 +696,13 @@ on every join and on `dock_query`, and again when one of its settings changes: `
 compact|normal|airy") and `agentd_model` ("Model: careful (Sonnet)" / "Model: fast (Haiku)"); each
 has the value as its `badge`. A tap cycles the setting.
 
+The responder separately announces `{"t":"dock_entries","owner":"agentd-health",
+"entries":[{"id":"agentd_health","label":"Responder: online · Sonnet","badge":"ok",
+"hint":"1 warm · last answer 09:12"}]}`. A failed Ask or a cold model pool changes the label
+and badge to `degraded`; the same state is written to `health.json` under agentd's state
+directory with `connected`, `pool`, `in_flight`, `updated`, and recent outcomes. The router
+withdraws this owner on disconnect, so absence is **offline**, not a claim of health.
+
 ### `settings` (any surface → agentd → all)
 
 agentd's user settings, so the phone or the glasses can show and change what the dock does:
