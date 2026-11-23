@@ -93,8 +93,9 @@ class ThreadStore:
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA temp_store=MEMORY;
-            PRAGMA cache_size=-16384;
-            PRAGMA mmap_size=67108864;
+            PRAGMA cache_size=-2048;
+            PRAGMA mmap_size=8388608;
+            PRAGMA wal_autocheckpoint=100;
             CREATE TABLE IF NOT EXISTS exchanges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doc TEXT NOT NULL,
@@ -183,8 +184,12 @@ class ThreadStore:
         return conn
 
     def close(self) -> None:
-        """Close the SQLite connection cleanly."""
+        """Optimize query planner stats and close the SQLite connection cleanly."""
         if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA optimize")
+            except sqlite3.Error:
+                pass
             self._conn.close()
             self._conn = None
 
@@ -271,6 +276,8 @@ class ThreadStore:
             (doc, page),
         ).fetchall()
         out = [Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])) for r in rows]
+        if len(self._page_cache) >= 64:
+            self._page_cache.clear()
         self._page_cache[key] = out
         return list(out)
 
@@ -285,6 +292,8 @@ class ThreadStore:
             "SELECT digest FROM pages WHERE doc = ? AND page = ?", (doc, page)
         ).fetchone()
         val = str(row["digest"]) if row else ""
+        if len(self._digest_cache) >= 64:
+            self._digest_cache.clear()
         self._digest_cache[key] = val
         return val
 
@@ -321,24 +330,28 @@ class ThreadStore:
                 (doc, page, seen.strip()[:400], answer.strip()[:600], now),
             )
             rows = conn.execute(
-                "SELECT id, seen, answer, pinned FROM exchanges "
+                "SELECT id, pinned, LENGTH(seen) + LENGTH(answer) AS clen FROM exchanges "
                 "WHERE doc = ? AND page = ? ORDER BY ts ASC, id ASC",
                 (doc, page),
             ).fetchall()
             # Keep pinned items and evict oldest unpinned rows into the page digest.
             unpinned = [r for r in rows if not r["pinned"]]
-            total_chars = sum(len(r["seen"]) + len(r["answer"]) for r in rows)
+            total_chars = sum(int(r["clen"]) for r in rows)
+            remaining = len(rows)
             while unpinned and (
-                len(rows) > MAX_EXCHANGES or (len(rows) > 1 and total_chars > MAX_CHARS)
+                remaining > MAX_EXCHANGES or (remaining > 1 and total_chars > MAX_CHARS)
             ):
                 victim = unpinned.pop(0)
-                if not victim["pinned"]:
+                vrow = conn.execute(
+                    "SELECT seen, answer FROM exchanges WHERE id = ?", (victim["id"],)
+                ).fetchone()
+                if vrow is not None:
                     self._append_digest(
-                        conn, doc, page, _compact_line(victim["seen"], victim["answer"])
+                        conn, doc, page, _compact_line(vrow["seen"], vrow["answer"])
                     )
-                    conn.execute("DELETE FROM exchanges WHERE id = ?", (victim["id"],))
-                    total_chars -= len(victim["seen"]) + len(victim["answer"])
-                    rows = [r for r in rows if r["id"] != victim["id"]]
+                conn.execute("DELETE FROM exchanges WHERE id = ?", (victim["id"],))
+                total_chars -= int(victim["clen"])
+                remaining -= 1
         self._page_cache.pop((doc, page), None)
         self._digest_cache.pop((doc, page), None)
         self._stats_cache.pop(doc, None)
