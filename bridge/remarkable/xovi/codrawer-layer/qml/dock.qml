@@ -28,6 +28,13 @@ Item {
 
     property bool open: false
     property bool pinned: false
+    property real animPhase: 0
+    Timer {
+        interval: 80
+        repeat: true
+        running: root.open
+        onTriggered: root.animPhase += 0.14
+    }
     property var nativeButton: null
     readonly property bool down: nativeButton ? nativeButton.down : tap.pressed
     readonly property bool highlighted: down || open
@@ -224,9 +231,11 @@ Item {
             property string gid: parent.entryId
             property bool inv: rowTap.pressed
             property string bval: parent.badgeText
+            property real ph: (gid === "agentd_thinking_style" || gid === "agentd_writing_speed") ? root.animPhase : 0
             onGidChanged: requestPaint()
             onInvChanged: requestPaint()
             onBvalChanged: requestPaint()
+            onPhChanged: requestPaint()
             onPaint: {
                 const ctx = getContext("2d");
                 ctx.clearRect(0, 0, width, height);
@@ -298,32 +307,48 @@ Item {
                     ctx.beginPath(); ctx.moveTo(7, 27); ctx.quadraticCurveTo(16, 30, 25, 25); ctx.stroke();
                 } else if (gid === "agentd_thinking_style") {
                     if (bval === "glyph") {
+                        const rot = ph * 0.7;
                         ctx.lineWidth = 1.7;
                         ctx.beginPath();
-                        ctx.arc(16, 15, 7.5, 0.2 * Math.PI, 1.9 * Math.PI);
-                        ctx.arc(16, 15, 3.8, 0, 1.6 * Math.PI);
+                        ctx.arc(16, 15, 7.5, rot, rot + 1.65 * Math.PI);
                         ctx.stroke();
-                        star4(24, 7, 3.0, 1.0);
+                        ctx.beginPath();
+                        ctx.arc(16, 15, 3.6, -rot, -rot + 1.5 * Math.PI);
+                        ctx.stroke();
+                        star4(24, 7, 2.4 + 0.9 * Math.sin(ph * 1.5), 0.9);
                     } else if (bval === "pen") {
+                        const nx = 22 + 2.2 * Math.cos(ph * 1.4);
+                        const ny = 10 + 2.5 * Math.sin(ph * 2.1);
                         ctx.lineWidth = 1.7;
                         ctx.beginPath();
-                        ctx.moveTo(6, 24); ctx.bezierCurveTo(11, 14, 17, 20, 22, 10);
+                        ctx.moveTo(6, 24); ctx.bezierCurveTo(11, 14, 17, 20, nx, ny);
                         ctx.stroke();
-                        ctx.beginPath(); ctx.arc(24, 8, 2.2, 0, 2 * Math.PI); ctx.fill();
+                        ctx.beginPath(); ctx.arc(nx + 1.5, ny - 1.5, 2.2, 0, 2 * Math.PI); ctx.fill();
+                        const bph = (ph * 0.35) % 1.0;
                         ctx.lineWidth = 1.2;
-                        ctx.beginPath(); ctx.arc(12, 11, 2.4, 0, 2 * Math.PI); ctx.stroke();
+                        ctx.beginPath(); ctx.arc(11 + 2 * Math.sin(ph), 20 - bph * 13, 1.5 + 1.4 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
                     } else {
-                        // Scalloped thought-cloud + rising bubbles
+                        // Live miniature squash-and-stretch thought-cloud + rising bubbles
+                        const sx = 1.0 + 0.08 * Math.sin(ph * 1.3);
+                        const sy = 1.0 / sx;
+                        const by = -1.2 * Math.sin(ph * 1.3 + 0.5);
                         ctx.lineWidth = 1.6;
                         ctx.beginPath();
-                        ctx.arc(13, 13, 5.2, Math.PI * 0.7, Math.PI * 2.1);
-                        ctx.arc(20, 12, 5.5, Math.PI * 1.1, Math.PI * 0.2);
-                        ctx.arc(21, 17, 4.5, -Math.PI * 0.3, Math.PI * 0.65);
-                        ctx.arc(12, 17, 4.5, Math.PI * 0.35, Math.PI * 1.2);
+                        for (let i = 0; i <= 36; ++i) {
+                            const th = (i / 36) * 2 * Math.PI;
+                            const sc = 0.84 + 0.18 * Math.abs(Math.cos(3.5 * th + 0.3 * Math.sin(ph * 0.8)));
+                            const px = 16.5 + 10.5 * sx * sc * Math.cos(th);
+                            const py = 13.5 + by + 7.5 * sy * sc * Math.sin(th);
+                            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                        }
+                        ctx.closePath();
                         ctx.stroke();
-                        ctx.lineWidth = 1.3;
-                        ctx.beginPath(); ctx.arc(10, 24, 2.2, 0, 2 * Math.PI); ctx.stroke();
-                        ctx.beginPath(); ctx.arc(6, 28, 1.4, 0, 2 * Math.PI); ctx.stroke();
+                        ctx.beginPath();
+                        ctx.arc(16.5 + 6.5 * Math.cos(ph * 1.6), 13.5 + by + 4.5 * Math.sin(ph * 1.6), 1.8, 0, 2 * Math.PI);
+                        ctx.fill();
+                        const bph = (ph * 0.35) % 1.0;
+                        ctx.lineWidth = 1.2;
+                        ctx.beginPath(); ctx.arc(6 + bph * 5, 28 - bph * 8, 1.2 + 1.2 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
                     }
                 } else if (gid === "agentd_color") {
                     // Inkwell droplet + highlight glint
@@ -366,14 +391,16 @@ Item {
                     ctx.moveTo(12.5, 12.5); ctx.lineTo(16, 9); ctx.lineTo(19.5, 12.5);
                     ctx.moveTo(12.5, 19.5); ctx.lineTo(16, 23); ctx.lineTo(19.5, 19.5); ctx.stroke();
                 } else if (gid === "agentd_writing_speed") {
+                    const spd = bval === "very fast" ? 2.4 : (bval === "fast" ? 1.6 : 0.9);
+                    const dx = 1.8 * Math.sin(ph * spd);
                     ctx.lineWidth = 1.9;
                     ctx.beginPath();
-                    ctx.moveTo(7, 8); ctx.quadraticCurveTo(14, 14, 17, 16); ctx.quadraticCurveTo(14, 18, 7, 24);
-                    ctx.moveTo(16, 8); ctx.quadraticCurveTo(23, 14, 26, 16); ctx.quadraticCurveTo(23, 18, 16, 24);
+                    ctx.moveTo(7 + dx, 8); ctx.quadraticCurveTo(14 + dx, 14, 17 + dx, 16); ctx.quadraticCurveTo(14 + dx, 18, 7 + dx, 24);
+                    ctx.moveTo(16 + dx, 8); ctx.quadraticCurveTo(23 + dx, 14, 26 + dx, 16); ctx.quadraticCurveTo(23 + dx, 18, 16 + dx, 24);
                     ctx.stroke();
                     ctx.lineWidth = 1.0;
-                    ctx.beginPath(); ctx.moveTo(3, 12); ctx.lineTo(9, 12); ctx.moveTo(2, 16); ctx.lineTo(11, 16);
-                    ctx.moveTo(3, 20); ctx.lineTo(9, 20); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(3, 12); ctx.lineTo(9 + dx * 0.5, 12); ctx.moveTo(2, 16); ctx.lineTo(11 + dx * 0.5, 16);
+                    ctx.moveTo(3, 20); ctx.lineTo(9 + dx * 0.5, 20); ctx.stroke();
                 } else if (gid === "agentd_model") {
                     ctx.lineWidth = 1.7;
                     ctx.beginPath(); ctx.moveTo(16, 3); ctx.lineTo(28, 16); ctx.lineTo(16, 29); ctx.lineTo(4, 16);
