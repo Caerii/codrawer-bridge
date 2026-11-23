@@ -295,3 +295,110 @@ def test_autopilot_triggers_after_user_stroke_end(tmp_path: Path) -> None:
     assert len(out) == 1
     assert out[0]["id"] == "ask_selection" and out[0]["source"] == "autopilot"
     assert "bbox" in out[0] and "spot" in out[0]
+
+
+def test_autopilot_idiolect_star_no_cluster_nameerror(tmp_path: Path, monkeypatch) -> None:
+    from codrawer_bridge.agentd import idiolect as idiolectmod
+    from codrawer_bridge.agentd.service import Agentd, Config
+
+    monkeypatch.setattr(
+        idiolectmod, "recognize_idiolect", lambda strokes, w, h: ("star", (10.0, 20.0, 60.0, 70.0))
+    )
+
+    async def go() -> list[dict]:
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), backend="agy-stream", dry_run=True))
+        triggered: list[dict] = []
+
+        async def fake_answer(msg: dict) -> None:
+            triggered.append(msg)
+
+        a.answer = fake_answer  # type: ignore[method-assign]
+        a.handle(
+            {"t": "page", "doc": "d1", "page": "p1", "rev": 1, "w": 1620, "h": 2160, "strokes": []}
+        )
+        a.handle({"t": "stroke_begin", "id": "u1", "layer": "user", "brush": "pen"})
+        a.handle({"t": "stroke_pts", "id": "u1", "pts": [[0.1, 0.1, 0.5, 10], [0.2, 0.1, 0.5, 20]]})
+        a.handle({"t": "stroke_end", "id": "u1"})
+        assert a._autopilot_task is not None
+        a._autopilot_task.cancel()
+        a._schedule_autopilot(reset=True, delay_s=0.05)
+        await asyncio.sleep(0.15)
+        if a.claude is not None:
+            await a.claude.close()
+        return triggered
+
+    out = asyncio.run(go())
+    assert len(out) == 1
+    assert out[0]["idiolect"] == "star" and out[0]["items"] == 1
+
+
+def test_service_answer_with_sketches_unpacks_reserved_pu(tmp_path: Path) -> None:
+    from codrawer_bridge.agentd.service import Agentd, Config
+    from codrawer_bridge.agentd.terminal import Reply
+
+    async def go() -> tuple[object, list[dict]]:
+        a = Agentd(
+            Config(
+                ws="ws://x",
+                term_cwd=str(tmp_path),
+                state_dir=str(tmp_path / "state"),
+                backend="agy-stream",
+            )
+        )
+        sent: list[dict] = []
+
+        async def send(msg: dict) -> bool:
+            sent.append(msg)
+            return True
+
+        async def fake_turn(text: str, png: bytes, timeout_s: float, on_text) -> Reply:
+            return Reply(
+                ok=True,
+                text="SEEN: Draw a circle\nSKETCH: circle 0.2 0.2 0.8 0.8\nSketched a circle.",
+            )
+
+        a.send = send  # type: ignore[method-assign]
+        a._turn_once = fake_turn  # type: ignore[method-assign]
+        await a.hand.start()
+        try:
+            a.handle(
+                {
+                    "t": "page",
+                    "doc": "d1",
+                    "page": "p1",
+                    "rev": 1,
+                    "w": 1620,
+                    "h": 2160,
+                    "strokes": [
+                        {
+                            "id": "u1",
+                            "layer": "user",
+                            "pts": [[0.15, 0.12, 0.5], [0.35, 0.12, 0.5]],
+                        }
+                    ],
+                }
+            )
+            rec = await a.answer(
+                {
+                    "t": "dock_action",
+                    "id": "ask_selection",
+                    "doc": "d1",
+                    "page": "p1",
+                    "bbox": [-567, 250, -243, 270],
+                    "contains_stroke": True,
+                    "items": 1,
+                }
+            )
+        finally:
+            await a.hand.close()
+            if a.claude is not None:
+                await a.claude.close()
+        return rec, sent
+
+    rec, sent = asyncio.run(go())
+    assert rec.error == ""
+    sketch_begins = [
+        m for m in sent if m.get("t") == "stroke_begin" and "s0" in str(m.get("id", ""))
+    ]
+    assert len(sketch_begins) == 1
+    assert rec.strokes > 0

@@ -599,6 +599,7 @@ class Agentd:
             self._autopilot_seen.add(sig)
             # Recognize drawn idiolects (lasso, star, question) first; otherwise anchor
             # Autopilot to the active handwriting cluster around the last stroke.
+            n_items = len(user_strokes)
             gesture = idiolectmod.recognize_idiolect(user_strokes, m.w, m.h)
             if gesture is not None:
                 kind_id, (bx0, by0, bx1, by1) = gesture
@@ -615,6 +616,7 @@ class Agentd:
                     for st in user_strokes
                     if any(abs(p[1] * m.h - last_y) <= 220.0 for p in st.pts)
                 ] or user_strokes[-12:]
+                n_items = len(cluster)
                 rxs = [p[0] * m.w - m.w / 2 for st in cluster for p in st.pts]
                 rys = [p[1] * m.h for st in cluster for p in st.pts]
                 bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
@@ -630,7 +632,7 @@ class Agentd:
             )
             self.queue.submit(
                 f"autopilot:{m.page}",
-                lambda: self.answer(
+                lambda n_items=n_items: self.answer(
                     {
                         "t": "dock_action",
                         "id": "ask_selection",
@@ -640,7 +642,7 @@ class Agentd:
                         "ink": bbox,
                         "spot": spot,
                         "contains_stroke": True,
-                        "items": len(cluster),
+                        "items": n_items,
                         "source": "autopilot",
                         "idiolect": kind_id,
                     }
@@ -981,8 +983,8 @@ class Agentd:
                         for sid, pts in _mark_strokes(m_msgs):
                             m.add_own(sid, pts)
                 if sketches and (rec.placement or sel_box or rec.region):
-                    if rec.placement:
-                        px0, py0, px1, _ = rec.placement
+                    if rec.placement and "reserved_pu" in rec.placement:
+                        px0, py0, px1, _ = rec.placement["reserved_pu"]
                         sy0 = (stream.bottom + 18.0) if stream.bottom is not None else py0
                         sw = min(360.0, max(160.0, px1 - px0))
                         sh = 220.0
@@ -1023,6 +1025,8 @@ class Agentd:
             log.exception("request %d failed", n)
             return rec
         finally:
+            if stream is not None and not stream._task.done():
+                stream.stop()
             self._reserved.pop(rec.n, None)  # its block is ink now, or free again
             # every request ends its overlay, answered or not (an orphan spins for 120 s)
             if rec.status_box is not None:
