@@ -569,7 +569,7 @@ class Agentd:
         await self._dock_entries()
         await self._glasses(note, note)
 
-    def _schedule_autopilot(self, reset: bool = True, delay_s: float = 4.0) -> None:
+    def _schedule_autopilot(self, reset: bool = True, delay_s: float = 2.5) -> None:
         if reset and self._autopilot_task is not None:
             self._autopilot_task.cancel()
 
@@ -842,7 +842,7 @@ class Agentd:
                 kind=kind,
                 image=None if self.cfg.backend == "claude-stream" else rec.image,
                 n_strokes=len(selected),
-                region=sel_box,
+                region=sel_box or anchor,
                 title=m.title,
                 thread=[(e.seen, e.answer) for e in thread],
                 page_digest=digest,

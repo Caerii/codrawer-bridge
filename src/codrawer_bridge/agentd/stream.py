@@ -155,6 +155,18 @@ class InkStream:
                 self.x + x1 * s / mm,
                 self.baseline + y1 * s / mm,
             )
+            # Re-check live user/AI ink in case new strokes arrived while the model was thinking.
+            occ = placement.Occupancy(m.ink(), m.w, m.h)
+            for _ in range(12):
+                if occ.free(rect, 18.0):
+                    break
+                self.baseline += 28.0
+                rect = (
+                    self.x + min(x0, 0.0) * s / mm,
+                    self.baseline + y0 * s / mm,
+                    self.x + x1 * s / mm,
+                    self.baseline + y1 * s / mm,
+                )
             if not self._fits(rect):
                 rec.note = f"no room for chunk {k + 1}; the rest is on the glasses only"
                 self.stopped = True
