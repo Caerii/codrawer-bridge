@@ -761,8 +761,7 @@ class Agentd:
                     first = _bounds(known) if known and len(known) >= want else sel_box
                 reserved = await self._reserve(first, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
-                    think_box = spot if spot is not None else self._shown_box(reserved[0], spot)
-                    await self._status(rec, "thinking", think_box)
+                    await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
                 selected = await self._selection(msg, sel_box, rec)
                 anchor = (
                     first if first is not sel_box else (_bounds(selected) if selected else sel_box)
@@ -770,8 +769,7 @@ class Agentd:
                 if anchor != first:
                     reserved = await self._reserve(anchor, rec.n, at=spot)
                     if reserved is not None and not self.cfg.dry_run:
-                        think_box = spot if spot is not None else self._shown_box(reserved[0], spot)
-                        await self._status(rec, "thinking", think_box)
+                        await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 user_only = m.ink(include_ai=False)
