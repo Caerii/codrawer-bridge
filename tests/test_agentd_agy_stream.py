@@ -215,6 +215,24 @@ def test_four_stroke_box_lasso_idiolect() -> None:
     assert hit is not None and hit[0] == "lasso"
 
 
+def test_sketch_primitives_and_messages() -> None:
+    from codrawer_bridge.agentd.marks import extract_sketches, sketch_messages
+    from codrawer_bridge.agentd.prompt import clean_answer
+
+    raw = (
+        "SKETCH: box 0.1 0.1 0.4 0.4 #1f6fe0\n"
+        "SKETCH: curve 0.4,0.25 0.55,0.1 0.7,0.25\n"
+        "SKETCH: poly 0.7,0.2 0.8,0.3 0.7,0.4\n"
+        "Here is a quick diagram."
+    )
+    sketches = extract_sketches(raw)
+    assert [s[0] for s in sketches] == ["box", "curve", "poly"]
+    assert sketches[0][2] == "#1f6fe0"
+    assert clean_answer(raw) == "Here is a quick diagram."
+    msgs = sketch_messages(sketches, (100.0, 200.0, 600.0, 600.0), 1620.0, 2160.0, run="21")
+    assert len(msgs) == 9
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

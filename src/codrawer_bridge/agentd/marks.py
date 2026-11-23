@@ -119,6 +119,131 @@ _MARK_BUILDERS = {
     "arrow": _mark_arrow,
 }
 
+_SKETCH_LINE = re.compile(r"^\s*SKETCH:\s*(.+)$", re.MULTILINE)
+
+
+def _hand_pts(
+    pts: list[tuple[float, float]], wobble: float = 1.2
+) -> list[tuple[float, float]]:
+    """Add subtle organic hand-drawn micro-jitter along multi-point sketch strokes."""
+    if len(pts) < 3:
+        return pts
+    out: list[tuple[float, float]] = [pts[0]]
+    for i, (x, y) in enumerate(pts[1:-1], 1):
+        out.append((x + wobble * math.sin(i * 1.9), y + wobble * math.cos(i * 2.3)))
+    out.append(pts[-1])
+    return out
+
+
+def _parse_xy_pairs(tokens: list[str]) -> list[tuple[float, float]]:
+    pts: list[tuple[float, float]] = []
+    for tok in tokens:
+        if "," not in tok:
+            continue
+        a, _, b = tok.partition(",")
+        try:
+            nx = max(0.0, min(1.0, float(a)))
+            ny = max(0.0, min(1.0, float(b)))
+            pts.append((nx, ny))
+        except ValueError:
+            continue
+    return pts
+
+
+def extract_sketches(text: str) -> list[tuple[str, list[tuple[float, float]], str | None]]:
+    """
+    Parse up to 8 ``SKETCH:`` primitives from a reply:
+    - ``SKETCH: box|circle|arrow x0 y0 x1 y1 [#rrggbb]``
+    - ``SKETCH: curve x0,y0 cx,cy x1,y1 [#rrggbb]``
+    - ``SKETCH: poly x0,y0 x1,y1 ... [#rrggbb]``
+    """
+    out: list[tuple[str, list[tuple[float, float]], str | None]] = []
+    for m in _SKETCH_LINE.finditer(text or ""):
+        if len(out) >= 8:
+            break
+        parts = m.group(1).strip().split()
+        if not parts:
+            continue
+        kind = parts[0].lower()
+        color: str | None = None
+        if parts[-1].startswith("#") and len(parts[-1]) == 7:
+            color = parts.pop()
+        args = parts[1:]
+        if kind in ("box", "circle", "arrow") and len(args) >= 4:
+            try:
+                coords = [max(0.0, min(1.0, float(args[i]))) for i in range(4)]
+                out.append((kind, [(coords[0], coords[1]), (coords[2], coords[3])], color))
+            except ValueError:
+                continue
+        elif kind in ("curve", "poly"):
+            pts = _parse_xy_pairs(args)
+            if len(pts) >= 2:
+                out.append((kind, pts, color))
+    return out
+
+
+def sketch_messages(
+    sketches: list[tuple[str, list[tuple[float, float]], str | None]],
+    region_pu: Box,
+    page_w: float,
+    page_h: float,
+    run: str,
+    default_color: str = "#1f6fe0",
+    author: str = "agentd:sketch",
+) -> list[tuple[float, dict]]:
+    """Build ``stroke_begin`` / ``stroke_pts`` / ``stroke_end`` messages for ``SKETCH:`` items."""
+    rx0, ry0, rx1, ry1 = region_pu
+    rw, rh = max(40.0, rx1 - rx0), max(40.0, ry1 - ry0)
+    t_base = time.time() * 1000 + 25.0
+    msgs: list[tuple[float, dict]] = []
+
+    for idx, (kind, npts, col) in enumerate(sketches):
+        pu = [(rx0 + nx * rw, ry0 + ny * rh) for nx, ny in npts]
+        raw: list[tuple[float, float]] = []
+        if kind == "box" and len(pu) >= 2:
+            (x0, y0), (x1, y1) = pu[0], pu[1]
+            raw = _hand_pts(
+                [(x0 - 3, y0), (x1 + 2, y0), (x1, y1 + 2), (x0 - 2, y1), (x0, y0 - 2)]
+            )
+        elif kind == "circle" and len(pu) >= 2:
+            raw = _mark_circle(pu[0][0], pu[0][1], pu[1][0], pu[1][1])
+        elif kind == "arrow" and len(pu) >= 2:
+            raw = _mark_arrow(pu[0][0], pu[0][1], pu[1][0], pu[1][1])
+        elif kind == "curve" and len(pu) >= 3:
+            (x0, y0), (cx, cy), (x1, y1) = pu[0], pu[1], pu[2]
+            for i in range(17):
+                u = i / 16
+                raw.append(
+                    (
+                        (1 - u) ** 2 * x0 + 2 * (1 - u) * u * cx + u**2 * x1,
+                        (1 - u) ** 2 * y0 + 2 * (1 - u) * u * cy + u**2 * y1,
+                    )
+                )
+        else:
+            raw = _hand_pts(pu, wobble=0.9)
+        if len(raw) < 2:
+            continue
+        pts = _tapered_pts(raw, page_w, page_h, t_base + idx * 190.0, dur_ms=260.0)
+        sid = f"agentd_{run}s{idx}"
+        t0, t1 = pts[0][3], pts[-1][3]
+        msgs.append(
+            (
+                t0,
+                {
+                    "t": "stroke_begin",
+                    "id": sid,
+                    "layer": "ai",
+                    "brush": "pen",
+                    "color": col or default_color,
+                    "author": author,
+                    "ts": int(t0),
+                },
+            )
+        )
+        msgs.append((t0 + 20.0, {"t": "stroke_pts", "id": sid, "pts": pts}))
+        msgs.append((t1, {"t": "stroke_end", "id": sid}))
+    return msgs
+
 
 def mark_messages(
     marks: list[tuple[str, Box]],

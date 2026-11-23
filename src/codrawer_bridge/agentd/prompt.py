@@ -129,9 +129,12 @@ def build_prompt(ask: Ask) -> str:
         else "- Use no tools.",
         "- To change your own properties when requested in handwriting, emit `SET: <key>=<value>` "
         "lines before your answer: `persona=archivist|sketcher|elder|mathematician|calligrapher`, "
-        "`thinking_style=drop|pen|glyph`, `writing_speed=slow|medium|fast|very_fast`, "
+        "`thinking_style=drop|pen|glyph|orbit|spark`, `writing_speed=slow|medium|fast|very_fast`, "
         "`text_size=small|medium|large`, `spacing=compact|normal|airy`, `autopilot=on|off`, "
         "`memory=on|off`, `model=careful|fast`, `color=auto|blue|red|green|black|gold`. "
+        "To draw freehand sketches or diagrams alongside the user, emit up to 8 `SKETCH:` lines "
+        "(`SKETCH: box|circle|arrow x0 y0 x1 y1`, `SKETCH: curve x0,y0 cx,cy x1,y1`, or "
+        "`SKETCH: poly x0,y0 x1,y1 ...` in 0..1 fractions). "
         "To pin a key insight, decision, definition, or open thread to durable notebook memory, "
         "emit `PIN: <short note>`.",
         f"- First line: `{SEEN} ` and a literal transcription of what is written in the image "
@@ -243,7 +246,7 @@ def clean_answer(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
     removed, whitespace folded to single spaces, typographic quotes and dashes made plain, and
     cut at the last sentence end within ``limit`` characters (else at a word, with "...").
     """
-    s = re.sub(r"^\s*(?:MARK|SET|PIN):.*$", "", text or "", flags=re.M)
+    s = re.sub(r"^\s*(?:MARK|SKETCH|SET|PIN):.*$", "", text or "", flags=re.M)
     for a, b in _REPLACE.items():
         s = s.replace(a, b)
     s = re.sub(r"`+", "", s)

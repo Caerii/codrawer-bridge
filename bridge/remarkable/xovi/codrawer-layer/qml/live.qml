@@ -533,7 +533,8 @@ Item {
     }
 
     function newDoodle(id, cx, cy, style) {
-        const d = { id: id, style: (style === "drop" || style === "glyph") ? style : "pen", cx: cx, cy: cy, t0: clock(),
+        const okStyle = (style === "drop" || style === "glyph" || style === "orbit" || style === "spark") ? style : "pen";
+        const d = { id: id, style: okStyle, cx: cx, cy: cy, t0: clock(),
                     trail: [], items: null, rect: null, handoff: null, clearAt: 0, target: null, frames: 0,
                     pending: false, move: null, noAgent: 0, done: null, panel: newPanel() };
         d.panel.redraw = function(ctx) { if (d.items) for (let i = 0; i < d.items.length; ++i) paintItem(ctx, d.items[i]); };
@@ -848,6 +849,41 @@ Item {
                     out.push({ pts: [{ x: sx, y: sy - sr }, { x: sx, y: sy + sr }], width: 1.2 });
                 }
             }
+        } else if (d.style === "orbit") {
+            // 3-body celestial orrery: tilted elliptical orbits + 3 harmonic orbiting planets
+            out.push({ dot: { x: d.cx, y: d.cy }, r: (3.8 + 0.8 * Math.sin(tau * 3.0)) * scale });
+            const tilts = [0.2, 1.25, 2.3];
+            const speeds = [2.2, -3.1, 3.9];
+            for (let o = 0; o < 3; ++o) {
+                const tilt = tilts[o], cs = Math.cos(tilt), sn = Math.sin(tilt);
+                const rx = 28.0 * scale, ry = 11.5 * scale;
+                const ring = [];
+                for (let i = 0; i <= 28; ++i) {
+                    const th = (i / 28) * 2 * Math.PI;
+                    const lx = rx * Math.cos(th), ly = ry * Math.sin(th);
+                    ring.push({ x: d.cx + lx * cs - ly * sn, y: d.cy + lx * sn + ly * cs });
+                }
+                out.push({ pts: ring, width: 1.2 });
+                const pa = tau * speeds[o] + o * 2.1;
+                const px = rx * Math.cos(pa), py = ry * Math.sin(pa);
+                out.push({ dot: { x: d.cx + px * cs - py * sn, y: d.cy + px * sn + py * cs }, r: 2.8 * scale });
+            }
+        } else if (d.style === "spark") {
+            // Breathing starburst constellation: 6 radial rays + rotating star-polygon
+            const pulse = 1.0 + 0.14 * Math.sin(tau * 3.2);
+            const rot = tau * 0.9;
+            const tips = [];
+            for (let k = 0; k < 6; ++k) {
+                const a = rot + (k / 6) * 2 * Math.PI;
+                const r = (18.0 + 7.0 * Math.sin(tau * 4.0 + k * 1.1)) * scale * pulse;
+                const tip = { x: d.cx + r * Math.cos(a), y: d.cy + r * Math.sin(a) };
+                tips.push(tip);
+                out.push({ pts: [{ x: d.cx, y: d.cy }, tip], width: 1.5 });
+                out.push({ dot: tip, r: 2.1 * scale });
+            }
+            const poly = [];
+            for (let k = 0; k <= 6; ++k) poly.push(tips[(k * 2) % 6]);
+            out.push({ pts: poly, width: 1.15 });
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark
             const dur = 1.8, hold = 0.7, cycle = 2 * dur + hold + 0.4;
             const k = Math.floor(tau / cycle), t = tau - k * cycle;

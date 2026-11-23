@@ -894,7 +894,13 @@ class Agentd:
                 sets = prompt.extract_sets(answer_raw)
                 if sets:
                     await self._apply_settings(sets)
+            sketches = (
+                marksmod.extract_sketches(answer_raw) if answer_raw and not reply.error else []
+            )
             text = prompt.clean_answer(answer_raw) if answer_raw and not reply.error else ""
+            if not text and sketches and not reply.error:
+                text = "(sketched)"
+                answer_raw = f"{answer_raw}\n{text}"
             if not text and sets and not reply.error:
                 parts = [
                     f"{k.replace('_', ' ')}: {('on' if v else 'off') if isinstance(v, bool) else v}"
@@ -948,6 +954,22 @@ class Agentd:
                     if m_msgs:
                         await self._play(m_msgs, rec=rec)
                         for sid, pts in _mark_strokes(m_msgs):
+                            m.add_own(sid, pts)
+                if sketches and (sel_box or rec.region or rec.placement):
+                    sbox = sel_box or rec.region or rec.placement
+                    assert sbox is not None
+                    s_msgs = marksmod.sketch_messages(
+                        sketches,
+                        sbox,
+                        m.w,
+                        m.h,
+                        run=f"{rec.n}",
+                        default_color=self.ink_color(),
+                        author=f"agentd:{self.cfg.persona}",
+                    )
+                    if s_msgs:
+                        await self._play(s_msgs, rec=rec)
+                        for sid, pts in _mark_strokes(s_msgs):
                             m.add_own(sid, pts)
                 await stream.finish(answer_raw)
                 if stream.stopped and not rec.status_note:
@@ -1261,7 +1283,7 @@ SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smalles
 SPACINGS = ("compact", "normal", "airy")
 SPEEDS = ("calm", "fast", "very_fast")
 PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
-THINKING_STYLES = ("pen", "drop", "glyph")
+THINKING_STYLES = ("drop", "pen", "glyph", "orbit", "spark")
 COLORS = ("auto", "blue", "red", "green", "purple", "gold", "black")
 INK_COLORS = {
     "blue": "#1f6fe0",

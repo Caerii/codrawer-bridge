@@ -330,6 +330,19 @@ Item {
                         const bph = (ph * 0.35) % 1.0;
                         ctx.lineWidth = 1.2;
                         ctx.beginPath(); ctx.arc(11 + 2 * Math.sin(ph), 20 - bph * 13, 1.5 + 1.4 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
+                    } else if (bval === "orbit") {
+                        ctx.lineWidth = 1.3;
+                        ctx.beginPath(); ctx.arc(16, 16, 2.5, 0, 2 * Math.PI); ctx.fill();
+                        ctx.beginPath(); ctx.ellipse(5, 10, 22, 12); ctx.stroke();
+                        const pa = ph * 2.0;
+                        ctx.beginPath(); ctx.arc(16 + 11 * Math.cos(pa), 16 + 6 * Math.sin(pa), 2.2, 0, 2 * Math.PI); ctx.fill();
+                    } else if (bval === "spark") {
+                        const r = 9.0 + 2.5 * Math.sin(ph * 2.5);
+                        ctx.lineWidth = 1.4;
+                        for (let k = 0; k < 6; ++k) {
+                            const a = ph * 0.6 + (k / 6) * 2 * Math.PI;
+                            ctx.beginPath(); ctx.moveTo(16, 16); ctx.lineTo(16 + r * Math.cos(a), 16 + r * Math.sin(a)); ctx.stroke();
+                        }
                     } else {
                         // Live miniature fluttering Navi fairy
                         const fx = 16 + 3.0 * Math.sin(ph * 1.1);
