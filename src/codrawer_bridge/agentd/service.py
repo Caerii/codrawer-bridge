@@ -818,8 +818,10 @@ class Agentd:
             rec.image, rec.n_strokes = self._rel(img), len(selected)
             doc_id, page_id = rec.doc or m.doc, rec.page or m.page
             thread = self.threads.get(doc_id, page_id)
+            digest = self.threads.page_digest(doc_id, page_id)
             nb_query = f"{m.title} " + " ".join(e.seen for e in thread[-2:])
             nb_thread = self.threads.notebook_context(doc_id, page_id, query=nb_query)
+            gl_thread = self.threads.global_context(doc_id, query=nb_query)
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
@@ -828,7 +830,9 @@ class Agentd:
                 region=sel_box,
                 title=m.title,
                 thread=[(e.seen, e.answer) for e in thread],
+                page_digest=digest,
                 notebook_thread=nb_thread,
+                global_thread=gl_thread,
                 persona=self.setting("persona"),
                 idiolect=str(msg.get("idiolect") or ""),
             )

@@ -185,6 +185,23 @@ def test_pinned_notebook_recall_ack_and_pins(tmp_path: Path) -> None:
     assert len(ack) == 3 and ack[0][1]["color"] == "#1e6091"
 
 
+def test_multiscale_compaction_and_cross_notebook_fts(tmp_path: Path) -> None:
+    from codrawer_bridge.agentd.threads import MAX_EXCHANGES, ThreadStore
+
+    store = ThreadStore(tmp_path)
+    # Fill beyond MAX_EXCHANGES so oldest turn compacts into page_digest
+    for i in range(MAX_EXCHANGES + 2):
+        store.add("nb-a", "p1", f"note {i} on architecture", f"insight {i}")
+    assert len(store.get("nb-a", "p1")) == MAX_EXCHANGES
+    assert "note 0 on architecture" in store.page_digest("nb-a", "p1")
+
+    # Pin a durable memory in nb-a and verify cross-notebook Meta recall from nb-b
+    store.add("nb-a", "p2", "superintelligent.group workflow", "Dispatch research via MCP.")
+    assert store.pin_last("nb-a", "p2")
+    gl = store.global_context("nb-b", query="superintelligent workflow")
+    assert gl == [("superintelligent.group workflow", "Dispatch research via MCP.")]
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

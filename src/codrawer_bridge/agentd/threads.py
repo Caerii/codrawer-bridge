@@ -1,36 +1,32 @@
 """
-The page thread: asks on one page follow on from each other, as a short text, never as images.
+Multi-scale notebook & page memory backed by SQLite + FTS5 (BM25 + half-life recency decay).
 
-**Why text.** The user asked for asks on the same page to "follow the thread" (2026-10-06), with
-memory as a toggle. Keeping the conversation alive in a model context is what made long
-even-terminal sessions slow (every earlier image was carried again); the warm-pool design gives
-every ask a fresh context instead. So the thread is kept here, as text: for each earlier ask on the
-page, what the user had written there (the model's own one-line transcription, its ``SEEN:`` line,
-prompt.py) and the answer given. A new ask carries the thread as page data, ahead of its image.
+Organized across four scales so fresh warm-pool turns stay lean yet deeply aware:
+1. **Micro** (`exchanges` on the active page): exact recent ``(seen, answer)`` turns (up to
+   :data:`MAX_EXCHANGES` / :data:`MAX_CHARS`).
+2. **Meso** (`pages.digest`): lossless compaction of exchanges evicted from the active page.
+3. **Macro** (`notebook_context`): two-stage FTS5 BM25 + half-life recency + ``pinned`` recall
+   across other pages of the same notebook.
+4. **Meta** (`global_context`): durable ``pinned`` / high-BM25 insights across other notebooks.
 
-**Bounds.** The last :data:`MAX_EXCHANGES` exchanges, and at most :data:`MAX_CHARS` characters
-(about 1.5k tokens), oldest dropped first.
-
-**Privacy** (ADR 011's consent scopes: a page's context is that page). One file per page under
-the state directory (``threads/<hash of doc/page>.json``, local, gitignored), never shared across
-pages; "Forget this page's thread" (the dock) deletes it. With memory off nothing is read or
-written, and each ask stands alone.
-
-**The settings** (memory on or off, on by default; and service.py's model choice) are kept in
-``settings.json`` beside it.
+Legacy ``threads/*.json`` files are migrated into ``threads.db`` automatically on first open.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
+import re
+import sqlite3
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
-#: The most exchanges a thread keeps, and its size limit in characters (~4 per token).
+#: The most exchanges kept verbatim per page, and their character budget (~1.5k tokens).
 MAX_EXCHANGES = 6
 MAX_CHARS = 6000
+MAX_DIGEST_CHARS = 1200
+HALF_LIFE_DAYS = 30.0
 
 
 @dataclass
@@ -43,12 +39,136 @@ class Exchange:
     pinned: bool = False
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Turn arbitrary page text into a safe FTS5 ``OR`` query over alphanumeric/word tokens."""
+    tokens = [t for t in re.findall(r"[A-Za-z0-9_]+", query or "") if len(t) >= 2]
+    # Preserve order while deduplicating; cap to 16 terms to keep FTS5 fast.
+    seen_tok: set[str] = set()
+    unique: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if low in ("and", "or", "not", "near") or low in seen_tok:
+            continue
+        seen_tok.add(low)
+        unique.append(tok)
+        if len(unique) >= 16:
+            break
+    return " OR ".join(unique)
+
+
+def _recency_score(ts: float, now: float, half_life_days: float = HALF_LIFE_DAYS) -> float:
+    if ts <= 0:
+        return 0.25
+    age_days = max(0.0, (now - ts) / 86400.0)
+    return math.pow(2.0, -age_days / max(0.5, half_life_days))
+
+
+def _compact_line(seen: str, answer: str) -> str:
+    s = seen.strip().replace("\n", " ")[:110]
+    a = answer.strip().replace("\n", " ")[:150]
+    return f"{s} -> {a}".strip(" ->")
+
+
 class ThreadStore:
-    """Page threads and the memory setting, under ``root`` (module docstring)."""
+    """Multi-scale SQLite+FTS5 thread store and ``settings.json`` under ``root``."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.dir = root / "threads"
+        self.db_path = root / "threads.db"
+        self._conn: sqlite3.Connection | None = None
+
+    def _db(self) -> sqlite3.Connection:
+        if self._conn is not None:
+            return self._conn
+        self.root.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            CREATE TABLE IF NOT EXISTS exchanges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc TEXT NOT NULL,
+                page TEXT NOT NULL,
+                seen TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                ts REAL NOT NULL,
+                pinned INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_ex_doc_page ON exchanges(doc, page, ts);
+            CREATE TABLE IF NOT EXISTS pages (
+                doc TEXT NOT NULL,
+                page TEXT NOT NULL,
+                digest TEXT NOT NULL DEFAULT '',
+                updated_ts REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (doc, page)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS exchanges_fts USING fts5(
+                seen,
+                answer,
+                content='exchanges',
+                content_rowid='id',
+                tokenize='porter unicode61'
+            );
+            CREATE TRIGGER IF NOT EXISTS exchanges_ai AFTER INSERT ON exchanges BEGIN
+                INSERT INTO exchanges_fts(rowid, seen, answer)
+                VALUES (new.id, new.seen, new.answer);
+            END;
+            CREATE TRIGGER IF NOT EXISTS exchanges_ad AFTER DELETE ON exchanges BEGIN
+                INSERT INTO exchanges_fts(exchanges_fts, rowid, seen, answer)
+                VALUES('delete', old.id, old.seen, old.answer);
+            END;
+            CREATE TRIGGER IF NOT EXISTS exchanges_au AFTER UPDATE ON exchanges BEGIN
+                INSERT INTO exchanges_fts(exchanges_fts, rowid, seen, answer)
+                VALUES('delete', old.id, old.seen, old.answer);
+                INSERT INTO exchanges_fts(rowid, seen, answer)
+                VALUES (new.id, new.seen, new.answer);
+            END;
+            """
+        )
+        self._conn = conn
+        self._migrate_legacy_json(conn)
+        return conn
+
+    def _migrate_legacy_json(self, conn: sqlite3.Connection) -> None:
+        if not self.dir.exists():
+            return
+        files = list(self.dir.glob("*.json"))
+        if not files:
+            return
+        with conn:
+            for path in files:
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                doc = str(data.get("doc") or "")
+                page = str(data.get("page") or "")
+                digest = str(data.get("digest") or "")
+                if page and digest:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO pages(doc, page, digest, updated_ts) "
+                        "VALUES (?, ?, ?, ?)",
+                        (doc, page, digest[:MAX_DIGEST_CHARS], time.time()),
+                    )
+                for raw in data.get("exchanges", []):
+                    if not isinstance(raw, dict):
+                        continue
+                    conn.execute(
+                        "INSERT INTO exchanges(doc, page, seen, answer, ts, pinned) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            doc,
+                            page or path.stem,
+                            str(raw.get("seen") or "")[:400],
+                            str(raw.get("answer") or "")[:600],
+                            float(raw.get("ts") or 0.0),
+                            1 if raw.get("pinned") else 0,
+                        ),
+                    )
+                path.unlink(missing_ok=True)
 
     # ── the setting ────────────────────────────────────────────────────────────────────────
 
@@ -78,140 +198,231 @@ class ThreadStore:
     def memory(self, on: bool) -> None:
         self.set_setting("memory", bool(on))
 
-    # ── threads ────────────────────────────────────────────────────────────────────────────
-
-    def _path(self, doc: str, page: str) -> Path:
-        key = hashlib.sha256(f"{doc}/{page}".encode()).hexdigest()[:24]
-        return self.dir / f"{key}.json"
+    # ── micro & meso (per-page thread + lossless digest compaction) ────────────────────────
 
     def get(self, doc: str, page: str) -> list[Exchange]:
-        """The page's thread (oldest first); empty with memory off or for a new page."""
+        """The page's active verbatim thread (oldest first); empty when memory is off."""
         if not self.memory or not page:
             return []
-        try:
-            data = json.loads(self._path(doc, page).read_text(encoding="utf-8"))
-            return [Exchange(**e) for e in data.get("exchanges", [])]
-        except (OSError, ValueError, TypeError):
-            return []
+        rows = self._db().execute(
+            "SELECT seen, answer, ts, pinned FROM exchanges "
+            "WHERE doc = ? AND page = ? ORDER BY ts ASC, id ASC",
+            (doc, page),
+        ).fetchall()
+        return [
+            Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])) for r in rows
+        ]
+
+    def page_digest(self, doc: str, page: str) -> str:
+        """The compacted meso-level digest of exchanges previously evicted from ``page``."""
+        if not self.memory or not page:
+            return ""
+        row = self._db().execute(
+            "SELECT digest FROM pages WHERE doc = ? AND page = ?", (doc, page)
+        ).fetchone()
+        return str(row["digest"]) if row else ""
+
+    def _append_digest(self, conn: sqlite3.Connection, doc: str, page: str, line: str) -> None:
+        if not line:
+            return
+        row = conn.execute(
+            "SELECT digest FROM pages WHERE doc = ? AND page = ?", (doc, page)
+        ).fetchone()
+        prev = str(row["digest"]) if row else ""
+        combined = f"{prev}; {line}".strip("; ")
+        if len(combined) > MAX_DIGEST_CHARS:
+            combined = combined[-MAX_DIGEST_CHARS:]
+            semi = combined.find("; ")
+            if semi > 0:
+                combined = combined[semi + 2 :]
+        conn.execute(
+            "INSERT INTO pages(doc, page, digest, updated_ts) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(doc, page) DO UPDATE SET digest = excluded.digest, "
+            "updated_ts = excluded.updated_ts",
+            (doc, page, combined, time.time()),
+        )
 
     def add(self, doc: str, page: str, seen: str, answer: str) -> None:
-        """Append one exchange, then trim to the bounds; nothing with memory off."""
+        """Append one exchange; compact oldest unpinned exchanges into ``pages.digest``."""
         if not self.memory or not page or not (seen or answer):
             return
-        ex = self.get(doc, page) + [Exchange(seen.strip()[:400], answer.strip()[:600], time.time())]
-        ex = ex[-MAX_EXCHANGES:]
-        while len(ex) > 1 and sum(len(e.seen) + len(e.answer) for e in ex) > MAX_CHARS:
-            ex.pop(0)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self._path(doc, page)
-        digest = ""
-        try:
-            digest = str(json.loads(path.read_text(encoding="utf-8")).get("digest") or "")
-        except (OSError, ValueError):
-            pass
-        path.write_text(
-            json.dumps(
-                {
-                    "doc": doc,
-                    "page": page,
-                    "digest": digest,
-                    "exchanges": [asdict(e) for e in ex],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
+        conn = self._db()
+        now = time.time()
+        with conn:
+            conn.execute(
+                "INSERT INTO exchanges(doc, page, seen, answer, ts, pinned) "
+                "VALUES (?, ?, ?, ?, ?, 0)",
+                (doc, page, seen.strip()[:400], answer.strip()[:600], now),
+            )
+            rows = conn.execute(
+                "SELECT id, seen, answer, pinned FROM exchanges "
+                "WHERE doc = ? AND page = ? ORDER BY ts ASC, id ASC",
+                (doc, page),
+            ).fetchall()
+            # Keep pinned items and evict oldest unpinned rows into the page digest.
+            unpinned = [r for r in rows if not r["pinned"]]
+            total_chars = sum(len(r["seen"]) + len(r["answer"]) for r in rows)
+            while unpinned and (
+                len(rows) > MAX_EXCHANGES or (len(rows) > 1 and total_chars > MAX_CHARS)
+            ):
+                victim = unpinned.pop(0)
+                if not victim["pinned"]:
+                    self._append_digest(
+                        conn, doc, page, _compact_line(victim["seen"], victim["answer"])
+                    )
+                    conn.execute("DELETE FROM exchanges WHERE id = ?", (victim["id"],))
+                    total_chars -= len(victim["seen"]) + len(victim["answer"])
+                    rows = [r for r in rows if r["id"] != victim["id"]]
 
     def pin_last(self, doc: str, page: str, note: str = "") -> bool:
         """Mark the latest exchange on ``(doc, page)`` (or add a pinned note) as durable."""
         if not self.memory or not page:
             return False
-        ex = self.get(doc, page)
-        if note.strip():
-            ex.append(Exchange("pinned", note.strip()[:400], time.time(), pinned=True))
-        elif ex:
-            ex[-1].pinned = True
-        else:
-            return False
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self._path(doc, page)
-        digest = ""
-        try:
-            digest = str(json.loads(path.read_text(encoding="utf-8")).get("digest") or "")
-        except (OSError, ValueError):
-            pass
-        path.write_text(
-            json.dumps(
-                {
-                    "doc": doc,
-                    "page": page,
-                    "digest": digest,
-                    "exchanges": [asdict(e) for e in ex[-MAX_EXCHANGES:]],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return True
+        conn = self._db()
+        with conn:
+            if note.strip():
+                conn.execute(
+                    "INSERT INTO exchanges(doc, page, seen, answer, ts, pinned) "
+                    "VALUES (?, ?, 'pinned', ?, ?, 1)",
+                    (doc, page, note.strip()[:600], time.time()),
+                )
+                return True
+            row = conn.execute(
+                "SELECT id FROM exchanges WHERE doc = ? AND page = ? "
+                "ORDER BY ts DESC, id DESC LIMIT 1",
+                (doc, page),
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("UPDATE exchanges SET pinned = 1 WHERE id = ?", (row["id"],))
+            return True
+
+    def forget(self, doc: str, page: str) -> bool:
+        """Delete the page's thread and digest; True if anything existed."""
+        conn = self._db()
+        with conn:
+            c1 = conn.execute(
+                "DELETE FROM exchanges WHERE doc = ? AND page = ?", (doc, page)
+            ).rowcount
+            c2 = conn.execute(
+                "DELETE FROM pages WHERE doc = ? AND page = ?", (doc, page)
+            ).rowcount
+        return bool(c1 or c2)
+
+    # ── macro & meta (FTS5 BM25 + half-life recency + pin retrieval) ───────────────────────
+
+    def _search_scope(
+        self,
+        *,
+        doc_filter: str,
+        exclude_doc: str = "",
+        exclude_page: str = "",
+        query: str = "",
+        limit: int = 3,
+        pinned_only: bool = False,
+    ) -> list[tuple[str, str]]:
+        conn = self._db()
+        now = time.time()
+        candidates: dict[int, tuple[float, Exchange]] = {}
+
+        # Stage 1a: FTS5 BM25 lexical/symbol candidates
+        fts_q = _sanitize_fts_query(query)
+        if fts_q:
+            sql = (
+                "SELECT e.id, e.seen, e.answer, e.ts, e.pinned, bm25(exchanges_fts) AS rank "
+                "FROM exchanges_fts f JOIN exchanges e ON e.id = f.rowid "
+                "WHERE exchanges_fts MATCH ? "
+            )
+            params: list[object] = [fts_q]
+            if doc_filter:
+                sql += "AND e.doc = ? "
+                params.append(doc_filter)
+            if exclude_doc:
+                sql += "AND e.doc != ? "
+                params.append(exclude_doc)
+            if exclude_page:
+                sql += "AND e.page != ? "
+                params.append(exclude_page)
+            if pinned_only:
+                sql += "AND e.pinned = 1 "
+            sql += "ORDER BY rank LIMIT 40"
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                raw_ranks = [-float(r["rank"]) for r in rows]
+                max_r = max(raw_ranks, default=1.0) or 1.0
+                for r, pos_r in zip(rows, raw_ranks, strict=True):
+                    bm25_norm = max(0.0, min(1.0, pos_r / max_r))
+                    rec = _recency_score(float(r["ts"]), now)
+                    score = (10.0 if r["pinned"] else 0.0) + 0.65 * bm25_norm + 0.35 * rec
+                    candidates[int(r["id"])] = (
+                        score,
+                        Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])),
+                    )
+            except sqlite3.OperationalError:
+                pass
+
+        # Stage 1b: Pinned + recent fallback candidates so empty/non-matching queries still recall
+        sql2 = "SELECT id, seen, answer, ts, pinned FROM exchanges WHERE 1=1 "
+        p2: list[object] = []
+        if doc_filter:
+            sql2 += "AND doc = ? "
+            p2.append(doc_filter)
+        if exclude_doc:
+            sql2 += "AND doc != ? "
+            p2.append(exclude_doc)
+        if exclude_page:
+            sql2 += "AND page != ? "
+            p2.append(exclude_page)
+        if pinned_only:
+            sql2 += "AND pinned = 1 "
+        sql2 += "ORDER BY pinned DESC, ts DESC LIMIT 24"
+        for r in conn.execute(sql2, p2).fetchall():
+            rid = int(r["id"])
+            if rid in candidates:
+                continue
+            rec = _recency_score(float(r["ts"]), now)
+            score = (10.0 if r["pinned"] else 0.0) + 0.35 * rec
+            candidates[rid] = (
+                score,
+                Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])),
+            )
+
+        ranked = sorted(candidates.values(), key=lambda item: item[0], reverse=True)
+        top = [ex for _, ex in ranked[:limit]]
+        top.sort(key=lambda e: e.ts)
+        return [(e.seen, e.answer) for e in top]
 
     def notebook_context(
         self, doc: str, exclude_page: str, query: str = "", limit: int = 3
     ) -> list[tuple[str, str]]:
-        """
-        Relevance-ranked ``(seen, answer)`` exchanges from other pages of the same notebook.
-
-        Prioritizes pinned memories, then keyword/symbol overlap with ``query``, then recency.
-        """
-        if not self.memory or not doc or not self.dir.exists():
+        """Macro-scale recall across other pages of ``doc``."""
+        if not self.memory or not doc:
             return []
-        q_terms = {w.lower() for w in query.split() if len(w) >= 3}
-        scored: list[tuple[float, Exchange]] = []
-        for path in self.dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if data.get("doc") != doc or data.get("page") == exclude_page:
-                continue
-            digest = str(data.get("digest") or "").strip()
-            if digest:
-                scored.append((2.0, Exchange("page digest", digest, 0.0, pinned=False)))
-            for raw in data.get("exchanges", []):
-                try:
-                    ex = Exchange(**raw)
-                except TypeError:
-                    continue
-                hay = f"{ex.seen} {ex.answer}".lower()
-                overlap = sum(1 for t in q_terms if t in hay)
-                score = (10.0 if ex.pinned else 0.0) + overlap * 1.5 + (ex.ts / 1e12)
-                scored.append((score, ex))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        top = [ex for _, ex in scored[:limit]]
-        top.sort(key=lambda e: e.ts)
-        return [(e.seen, e.answer) for e in top]
+        return self._search_scope(
+            doc_filter=doc, exclude_page=exclude_page, query=query, limit=limit
+        )
+
+    def global_context(
+        self, exclude_doc: str, query: str = "", limit: int = 2
+    ) -> list[tuple[str, str]]:
+        """Meta-scale recall of durable pinned insights across other notebooks."""
+        if not self.memory:
+            return []
+        return self._search_scope(
+            doc_filter="",
+            exclude_doc=exclude_doc,
+            query=query,
+            limit=limit,
+            pinned_only=True,
+        )
 
     def stats(self, doc: str) -> tuple[int, int]:
         """Return ``(page_count, pinned_count)`` for ``doc``."""
-        if not self.memory or not doc or not self.dir.exists():
+        if not self.memory or not doc:
             return 0, 0
-        pages, pinned = 0, 0
-        for path in self.dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if data.get("doc") != doc:
-                continue
-            exs = data.get("exchanges", [])
-            if exs:
-                pages += 1
-                pinned += sum(1 for e in exs if e.get("pinned"))
-        return pages, pinned
-
-    def forget(self, doc: str, page: str) -> bool:
-        """Delete the page's thread; True if there was one."""
-        try:
-            self._path(doc, page).unlink()
-            return True
-        except OSError:
-            return False
+        row = self._db().execute(
+            "SELECT COUNT(DISTINCT page) AS pages, COALESCE(SUM(pinned), 0) AS pins "
+            "FROM exchanges WHERE doc = ?",
+            (doc,),
+        ).fetchone()
+        return (int(row["pages"]), int(row["pins"])) if row else (0, 0)
