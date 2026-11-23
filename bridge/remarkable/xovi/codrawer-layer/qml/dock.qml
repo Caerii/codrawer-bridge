@@ -27,6 +27,7 @@ Item {
     z: open ? 1 : 0
 
     property bool open: false
+    property bool pinned: false
     property var nativeButton: null
     readonly property bool down: nativeButton ? nativeButton.down : tap.pressed
     readonly property bool highlighted: down || open
@@ -157,7 +158,7 @@ Item {
         enabled: root.open
         width: root.winW
         height: root.winH
-        onPressed: root.open = false
+        onPressed: if (!root.pinned) root.open = false
     }
 
     // Reusable Victorian-Gothic entry row with custom 32 x 32 spline glyph + pill.
@@ -691,6 +692,27 @@ Item {
                         font.letterSpacing: 2.0
                         color: "black"
                     }
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 18
+                    width: pinLabel.implicitWidth + 22
+                    height: 30
+                    radius: 15
+                    color: root.pinned ? "black" : "transparent"
+                    border.width: 1.5
+                    border.color: "black"
+                    Text {
+                        id: pinLabel
+                        anchors.centerIn: parent
+                        text: root.pinned ? "pinned" : "pin"
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 16
+                        font.weight: Font.Medium
+                        color: root.pinned ? "white" : "black"
+                    }
+                    MouseArea { anchors.fill: parent; onClicked: root.pinned = !root.pinned }
                 }
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
             }

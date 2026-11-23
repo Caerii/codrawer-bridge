@@ -912,7 +912,7 @@ Item {
             if (since > (d.done.ok ? 2400 : 800)) return thinkEnd(d.id, d.done.ok ? "done" : "done elsewhere");
             const extra = [];
             if (d.done.ok && since > 500) extra.push({ pts: tickPoints(d.cx, d.cy, Math.min(1, (since - 500) / 400)), width: 3 });
-            return paintDoodle(d, doodle(d, tau, Math.max(0, 1 - since / 800)).concat(extra));
+            return paintDoodle(d, doodle(d, tau, Math.pow(Math.max(0, 1 - since / 800), 2)).concat(extra));
         }
         if (d.noAgent) {
             const since = now - d.noAgent;
@@ -922,7 +922,7 @@ Item {
                 extra.push({ pts: questionPoints(d.cx, d.cy), width: 2.6 });
                 extra.push({ dot: { x: d.cx, y: d.cy + 30 }, r: 3 });
             }
-            return paintDoodle(d, doodle(d, tau, Math.max(0, 1 - since / 800)).concat(extra));
+            return paintDoodle(d, doodle(d, tau, Math.pow(Math.max(0, 1 - since / 800), 2)).concat(extra));
         }
         if (d.clearAt && !d.handoff && now - d.clearAt > clearWaitMs) {
             d.handoff = { from: d.trail.length ? d.trail[d.trail.length - 1] : { x: d.cx, y: d.cy },
@@ -933,7 +933,7 @@ Item {
         if (d.handoff) {
             const h = d.handoff;
             const u = Math.min(1, (now - h.t0) / handoffMs);
-            scale = 1 - u;
+            scale = Math.pow(1 - u, 2);
             if (h.to) {  // to the answer (or where the agent said it writes)
                 // the nib's flight: a curve that leaves sideways, eased in and out
                 const e = u * u * (3 - 2 * u);

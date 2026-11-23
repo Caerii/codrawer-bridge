@@ -114,6 +114,34 @@ def test_persona_voice_in_prompt() -> None:
         assert PERSONA_VOICES[persona] in p
 
 
+def test_calligrapher_resampling_and_combined_directives() -> None:
+    from codrawer_bridge.agentd.hand import Layout, apply_prosody
+    from codrawer_bridge.agentd.marks import extract_marks
+    from codrawer_bridge.agentd.prompt import clean_answer, extract_sets, split_seen
+
+    lay = Layout(
+        width_mm=80.0,
+        bbox_mm=(0.0, 0.0, 5.0, 2.0),
+        duration_ms=40.0,
+        strokes=[(0.0, 40.0, [[0.0, 0.0, 0.5, 0.0], [3.0, 2.0, 0.5, 20.0], [5.0, 0.0, 0.5, 40.0]])],
+    )
+    apply_prosody([lay], persona="calligrapher")
+    assert len(lay.strokes[0][2]) > 3
+
+    raw = (
+        "SEEN: f(x) = x^2\n"
+        "SET: persona=sketcher\n"
+        "MARK: bracket 0.1 0.2 0.1 0.8\n"
+        "Differentiate term by term."
+    )
+    seen, body = split_seen(raw)
+    assert seen == "f(x) = x^2"
+    assert extract_sets(body) == {"persona": "sketcher"}
+    marks, prose = extract_marks(body)
+    assert marks[0][0] == "bracket"
+    assert clean_answer(prose) == "Differentiate term by term."
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

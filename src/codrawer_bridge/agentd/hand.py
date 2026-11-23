@@ -87,7 +87,26 @@ def apply_prosody(lays: list[Layout], persona: str = "archivist") -> list[Layout
     - ``archivist`` (default): balanced editorial italic swell and feather lift-off.
     """
     for lay in lays:
-        for _, _, pts in lay.strokes:
+        for idx, (down, up, pts) in enumerate(lay.strokes):
+            if persona == "calligrapher" and len(pts) >= 2:
+                dense: list[list[float]] = [pts[0]]
+                for a, b in zip(pts, pts[1:], strict=False):
+                    dist = math.hypot(b[0] - a[0], b[1] - a[1])
+                    if dist > 0.6:
+                        steps = min(6, int(dist / 0.5))
+                        for s in range(1, steps):
+                            f = s / steps
+                            dense.append(
+                                [
+                                    a[0] + (b[0] - a[0]) * f,
+                                    a[1] + (b[1] - a[1]) * f,
+                                    a[2] + (b[2] - a[2]) * f,
+                                    a[3] + (b[3] - a[3]) * f,
+                                ]
+                            )
+                    dense.append(b)
+                pts = dense
+                lay.strokes[idx] = (down, up, pts)
             n = len(pts)
             if n < 3:
                 continue
@@ -353,9 +372,13 @@ def to_messages(
     ox, oy = origin
     out: list[tuple[float, dict]] = []
     k = 1.0 / max(speed, 0.05)
+    drift_ms = 0.0
+    prev_end_x: float | None = None
     for n, (down, up, pts) in enumerate(layout.strokes):
+        if prev_end_x is not None and pts and pts[0][0] - prev_end_x > 3.5:
+            drift_ms += 12.0
         sid = f"{id_prefix}{run}_{n}"
-        t_down = start_ms + down * k
+        t_down = start_ms + down * k + drift_ms * k
         begin = {"t": "stroke_begin", "id": sid, "layer": "ai", "brush": "pen", "ts": int(t_down)}
         if color:
             begin["color"] = color
@@ -365,7 +388,7 @@ def to_messages(
         batch: list[list[float]] = []
         due = None
         for x, y, p, t in pts:
-            ts = start_ms + t * k
+            ts = start_ms + t * k + drift_ms * k
             if due is not None and ts >= due and batch:
                 out.append((batch[-1][3], {"t": "stroke_pts", "id": sid, "pts": batch}))
                 batch = []
@@ -381,8 +404,10 @@ def to_messages(
             )
         if batch:
             out.append((batch[-1][3], {"t": "stroke_pts", "id": sid, "pts": batch}))
-        t_up = start_ms + up * k
+        t_up = start_ms + up * k + drift_ms * k
         out.append((t_up, {"t": "stroke_end", "id": sid, "ts": int(t_up)}))
+        if pts:
+            prev_end_x = pts[-1][0]
     return out
 
 
