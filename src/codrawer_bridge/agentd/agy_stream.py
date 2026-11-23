@@ -22,7 +22,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .aio import within
-from .claude_stream import WARM_UP
 from .terminal import Reply
 
 
@@ -65,8 +64,8 @@ class AgyProcess:
         self.proc: asyncio.subprocess.Process | None = None
         self.warm_s: float | None = None
 
-    async def start(self, warm_timeout_s: float = 60.0) -> bool:
-        """Spawn and warm (one tiny turn). True when ready; otherwise retired."""
+    async def start(self, warm_timeout_s: float = 120.0) -> bool:
+        """Spawn and wait for ``init`` (sidecar booted). True when ready; otherwise retired."""
         t0 = time.monotonic()
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -78,16 +77,27 @@ class AgyProcess:
                 stderr=asyncio.subprocess.DEVNULL,
                 limit=2**26,
             )
-            r = await self.turn(WARM_UP, None, warm_timeout_s, stall_s=warm_timeout_s)
-        except (OSError, ValueError):
+            assert self.proc.stdout is not None
+            while True:
+                left = warm_timeout_s - (time.monotonic() - t0)
+                if left <= 0:
+                    await self.retire()
+                    return False
+                line = await within(self.proc.stdout.readline(), left)
+                if not line:
+                    await self.retire()
+                    return False
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("event") == "init":
+                    self.state = "ready"
+                    self.warm_s = round(time.monotonic() - t0, 2)
+                    return True
+        except (OSError, ValueError, TimeoutError):
             await self.retire()
             return False
-        if r.ok:
-            self.state = "ready"
-            self.warm_s = round(time.monotonic() - t0, 2)
-            return True
-        await self.retire()
-        return False
 
     async def turn(
         self,
@@ -180,7 +190,7 @@ class AgyPool:
         model: str = "gemini-4-neon-medium",
         cmd: list[str] | None = None,
         add_dirs: tuple[Path, ...] = (),
-        warm_timeout_s: float = 60.0,
+        warm_timeout_s: float = 120.0,
     ) -> None:
         self.cwd = cwd
         self.size = size
