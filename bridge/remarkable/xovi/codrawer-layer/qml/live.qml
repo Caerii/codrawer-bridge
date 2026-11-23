@@ -794,54 +794,74 @@ Item {
                 }
             }
         } else if (d.style === "drop") {
-            // Silky billowing thought-cloud fused with a wandering ink-doodle tendril + rising bubbles
-            const breath = 1.0 + 0.09 * Math.sin(tau * 1.9);
-            const puffs = [
-                { dx: 0, dy: -2, r: 18 },
-                { dx: -17, dy: 4, r: 13.5 },
-                { dx: 17, dy: 3, r: 14 },
-                { dx: -10, dy: -12, r: 12.5 },
-                { dx: 11, dy: -11, r: 12 }
-            ];
-            for (let p = 0; p < puffs.length; ++p) {
-                const P = puffs[p];
-                const driftX = 2.6 * Math.sin(tau * 1.35 + p * 1.25) + 1.2 * Math.cos(tau * 2.1 + p * 0.7);
-                const driftY = 2.2 * Math.cos(tau * 1.15 + p * 1.45) + 1.0 * Math.sin(tau * 1.85 + p * 0.9);
-                const px = d.cx + P.dx * scale * breath + driftX * scale;
-                const py = d.cy + P.dy * scale * breath + driftY * scale;
-                const pr = P.r * scale * breath;
-                if (pr < 1.0) continue;
-                const ring = [];
-                for (let i = 0; i <= 32; ++i) {
-                    const th = (i / 32) * 2 * Math.PI;
-                    const n = noise(Math.cos(th) * 1.15 + tau * 0.55 + p * 3.1, Math.sin(th) * 1.15 - tau * 0.45);
-                    const rr = pr * (0.88 + 0.22 * n);
-                    ring.push({ x: px + rr * Math.cos(th), y: py + rr * Math.sin(th) });
-                }
-                out.push({ pts: ring, width: 1.75 });
+            // Pixar-inspired living thought-cloud: volume-preserving squash-and-stretch
+            // silhouette, buoyant popping bubble-sparkles, and a playful comet-tailed nib sprite.
+            const sx = 1.0 + 0.085 * Math.sin(tau * 2.3);
+            const sy = 1.0 / sx;
+            const bobY = -3.0 * Math.sin(tau * 2.3 + 0.6);
+            const cloudPts = [];
+            const lobes = 7;
+            for (let i = 0; i <= 72; ++i) {
+                const th = (i / 72) * 2 * Math.PI;
+                const scallop = 0.82 + 0.20 * Math.abs(Math.cos(lobes * 0.5 * th + 0.35 * Math.sin(tau * 1.4)));
+                const n = noise(Math.cos(th) * 1.1 + tau * 0.55, Math.sin(th) * 1.1 - tau * 0.45);
+                const rx = 31.0 * scale * sx * scallop * (0.94 + 0.12 * n);
+                const ry = 22.0 * scale * sy * scallop * (0.94 + 0.12 * n);
+                cloudPts.push({ x: d.cx + rx * Math.cos(th), y: d.cy + bobY * scale + ry * Math.sin(th) });
             }
-            // Wandering ink-doodle tendril weaving inside the cloud
-            const ix = d.cx + 10 * scale * Math.sin(tau * 2.3) * Math.cos(tau * 0.9);
-            const iy = d.cy - 2 * scale + 7 * scale * Math.sin(tau * 3.1 + 0.8);
-            d.trail.push({ x: ix, y: iy });
-            const keepWisp = Math.max(0, Math.round(20 * scale));
+            out.push({ pts: cloudPts, width: 2.1 });
+            // Subtle inner billow arc for depth
+            const innerPts = [];
+            for (let i = 0; i <= 14; ++i) {
+                const th = -2.55 + (i / 14) * 1.25;
+                innerPts.push({
+                    x: d.cx + 19 * scale * sx * Math.cos(th),
+                    y: d.cy + bobY * scale + 13 * scale * sy * Math.sin(th)
+                });
+            }
+            out.push({ pts: innerPts, width: 1.25 });
+            // Playful comet-tailed nib sprite orbiting with springy follow-through
+            const ang = tau * 2.6 + 0.45 * Math.sin(tau * 1.3);
+            const sxPos = d.cx + 22 * scale * Math.cos(ang);
+            const syPos = d.cy + bobY * scale + 14 * scale * Math.sin(ang * 1.0);
+            d.trail.push({ x: sxPos, y: syPos });
+            const keepWisp = Math.max(0, Math.round(16 * scale));
             while (d.trail.length > keepWisp) d.trail.shift();
             for (let i = 1; i < d.trail.length; ++i) {
                 const f = i / d.trail.length;
-                out.push({ pts: [d.trail[i - 1], d.trail[i]], width: (0.6 + 2.1 * f) * scale });
+                out.push({ pts: [d.trail[i - 1], d.trail[i]], width: (0.5 + 2.2 * f * f) * scale });
             }
+            if (d.trail.length > 0 && scale > 0.25) {
+                out.push({ dot: d.trail[d.trail.length - 1], r: 3.1 * scale });
+            }
+            // Buoyant rising thought-bubbles that pop into tiny star-sparkles at the apex
             for (let b = 0; b < 4; ++b) {
-                const ph = ((tau * 0.48 + b * 0.25) % 1.0);
-                const bx = d.cx - 24 * scale + ph * 16 * scale + 4.5 * Math.sin(tau * 2.1 + b * 1.4);
-                const by = d.cy + 36 * scale - ph * 36 * scale;
-                const br = (2.8 + 4.8 * Math.sin(ph * Math.PI)) * scale;
-                if (br > 0.8) {
-                    const bRing = [];
-                    for (let k = 0; k <= 20; ++k) {
-                        const a = (k / 20) * 2 * Math.PI;
-                        bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
+                const ph = ((tau * 0.52 + b * 0.25) % 1.0);
+                const bx = d.cx - 26 * scale + ph * 18 * scale + 4.0 * Math.sin(tau * 2.2 + b * 1.5);
+                const by = d.cy + 38 * scale - ph * 34 * scale;
+                if (ph < 0.84) {
+                    const br = (2.5 + 4.5 * Math.sin((ph / 0.84) * Math.PI)) * scale;
+                    if (br > 0.8) {
+                        const bRing = [];
+                        for (let k = 0; k <= 18; ++k) {
+                            const a = (k / 18) * 2 * Math.PI;
+                            bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
+                        }
+                        out.push({ pts: bRing, width: 1.4 + 0.6 * Math.sin((ph / 0.84) * Math.PI) });
                     }
-                    out.push({ pts: bRing, width: 1.4 + 0.7 * Math.sin(ph * Math.PI) + 0.25 * Math.sin(tau * 1.8) });
+                } else {
+                    const pop = (ph - 0.84) / 0.16;
+                    const sr = (3.0 + 4.5 * pop) * scale;
+                    for (let ray = 0; ray < 4; ++ray) {
+                        const ra = ray * Math.PI * 0.5 + 0.4;
+                        out.push({
+                            pts: [
+                                { x: bx + sr * 0.4 * Math.cos(ra), y: by + sr * 0.4 * Math.sin(ra) },
+                                { x: bx + sr * Math.cos(ra), y: by + sr * Math.sin(ra) }
+                            ],
+                            width: Math.max(0.6, 1.8 * (1 - pop))
+                        });
+                    }
                 }
             }
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark
