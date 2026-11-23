@@ -804,6 +804,7 @@ class Agentd:
                 region=sel_box,
                 title=m.title,
                 thread=[(e.seen, e.answer) for e in thread],
+                persona=self.setting("persona"),
             )
             rec.image_bytes = len(png)
             rec.prompt = prompt.build_prompt(ask)
@@ -843,11 +844,19 @@ class Agentd:
             rec.reply["raw"] = reply.text
             seen, answer_raw = prompt.split_seen(reply.text or "")
             rec.seen = seen
+            sets: dict[str, Any] = {}
             if answer_raw and not reply.error:
                 sets = prompt.extract_sets(answer_raw)
                 if sets:
                     await self._apply_settings(sets)
             text = prompt.clean_answer(answer_raw) if answer_raw and not reply.error else ""
+            if not text and sets and not reply.error:
+                parts = [
+                    f"{k.replace('_', ' ')}: {('on' if v else 'off') if isinstance(v, bool) else v}"
+                    for k, v in sets.items()
+                ]
+                text = f"Updated {', '.join(parts)}."
+                answer_raw = text
             if not text:
                 rec.error = reply.error or "empty answer"
                 rec.status_note = "Couldn't answer just now - try again"

@@ -252,7 +252,7 @@ void liveLocalThinking(const QRectF &spot) {
     if (!spot.isValid()) return;
     QQuickItem *item = overlay();
     if (!item) return;
-    invoke(item, "thinkPending", {spot.x(), spot.y(), spot.width(), spot.height(), QStringLiteral("pen")});
+    invoke(item, "thinkPending", {spot.x(), spot.y(), spot.width(), spot.height(), QStringLiteral("drop")});
 }
 
 qint64 liveLastAgentStatusMs() { return lastAgentStatusAt(); }

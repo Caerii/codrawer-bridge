@@ -61,6 +61,31 @@ class Ask:
     region: Box | None = None  # normalized, for a selection
     title: str = ""  # the notebook's name, from the page snapshot (page data)
     thread: list[tuple[str, str]] = field(default_factory=list)  # earlier (seen, answer), this page
+    persona: str = "archivist"
+
+
+PERSONA_VOICES: dict[str, str] = {
+    "archivist": (
+        "Persona — Archivist: precise, observant, scholarly. Anchor remarks in exact details "
+        "on the page; favor clear structure and `MARK: underline` or `bracket` on key passages."
+    ),
+    "sketcher": (
+        "Persona — Sketcher: visual, playful, spatial. Think in shapes, diagrams, and "
+        "relationships; use `MARK: circle`, `arrow`, and `star` freely to point at ideas."
+    ),
+    "elder": (
+        "Persona — Elder: warm, unhurried, Socratic. Offer gentle perspective and guiding "
+        "questions rather than blunt answers; highlight core principles."
+    ),
+    "mathematician": (
+        "Persona — Mathematician: rigorous, concise, step-aware. Check equations, signs, and "
+        "assumptions; give the sharpest minimal hint toward the next step."
+    ),
+    "calligrapher": (
+        "Persona — Calligrapher: poised, lyrical, sparing with words. Value rhythm and clarity "
+        "in every phrase; keep replies distilled and evocative."
+    ),
+}
 
 
 def clean(value: object, limit: int = 120) -> str:
@@ -76,10 +101,12 @@ def build_prompt(ask: Ask) -> str:
     """The turn's text (module docstring)."""
     what = "the lassoed selection" if ask.kind == "ask_selection" else "the whole page"
     instruction = INSTRUCTION if ask.kind == "ask_selection" else INSTRUCTION_PAGE
+    voice = PERSONA_VOICES.get(ask.persona, PERSONA_VOICES["archivist"])
     lines = [
         f"[codrawer-agentd] A request from the user's reMarkable tablet ({what}).",
         "",
         instruction,
+        voice,
         "",
         f"The image to Read: `{ask.image}`." if ask.image else "The image is attached above.",
         "",

@@ -106,6 +106,14 @@ def test_persona_prosody_and_ornamental_marks() -> None:
     assert len(msgs) == 6
 
 
+def test_persona_voice_in_prompt() -> None:
+    from codrawer_bridge.agentd.prompt import PERSONA_VOICES, Ask, build_prompt
+
+    for persona in PERSONA_VOICES:
+        p = build_prompt(Ask(kind="ask_page", image="page.png", persona=persona))
+        assert PERSONA_VOICES[persona] in p
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer
