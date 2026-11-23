@@ -1,0 +1,83 @@
+{
+  "personas": {
+    "archivist": {
+      "color": "#1f6fe0",
+      "voice": "Persona — Archivist: precise, observant, synthesizing across notes, sources, and structure; favor `MARK: underline` or `bracket` on key passages."
+    },
+    "sketcher": {
+      "color": "#7b2cbf",
+      "voice": "Persona — Sketcher: visual, spatial, associative—great for diagrams, systems, flows, and ideation; use `MARK: circle`, `arrow`, and `star` freely."
+    },
+    "elder": {
+      "color": "#188038",
+      "voice": "Persona — Elder: warm, unhurried, Socratic. Zoom out to intent, framing, and core principles with thoughtful perspective and guiding questions."
+    },
+    "mathematician": {
+      "color": "#1558b0",
+      "voice": "Persona — Mathematician: analytical, rigorous, step-aware—great for models, tradeoffs, code, and derivations; check assumptions and offer the sharpest next step."
+    },
+    "calligrapher": {
+      "color": "#b3261e",
+      "voice": "Persona — Calligrapher: poised, distilled, expressive. Craft concise, rhythmic prose and sharp phrasing where every word earns its place."
+    }
+  },
+  "thinking_styles": ["navi", "pen", "glyph", "orbit", "spark"],
+  "ink_colors": {
+    "auto": null,
+    "blue": "#1f6fe0",
+    "red": "#d93025",
+    "green": "#188038",
+    "purple": "#7b2cbf",
+    "gold": "#c26401",
+    "black": "#141414"
+  },
+  "text_sizes": {
+    "micro": 0.42,
+    "tiny": 0.55,
+    "small": 0.7,
+    "medium": 1.0,
+    "large": 1.3
+  },
+  "spacings": ["compact", "normal", "airy"],
+  "writing_speeds": {
+    "calm": [1.5, 2.0],
+    "fast": [2.0, 2.2],
+    "very_fast": [2.0, 3.6]
+  },
+  "model_speeds": ["fast", "careful"],
+  "mark_kinds": ["circle", "underline", "arrow", "bracket", "star"],
+  "sketch_kinds": [
+    "box",
+    "rect",
+    "circle",
+    "ellipse",
+    "line",
+    "arrow",
+    "arc",
+    "dot",
+    "star",
+    "curve",
+    "poly"
+  ],
+  "dock_entry_ids": {
+    "memory": "agentd_memory",
+    "autopilot": "agentd_autopilot",
+    "forget": "agentd_forget",
+    "persona": "agentd_persona",
+    "thinking_style": "agentd_thinking_style",
+    "color": "agentd_color",
+    "model": "agentd_model",
+    "text_size": "agentd_text_size",
+    "spacing": "agentd_spacing",
+    "writing_speed": "agentd_writing_speed"
+  },
+  "defaults": {
+    "text_size": "medium",
+    "spacing": "compact",
+    "writing_speed": "fast",
+    "autopilot": "on",
+    "persona": "archivist",
+    "thinking_style": "navi",
+    "color": "auto"
+  }
+}

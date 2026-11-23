@@ -72,6 +72,7 @@ else
   # (xovi.sh EXTRAS)
   cp "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/dock.qml" "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/selection-ask.qml" \
     "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/live.qml" \
+    "$ROOT/bridge/remarkable/xovi/codrawer-layer/qml/generated_types.js" \
     "$ROOT/bridge/remarkable/xovi/codrawer-layer/inject.conf" "$STAGE/xovi/"
   echo "[deploy] XOVI payload: codrawer-layer.so $(sha256sum "$STAGE/xovi/codrawer-layer.so" | cut -c1-12)…"
 fi

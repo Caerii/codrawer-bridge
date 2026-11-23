@@ -27,7 +27,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ..protocol.generated import (
+    COLORS,
+    MARK_KINDS,
+    PERSONA_VOICES,
+    PERSONAS,
+    SIZES,
+    SKETCH_KINDS,
+    SPACINGS,
+    SPEEDS,
+    THINKING_STYLES,
+)
 from .page import Box
+
+_MARKS_PIPE = "|".join(MARK_KINDS)
+_SKETCH_SHAPES = ("rect", "circle", "ellipse", "line", "arrow")
+_SKETCH_PIPE = "|".join(k for k in SKETCH_KINDS if k in _SKETCH_SHAPES)
 
 #: The user's instruction for an answer (their wording).
 INSTRUCTION = (
@@ -36,7 +51,7 @@ INSTRUCTION = (
     "co-thinker grounded in what's on the page—whether prose, notes, sketches, plans, code, "
     "or equations. If it looks like an open exercise, offer a sharp next step or perspective "
     "rather than spoiling it. Optionally start with up to 2 lines "
-    "`MARK: circle|underline|arrow|bracket|star x0 y0 x1 y1` (0..1 fractions of the image) "
+    f"`MARK: {_MARKS_PIPE} x0 y0 x1 y1` (0..1 fractions of the image) "
     "to annotate directly on their ink."
 )
 
@@ -65,33 +80,9 @@ class Ask:
     thread: list[tuple[str, str]] = field(default_factory=list)  # Micro: active page turns
     page_digest: str = ""  # Meso: compacted summary of earlier turns on this page
     notebook_thread: list[tuple[str, str]] = field(default_factory=list)  # Macro: same doc
-    global_thread: list[tuple[str, str]] = field(default_factory=list)  # Meta: cross-notebook pins
+    global_thread: list[str] | list[tuple[str, str]] = field(default_factory=list)  # Meta pins
     persona: str = "archivist"
     idiolect: str = ""  # recognized hand-drawn symbol ("lasso", "star", "question")
-
-
-PERSONA_VOICES: dict[str, str] = {
-    "archivist": (
-        "Persona — Archivist: precise, observant, synthesizing across notes, sources, and "
-        "structure; favor `MARK: underline` or `bracket` on key passages."
-    ),
-    "sketcher": (
-        "Persona — Sketcher: visual, spatial, associative—great for diagrams, systems, flows, "
-        "and ideation; use `MARK: circle`, `arrow`, and `star` freely."
-    ),
-    "elder": (
-        "Persona — Elder: warm, unhurried, Socratic. Zoom out to intent, framing, and core "
-        "principles with thoughtful perspective and guiding questions."
-    ),
-    "mathematician": (
-        "Persona — Mathematician: analytical, rigorous, step-aware—great for models, tradeoffs, "
-        "code, and derivations; check assumptions and offer the sharpest next step."
-    ),
-    "calligrapher": (
-        "Persona — Calligrapher: poised, distilled, expressive. Craft concise, rhythmic prose "
-        "and sharp phrasing where every word earns its place."
-    ),
-}
 
 
 def clean(value: object, limit: int = 120) -> str:
@@ -128,13 +119,14 @@ def build_prompt(ask: Ask) -> str:
         if ask.image
         else "- Use no tools.",
         "- To change your own properties when requested in handwriting, emit `SET: <key>=<value>` "
-        "lines before your answer: `persona=archivist|sketcher|elder|mathematician|calligrapher`, "
-        "`thinking_style=navi|pen|glyph|orbit|spark`, `writing_speed=slow|medium|fast|very_fast`, "
-        "`text_size=small|medium|large`, `spacing=compact|normal|airy`, `autopilot=on|off`, "
-        "`memory=on|off`, `model=careful|fast`, `color=auto|blue|red|green|black|gold`. "
+        f"lines before your answer: `persona={'|'.join(PERSONAS)}`, "
+        f"`thinking_style={'|'.join(THINKING_STYLES)}`, "
+        f"`writing_speed={'|'.join(SPEEDS)}`, `text_size={'|'.join(SIZES)}`, "
+        f"`spacing={'|'.join(SPACINGS)}`, `autopilot=on|off`, `memory=on|off`, "
+        f"`model=careful|fast`, `color={'|'.join(COLORS)}`. "
         "To draw freehand sketches or diagrams in your own clean canvas beside the user, emit up "
         "to 16 `SKETCH:` lines (0..1 fractions inside your sketch canvas): "
-        "`SKETCH: rect|circle|ellipse|line|arrow x0 y0 x1 y1`, `SKETCH: arc cx cy r a0 a1`, "
+        f"`SKETCH: {_SKETCH_PIPE} x0 y0 x1 y1`, `SKETCH: arc cx cy r a0 a1`, "
         "`SKETCH: dot|star x y [r]`, `SKETCH: curve x0,y0 cx,cy x1,y1`, or "
         "`SKETCH: poly x0,y0 x1,y1 ...` (optional trailing `#rrggbb`). "
         "To pin a key insight, decision, definition, or open thread to durable notebook memory, "

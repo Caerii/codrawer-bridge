@@ -1,13 +1,11 @@
 // The codrawer dock: an illuminated, Victorian-Gothic three-column e-paper toolbar panel.
 //
-// Left column (`codrawer-dock-panel`): actions & status (`codrawer status`, `Agent ink on/off`,
-// `Practice coach`, `Ask about this page`, `Ask about selection`, `Forget this page's thread`,
-// `Responder` health, and `status` footer).
-// Middle column (`codrawer-dock-studio`): personality & motion controls (`Persona`, `Thinking`,
-// `Writing speed`, `Text size`, `Spacing`).
-// Right column (`codrawer-dock-system`): intelligence & system controls (`Autopilot`, `Memory`,
-// `Model`).
+// Column 1 (`codrawer-dock-panel`): actions, Atelier/Cortex tab switches, and `status` footer.
+// Column 2 (`codrawer-dock-studio`): Atelier (Persona, Thinking, Color, Text size, Spacing, Speed)
+// or Cortex (Autopilot, Memory, Forget, Model) selected from Column 1.
+// Column 3 (`codrawer-dock-system`): live animated Thinking-Style grid (`Spec.THINKING_STYLES`).
 import QtQuick
+import "generated_types.js" as Spec
 
 Item {
     id: root
@@ -935,7 +933,7 @@ Item {
                 spacing: 12
 
                 Repeater {
-                    model: ["navi", "pen", "glyph", "orbit", "spark"]
+                    model: Spec.THINKING_STYLES
                     delegate: Rectangle {
                         id: tile
                         required property string modelData
@@ -1022,7 +1020,7 @@ Item {
                         MouseArea {
                             id: tileTap
                             anchors.fill: parent
-                            onClicked: root.action("agentd_thinking_style:" + tile.modelData)
+                            onClicked: root.action(Spec.DOCK_IDS.thinking_style + ":" + tile.modelData)
                         }
                     }
                 }

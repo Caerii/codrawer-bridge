@@ -62,6 +62,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..protocol.generated import (
+    COLORS,
+    DOCK_IDS,
+    INK_COLORS,
+    PERSONA_COLORS,
+    PERSONAS,
+    SETTINGS,
+    SIZES,
+    SPACINGS,
+    SPEEDS,
+    TEXT_SIZE,
+    THINKING_STYLES,
+    WRITING_SPEED,
+    PlacementInfo,
+)
 from . import hand as handmod
 from . import idiolect as idiolectmod
 from . import marks as marksmod
@@ -130,7 +145,7 @@ class Record:
     pending_at: float | None = None
     reply: dict[str, Any] = field(default_factory=dict)
     answer: str = ""
-    placement: dict[str, Any] | None = None
+    placement: PlacementInfo | None = None
     first_stroke_at: float | None = None
     last_stroke_at: float | None = None
     strokes: int = 0
@@ -982,31 +997,7 @@ class Agentd:
                         await self._play(m_msgs, rec=rec)
                         for sid, pts in _mark_strokes(m_msgs):
                             m.add_own(sid, pts)
-                if sketches and (rec.placement or sel_box or rec.region):
-                    if rec.placement and "reserved_pu" in rec.placement:
-                        px0, py0, px1, _ = rec.placement["reserved_pu"]
-                        sy0 = (stream.bottom + 18.0) if stream.bottom is not None else py0
-                        sw = min(360.0, max(160.0, px1 - px0))
-                        sh = 220.0
-                        sbox: Box = (px0, sy0, px0 + sw, sy0 + sh)
-                        if stream.bottom is None:
-                            stream.baseline = max(stream.baseline, sy0 + sh + 28.0)
-                        stream.bottom = max(stream.bottom or 0.0, sy0 + sh)
-                    else:
-                        sbox = sel_box or rec.region  # type: ignore[assignment]
-                    s_msgs = marksmod.sketch_messages(
-                        sketches,
-                        sbox,
-                        m.w,
-                        m.h,
-                        run=f"{rec.n}",
-                        default_color=self.ink_color(),
-                        author=f"agentd:{self.cfg.persona}",
-                    )
-                    if s_msgs:
-                        for sid, pts in _mark_strokes(s_msgs):
-                            m.add_own(sid, pts)
-                        await self._play(s_msgs, rec=rec)
+                await self._place_and_draw_sketches(sketches, rec, stream, sel_box)
                 await stream.finish(answer_raw)
                 if stream.stopped and not rec.status_note:
                     rec.status_note = "Ran out of room - the rest is on your glasses"
@@ -1032,6 +1023,44 @@ class Agentd:
             if rec.status_box is not None:
                 await self._status(rec, "done", rec.status_box)
             self._log(rec)
+
+    async def _place_and_draw_sketches(
+        self,
+        sketches: list[tuple[str, list[tuple[float, float]], str | None]],
+        rec: Record,
+        stream: InkStream,
+        sel_box: Box | None,
+    ) -> None:
+        """Place ``SKETCH:`` strokes in a clean canvas inside ``rec.placement`` and play them."""
+        if not sketches:
+            return
+        m = self.model
+        if rec.placement and "reserved_pu" in rec.placement:
+            px0, py0, px1, _ = rec.placement["reserved_pu"]
+            sy0 = (stream.bottom + 18.0) if stream.bottom is not None else py0
+            sw, sh = min(360.0, max(160.0, px1 - px0)), 220.0
+            sbox: Box | None = (px0, sy0, px0 + sw, sy0 + sh)
+            if stream.bottom is None:
+                stream.baseline = max(stream.baseline, sy0 + sh + 28.0)
+            stream.bottom = max(stream.bottom or 0.0, sy0 + sh)
+        else:
+            sbox = sel_box or rec.region
+        if sbox is None:
+            return
+        s_msgs = marksmod.sketch_messages(
+            sketches,
+            sbox,
+            m.w,
+            m.h,
+            run=f"{rec.n}",
+            default_color=self.ink_color(),
+            author=f"agentd:{self.cfg.persona}",
+        )
+        if not s_msgs:
+            return
+        for sid, pts in _mark_strokes(s_msgs):
+            m.add_own(sid, pts)
+        await self._play(s_msgs, rec=rec)
 
     async def _turn_once(self, text: str, png: bytes, timeout_s: float, on_text) -> Reply:
         """One model turn on the configured backend (claude_stream.py, or terminal.py)."""
@@ -1304,67 +1333,20 @@ DEBOUNCE_S = 1.5
 #: A failed turn is retried only with at least this much of the timeout left (seconds).
 RETRY_MIN_S = 10.0
 
-#: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
-MEMORY_ID = "agentd_memory"
-AUTOPILOT_ID = "agentd_autopilot"
-PERSONA_ID = "agentd_persona"
-THINKING_STYLE_ID = "agentd_thinking_style"
-COLOR_ID = "agentd_color"
-MODEL_ID = "agentd_model"
-SIZE_ID = "agentd_text_size"
-SPACING_ID = "agentd_spacing"
+#: agentd's own dock entries (from ``protocol/spec.json``).
+MEMORY_ID = DOCK_IDS["memory"]
+AUTOPILOT_ID = DOCK_IDS["autopilot"]
+PERSONA_ID = DOCK_IDS["persona"]
+THINKING_STYLE_ID = DOCK_IDS["thinking_style"]
+COLOR_ID = DOCK_IDS["color"]
+MODEL_ID = DOCK_IDS["model"]
+SIZE_ID = DOCK_IDS["text_size"]
+SPACING_ID = DOCK_IDS["spacing"]
+SPEED_ID = DOCK_IDS["writing_speed"]
+FORGET_ID = DOCK_IDS["forget"]
 
-#: The user's layout settings: the values each may take (in the dock's tap order) and its default.
-#: Compact spacing is the default because the user asked for answers that fit a more compact space
-#: (2026-10-07); separate_lines (hand.py) guarantees its lines never touch.
-SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smallest to largest
-SPACINGS = ("compact", "normal", "airy")
-SPEEDS = ("calm", "fast", "very_fast")
-PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
-THINKING_STYLES = ("navi", "pen", "glyph", "orbit", "spark")
-COLORS = ("auto", "blue", "red", "green", "purple", "gold", "black")
-INK_COLORS = {
-    "blue": "#1f6fe0",
-    "red": "#d93025",
-    "green": "#188038",
-    "purple": "#7b2cbf",
-    "gold": "#c26401",
-    "black": "#141414",
-}
-PERSONA_COLORS = {
-    "archivist": "#1f6fe0",
-    "sketcher": "#7b2cbf",
-    "elder": "#188038",
-    "mathematician": "#1558b0",
-    "calligrapher": "#b3261e",
-}
-SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
-    "text_size": (SIZES, "medium"),
-    "spacing": (SPACINGS, "compact"),
-    "writing_speed": (SPEEDS, "fast"),
-    "autopilot": (("off", "on"), "on"),
-    "persona": (PERSONAS, "archivist"),
-    "thinking_style": (THINKING_STYLES, "navi"),
-    "color": (COLORS, "auto"),
-}
-
-#: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried
-#: hand cuts its pauses more than its strokes and loosens a little, which reads as a person writing
-#: fast; past a hurry of 2 the letters lose their shape (2026-10-07), so the rest of the speed is
-#: playback. With the Archivist: calm ~4.6 letters/s, fast ~7.3, very fast ~9.9 (fast print is
-#: 8-12). The pre-setting live default (no hurry, playback 3) wrote ~4.2.
-WRITING_SPEED = {"calm": (1.5, 2.0), "fast": (2.0, 2.2), "very_fast": (2.0, 3.6)}
-SPEED_ID = "agentd_writing_speed"
-
-#: Text size presets as factors on the scales placement chooses from (Config.scales, 1, 0.8 and
-#: 0.65): medium is the original size (the Archivist's x-height 3.52 mm at scale 1).
-TEXT_SIZE = {"micro": 0.42, "tiny": 0.55, "small": 0.7, "medium": 1.0, "large": 1.3}
-
-#: The smallest lowercase the hand may write, mm: the tablet's pen is ~0.22 mm wide, and below
-#: ~1.5 mm an x-height's counters (a, e, o) fill in. At scale 1 the Archivist's x-height is
-#: 3.52 mm, so micro (0.42) writes only at its largest scale (1.48 mm), tiny at two (1.93, 1.55).
+#: The smallest lowercase the hand may write, mm: below ~1.5 mm an x-height's counters fill in.
 MIN_XHEIGHT_MM = 1.45
-FORGET_ID = "agentd_forget"
 
 
 #: Page units: a thinking spot that moves less than this is not sent again.

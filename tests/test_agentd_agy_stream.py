@@ -402,3 +402,17 @@ def test_service_answer_with_sketches_unpacks_reserved_pu(tmp_path: Path) -> Non
     ]
     assert len(sketch_begins) == 1
     assert rec.strokes > 0
+
+
+def test_generated_types_are_in_sync() -> None:
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    res = subprocess.run(
+        [sys.executable, str(root / "scripts" / "gen_types.py"), "--check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
