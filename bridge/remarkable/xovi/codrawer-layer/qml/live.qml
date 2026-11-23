@@ -110,7 +110,7 @@ Item {
     signal noAgent()
 
     readonly property int frameMs: 16      // 60 frames a second while live strokes play
-    readonly property int doodleMs: 100    // doodles keep 10 a second
+    readonly property int doodleMs: 50     // 20 frames a second for silky thinking doodles
     // playback runs this far behind the newest point (ms): adaptive, see "Live ink" above
     property real bufferMs: 25
     readonly property real bufferMin: 16
@@ -703,11 +703,11 @@ Item {
         return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
     }
 
-    // The idle nib: incommensurate sines (never repeating), slowly breathing in size.
+    // The idle nib: golden-ratio harmonic ribbon (never repeating), gently breathing.
     function penAt(d, tau) {
-        const R = thinkSize * 0.36 * (0.85 + 0.15 * Math.sin(tau * 0.21));
-        const x = 0.62 * Math.sin(1.0 * tau + 0.3) + 0.38 * Math.sin(Math.SQRT2 * 1.7 * tau);
-        const y = 0.62 * Math.sin(1.27 * tau) + 0.38 * Math.cos(1.618 * 1.3 * tau + 1.1);
+        const R = thinkSize * 0.38 * (0.82 + 0.18 * Math.sin(tau * 0.31));
+        const x = 0.58 * Math.sin(1.0 * tau + 0.3) + 0.42 * Math.sin(Math.SQRT2 * 1.618 * tau);
+        const y = 0.58 * Math.sin(1.27 * tau) + 0.42 * Math.cos(1.618 * 1.38 * tau + 0.9);
         return { x: d.cx + R * x, y: d.cy + R * y };
     }
 
@@ -761,14 +761,23 @@ Item {
         if (d.style === "pen") {
             const p = penAt(d, tau);
             d.trail.push(p);
-            const keep = Math.max(0, Math.round(24 * scale));
+            const keep = Math.max(0, Math.round(36 * scale));
             while (d.trail.length > keep) d.trail.shift();
             const n = d.trail.length;
             for (let i = 1; i < n; ++i) {
-                const w = 0.8 + 3.2 * (i / n);  // thin at the tail, full at the nib
+                const f = i / n;
+                const w = 0.7 + 3.4 * Math.pow(f, 1.4);  // calligraphic taper
                 out.push({ pts: [d.trail[i - 1], d.trail[i]], width: w });
             }
-            if (n && scale > 0) out.push({ dot: d.trail[n - 1], r: 3 * scale });
+            if (n && scale > 0) {
+                const tip = d.trail[n - 1];
+                out.push({ dot: tip, r: 3.1 * scale });
+                if (scale > 0.3) {
+                    const ox = tip.x + 10 * scale * Math.cos(tau * 3.4);
+                    const oy = tip.y + 10 * scale * Math.sin(tau * 3.4);
+                    out.push({ dot: { x: ox, y: oy }, r: 1.4 * scale });
+                }
+            }
         } else if (d.style === "drop") {
             const cycle = 5.0, ph = (tau % cycle) / cycle;
             const blobs = [];

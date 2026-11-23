@@ -556,9 +556,29 @@ class Agentd:
             if not user_strokes or sig in self._autopilot_seen:
                 return
             self._autopilot_seen.add(sig)
+            # Anchor Autopilot to the user's most recent handwriting cluster (spatial context).
+            recent = user_strokes[-12:]
+            rxs = [p[0] * m.w - m.w / 2 for st in recent for p in st.pts]
+            rys = [p[1] * m.h for st in recent for p in st.pts]
+            bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
+            if by1 - by0 > 260:
+                # Focus on the bottom-most recent line/cluster within 220 pu of the last stroke.
+                last_y = recent[-1].pts[-1][1] * m.h
+                tail = [
+                    st
+                    for st in recent
+                    if any(abs(p[1] * m.h - last_y) <= 220.0 for p in st.pts)
+                ]
+                if tail:
+                    rxs = [p[0] * m.w - m.w / 2 for st in tail for p in st.pts]
+                    rys = [p[1] * m.h for st in tail for p in st.pts]
+                    bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
+            bbox = [round(bx0, 1), round(by0, 1), round(bx1, 1), round(by1, 1)]
+            spot = [round(bx0, 1), round(by1 + 36.0, 1), round(bx1, 1), round(by1 + 236.0, 1)]
             log.info(
-                "autopilot: triggering ask_page on %s (%d user strokes)",
+                "autopilot: triggering ask_selection on %s cluster=%s (%d user strokes)",
                 m.page,
+                bbox,
                 len(user_strokes),
             )
             self.queue.submit(
@@ -566,9 +586,14 @@ class Agentd:
                 lambda: self.answer(
                     {
                         "t": "dock_action",
-                        "id": "ask_page",
+                        "id": "ask_selection",
                         "doc": m.doc,
                         "page": m.page,
+                        "bbox": bbox,
+                        "ink": bbox,
+                        "spot": spot,
+                        "contains_stroke": True,
+                        "items": len(user_strokes),
                         "source": "autopilot",
                     }
                 ),

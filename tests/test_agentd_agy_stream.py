@@ -110,4 +110,5 @@ def test_autopilot_triggers_after_user_stroke_end(tmp_path: Path) -> None:
 
     out = asyncio.run(go())
     assert len(out) == 1
-    assert out[0]["id"] == "ask_page" and out[0]["source"] == "autopilot"
+    assert out[0]["id"] == "ask_selection" and out[0]["source"] == "autopilot"
+    assert "bbox" in out[0] and "spot" in out[0]
