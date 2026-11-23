@@ -794,74 +794,58 @@ Item {
                 }
             }
         } else if (d.style === "drop") {
-            // Pixar-inspired living thought-cloud: volume-preserving squash-and-stretch
-            // silhouette, buoyant popping bubble-sparkles, and a playful comet-tailed nib sprite.
-            const sx = 1.0 + 0.085 * Math.sin(tau * 2.3);
-            const sy = 1.0 / sx;
-            const bobY = -3.0 * Math.sin(tau * 2.3 + 0.6);
-            const cloudPts = [];
-            const lobes = 7;
-            for (let i = 0; i <= 72; ++i) {
-                const th = (i / 72) * 2 * Math.PI;
-                const scallop = 0.82 + 0.20 * Math.abs(Math.cos(lobes * 0.5 * th + 0.35 * Math.sin(tau * 1.4)));
-                const n = noise(Math.cos(th) * 1.1 + tau * 0.55, Math.sin(th) * 1.1 - tau * 0.45);
-                const rx = 31.0 * scale * sx * scallop * (0.94 + 0.12 * n);
-                const ry = 22.0 * scale * sy * scallop * (0.94 + 0.12 * n);
-                cloudPts.push({ x: d.cx + rx * Math.cos(th), y: d.cy + bobY * scale + ry * Math.sin(th) });
-            }
-            out.push({ pts: cloudPts, width: 2.1 });
-            // Subtle inner billow arc for depth
-            const innerPts = [];
-            for (let i = 0; i <= 14; ++i) {
-                const th = -2.55 + (i / 14) * 1.25;
-                innerPts.push({
-                    x: d.cx + 19 * scale * sx * Math.cos(th),
-                    y: d.cy + bobY * scale + 13 * scale * sy * Math.sin(th)
-                });
-            }
-            out.push({ pts: innerPts, width: 1.25 });
-            // Playful comet-tailed nib sprite orbiting with springy follow-through
-            const ang = tau * 2.6 + 0.45 * Math.sin(tau * 1.3);
-            const sxPos = d.cx + 22 * scale * Math.cos(ang);
-            const syPos = d.cy + bobY * scale + 14 * scale * Math.sin(ang * 1.0);
-            d.trail.push({ x: sxPos, y: syPos });
-            const keepWisp = Math.max(0, Math.round(16 * scale));
-            while (d.trail.length > keepWisp) d.trail.shift();
+            // Persistent Navi-style ink fairy companion: figure-8 hover, 4 fluttering wings,
+            // pixie-dust comet ribbon, and twinkling star-sparkles.
+            const fx = d.cx + 18.0 * scale * Math.sin(tau * 2.1);
+            const fy = d.cy + 10.0 * scale * Math.sin(tau * 4.2 + 0.5) - 4.0 * scale;
+            d.trail.push({ x: fx, y: fy });
+            const keepTrail = Math.max(0, Math.round(18 * scale));
+            while (d.trail.length > keepTrail) d.trail.shift();
             for (let i = 1; i < d.trail.length; ++i) {
                 const f = i / d.trail.length;
-                out.push({ pts: [d.trail[i - 1], d.trail[i]], width: (0.5 + 2.2 * f * f) * scale });
+                out.push({ pts: [d.trail[i - 1], d.trail[i]], width: (0.45 + 1.9 * f * f) * scale });
             }
-            if (d.trail.length > 0 && scale > 0.25) {
-                out.push({ dot: d.trail[d.trail.length - 1], r: 3.1 * scale });
+            // Fairy core + soft aura ring
+            if (scale > 0.15) {
+                out.push({ dot: { x: fx, y: fy }, r: 4.2 * scale });
+                const aura = [];
+                const ar = (7.2 + 1.4 * Math.sin(tau * 5.0)) * scale;
+                for (let k = 0; k <= 16; ++k) {
+                    const a = (k / 16) * 2 * Math.PI;
+                    aura.push({ x: fx + ar * Math.cos(a), y: fy + ar * Math.sin(a) });
+                }
+                out.push({ pts: aura, width: 1.0 });
             }
-            // Buoyant rising thought-bubbles that pop into tiny star-sparkles at the apex
-            for (let b = 0; b < 4; ++b) {
-                const ph = ((tau * 0.52 + b * 0.25) % 1.0);
-                const bx = d.cx - 26 * scale + ph * 18 * scale + 4.0 * Math.sin(tau * 2.2 + b * 1.5);
-                const by = d.cy + 38 * scale - ph * 34 * scale;
-                if (ph < 0.84) {
-                    const br = (2.5 + 4.5 * Math.sin((ph / 0.84) * Math.PI)) * scale;
-                    if (br > 0.8) {
-                        const bRing = [];
-                        for (let k = 0; k <= 18; ++k) {
-                            const a = (k / 18) * 2 * Math.PI;
-                            bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
-                        }
-                        out.push({ pts: bRing, width: 1.4 + 0.6 * Math.sin((ph / 0.84) * Math.PI) });
-                    }
-                } else {
-                    const pop = (ph - 0.84) / 0.16;
-                    const sr = (3.0 + 4.5 * pop) * scale;
-                    for (let ray = 0; ray < 4; ++ray) {
-                        const ra = ray * Math.PI * 0.5 + 0.4;
-                        out.push({
-                            pts: [
-                                { x: bx + sr * 0.4 * Math.cos(ra), y: by + sr * 0.4 * Math.sin(ra) },
-                                { x: bx + sr * Math.cos(ra), y: by + sr * Math.sin(ra) }
-                            ],
-                            width: Math.max(0.6, 1.8 * (1 - pop))
-                        });
-                    }
+            // Four fluttering fairy wings (2 upper + 2 lower with slight phase lag)
+            const flapUp = 0.55 + 0.45 * Math.sin(tau * 22.0);
+            const flapLo = 0.55 + 0.45 * Math.sin(tau * 22.0 - 0.55);
+            for (let side = -1; side <= 1; side += 2) {
+                const uw = [];
+                for (let i = 0; i <= 14; ++i) {
+                    const t = (i / 14) * 2 * Math.PI;
+                    const wx = side * (12.0 * flapUp * Math.sin(t * 0.5) + 8.0 * flapUp * (1 - Math.cos(t))) * 0.65 * scale;
+                    const wy = (-13.0 * Math.sin(t) - 5.0 * Math.sin(t * 0.5)) * scale;
+                    uw.push({ x: fx + wx, y: fy + wy });
+                }
+                out.push({ pts: uw, width: 1.65 });
+                const lw = [];
+                for (let i = 0; i <= 12; ++i) {
+                    const t = (i / 12) * 2 * Math.PI;
+                    const wx = side * (9.0 * flapLo * (1 - Math.cos(t))) * 0.55 * scale;
+                    const wy = (9.5 * Math.sin(t) + 3.0) * scale;
+                    lw.push({ x: fx + wx, y: fy + wy });
+                }
+                out.push({ pts: lw, width: 1.35 });
+            }
+            // Twinkling pixie-dust sparkles along the wake
+            for (let b = 0; b < 3; ++b) {
+                const ph = ((tau * 0.65 + b * 0.333) % 1.0);
+                const sx = fx - 14 * scale * Math.cos(tau * 2.1) + (b - 1) * 11 * scale;
+                const sy = fy + 16 * scale - ph * 28 * scale;
+                const sr = (3.4 * Math.sin(ph * Math.PI)) * scale;
+                if (sr > 0.8) {
+                    out.push({ pts: [{ x: sx - sr, y: sy }, { x: sx + sr, y: sy }], width: 1.2 });
+                    out.push({ pts: [{ x: sx, y: sy - sr }, { x: sx, y: sy + sr }], width: 1.2 });
                 }
             }
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark

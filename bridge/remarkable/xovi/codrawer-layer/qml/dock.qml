@@ -113,6 +113,9 @@ Item {
         tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
                   'Epaper.ScreenModeItem { objectName: "codrawer-dock-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
                   panel, "codrawer-dock-screenmode");
+        tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
+                  'Epaper.ScreenModeItem { objectName: "codrawer-studio-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
+                  studioPanel, "codrawer-studio-screenmode");
     }
 
     Rectangle {
@@ -328,27 +331,20 @@ Item {
                         ctx.lineWidth = 1.2;
                         ctx.beginPath(); ctx.arc(11 + 2 * Math.sin(ph), 20 - bph * 13, 1.5 + 1.4 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
                     } else {
-                        // Live miniature squash-and-stretch thought-cloud + rising bubbles
-                        const sx = 1.0 + 0.08 * Math.sin(ph * 1.3);
-                        const sy = 1.0 / sx;
-                        const by = -1.2 * Math.sin(ph * 1.3 + 0.5);
-                        ctx.lineWidth = 1.6;
-                        ctx.beginPath();
-                        for (let i = 0; i <= 36; ++i) {
-                            const th = (i / 36) * 2 * Math.PI;
-                            const sc = 0.84 + 0.18 * Math.abs(Math.cos(3.5 * th + 0.3 * Math.sin(ph * 0.8)));
-                            const px = 16.5 + 10.5 * sx * sc * Math.cos(th);
-                            const py = 13.5 + by + 7.5 * sy * sc * Math.sin(th);
-                            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                        // Live miniature fluttering Navi fairy
+                        const fx = 16 + 3.0 * Math.sin(ph * 1.1);
+                        const fy = 16 + 2.0 * Math.sin(ph * 2.2);
+                        const flap = 0.5 + 0.5 * Math.sin(ph * 5.0);
+                        ctx.lineWidth = 1.5;
+                        for (let s = -1; s <= 1; s += 2) {
+                            ctx.beginPath();
+                            ctx.moveTo(fx, fy);
+                            ctx.quadraticCurveTo(fx + s * (11 * flap + 3), fy - 11, fx + s * (6 * flap + 2), fy - 1);
+                            ctx.quadraticCurveTo(fx + s * (8 * flap + 2), fy + 8, fx, fy + 2);
+                            ctx.stroke();
                         }
-                        ctx.closePath();
-                        ctx.stroke();
-                        ctx.beginPath();
-                        ctx.arc(16.5 + 6.5 * Math.cos(ph * 1.6), 13.5 + by + 4.5 * Math.sin(ph * 1.6), 1.8, 0, 2 * Math.PI);
-                        ctx.fill();
-                        const bph = (ph * 0.35) % 1.0;
-                        ctx.lineWidth = 1.2;
-                        ctx.beginPath(); ctx.arc(6 + bph * 5, 28 - bph * 8, 1.2 + 1.2 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
+                        ctx.beginPath(); ctx.arc(fx, fy, 2.8, 0, 2 * Math.PI); ctx.fill();
+                        star4(fx - 7 * Math.cos(ph * 1.1), fy + 7, 2.0 + 0.8 * Math.sin(ph * 2.0), 0.7);
                     }
                 } else if (gid === "agentd_color") {
                     // Inkwell droplet + highlight glint
