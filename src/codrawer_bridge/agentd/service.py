@@ -1190,7 +1190,7 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "writing_speed": (SPEEDS, "fast"),
     "autopilot": (("off", "on"), "on"),
     "persona": (PERSONAS, "archivist"),
-    "thinking_style": (THINKING_STYLES, "pen"),
+    "thinking_style": (THINKING_STYLES, "drop"),
 }
 
 #: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried

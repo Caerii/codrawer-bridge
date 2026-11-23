@@ -776,43 +776,61 @@ Item {
                     const ox = tip.x + 10 * scale * Math.cos(tau * 3.4);
                     const oy = tip.y + 10 * scale * Math.sin(tau * 3.4);
                     out.push({ dot: { x: ox, y: oy }, r: 1.4 * scale });
-                    // Effervescent rising thought-bubbles (3 phased rings)
-                    for (let b = 0; b < 3; ++b) {
-                        const ph = ((tau * 0.42 + b * 0.333) % 1.0);
-                        const bx = d.cx + (b - 1) * 14 * scale + 6 * Math.sin(tau * 1.9 + b * 2.1);
-                        const by = d.cy + 16 * scale - ph * 48 * scale;
-                        const br = (2.8 + 4.2 * Math.sin(ph * Math.PI)) * scale;
+                    // Effervescent rising thought-bubbles (4 phased rings)
+                    for (let b = 0; b < 4; ++b) {
+                        const ph = ((tau * 0.48 + b * 0.25) % 1.0);
+                        const bx = d.cx + (b - 1.5) * 14 * scale + 7 * Math.sin(tau * 2.1 + b * 1.9);
+                        const by = d.cy + 22 * scale - ph * 58 * scale;
+                        const br = (3.8 + 5.6 * Math.sin(ph * Math.PI)) * scale;
                         if (br > 0.9) {
                             const ring = [];
-                            for (let k = 0; k <= 14; ++k) {
-                                const a = (k / 14) * 2 * Math.PI;
+                            for (let k = 0; k <= 16; ++k) {
+                                const a = (k / 16) * 2 * Math.PI;
                                 ring.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
                             }
-                            out.push({ pts: ring, width: 1.2 + 0.6 * Math.sin(ph * Math.PI) });
+                            out.push({ pts: ring, width: 1.5 + 0.8 * Math.sin(ph * Math.PI) });
                         }
                     }
                 }
             }
         } else if (d.style === "drop") {
-            const cycle = 5.0, ph = (tau % cycle) / cycle;
-            const blobs = [];
-            if (ph < 0.6) {
-                blobs.push({ x: d.cx, y: d.cy, r: 4 + 20 * Math.sin(ph / 0.6 * Math.PI / 2) });
-            } else {
-                const q = (ph - 0.6) / 0.4, dd = 28 * q, r = 18 * (1 - q) * (1 - 0.4 * q);
-                blobs.push({ x: d.cx - dd, y: d.cy + dd * 0.3, r: r });
-                blobs.push({ x: d.cx + dd * 0.9, y: d.cy - dd * 0.4, r: r * 0.8 });
-            }
-            for (let b = 0; b < blobs.length; ++b) {
-                const B = blobs[b], pts = [];
-                if (B.r * scale < 0.8) continue;
-                for (let i = 0; i <= 36; ++i) {
-                    const th = i / 36 * 2 * Math.PI;
-                    const n = noise(Math.cos(th) * 1.4 + tau * 0.5 + b * 7, Math.sin(th) * 1.4 - tau * 0.4);
-                    const r = B.r * scale * (0.82 + 0.36 * n);
-                    pts.push({ x: B.x + r * Math.cos(th), y: B.y + r * Math.sin(th) });
+            // Breathing scalloped thought-cloud + rising effervescent thought-bubbles
+            const breath = 1.0 + 0.08 * Math.sin(tau * 2.2);
+            const puffs = [
+                { dx: 0, dy: -2, r: 17 },
+                { dx: -16, dy: 4, r: 12.5 },
+                { dx: 16, dy: 3, r: 13 },
+                { dx: -9, dy: -11, r: 12 },
+                { dx: 10, dy: -10, r: 11.5 }
+            ];
+            for (let p = 0; p < puffs.length; ++p) {
+                const P = puffs[p];
+                const px = d.cx + P.dx * scale * breath + 2.0 * Math.sin(tau * 1.6 + p * 1.3);
+                const py = d.cy + P.dy * scale * breath + 1.8 * Math.cos(tau * 1.4 + p * 1.1);
+                const pr = P.r * scale * breath;
+                if (pr < 1.0) continue;
+                const ring = [];
+                for (let i = 0; i <= 20; ++i) {
+                    const th = (i / 20) * 2 * Math.PI;
+                    const n = noise(Math.cos(th) * 1.1 + tau * 0.45 + p * 3, Math.sin(th) * 1.1 - tau * 0.35);
+                    const rr = pr * (0.90 + 0.18 * n);
+                    ring.push({ x: px + rr * Math.cos(th), y: py + rr * Math.sin(th) });
                 }
-                out.push({ fill: pts });
+                out.push({ pts: ring, width: 1.8 });
+            }
+            for (let b = 0; b < 4; ++b) {
+                const ph = ((tau * 0.45 + b * 0.25) % 1.0);
+                const bx = d.cx - 22 * scale + ph * 14 * scale + 4 * Math.sin(tau * 2.0 + b);
+                const by = d.cy + 34 * scale - ph * 34 * scale;
+                const br = (2.6 + 4.4 * Math.sin(ph * Math.PI)) * scale;
+                if (br > 0.8) {
+                    const bRing = [];
+                    for (let k = 0; k <= 14; ++k) {
+                        const a = (k / 14) * 2 * Math.PI;
+                        bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
+                    }
+                    out.push({ pts: bRing, width: 1.4 + 0.6 * Math.sin(ph * Math.PI) });
+                }
             }
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark
             const dur = 1.8, hold = 0.7, cycle = 2 * dur + hold + 0.4;

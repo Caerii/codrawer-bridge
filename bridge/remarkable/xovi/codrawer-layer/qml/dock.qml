@@ -1,11 +1,12 @@
-// The codrawer dock: an illuminated, Victorian-Gothic two-column e-paper toolbar panel.
+// The codrawer dock: an illuminated, Victorian-Gothic three-column e-paper toolbar panel.
 //
 // Left column (`codrawer-dock-panel`): actions & status (`codrawer status`, `Agent ink on/off`,
 // `Practice coach`, `Ask about this page`, `Ask about selection`, `Forget this page's thread`,
 // `Responder` health, and `status` footer).
-// Right companion column (`codrawer-dock-studio`): personality & animation controls (`Persona`,
-// `Thinking`, `Writing speed`, `Text size`, `Spacing`, `Autopilot`, `Memory`, `Model`), shown
-// beside the left panel whenever any studio entries exist.
+// Middle column (`codrawer-dock-studio`): personality & motion controls (`Persona`, `Thinking`,
+// `Writing speed`, `Text size`, `Spacing`).
+// Right column (`codrawer-dock-system`): intelligence & system controls (`Autopilot`, `Memory`,
+// `Model`).
 import QtQuick
 
 Item {
@@ -38,13 +39,17 @@ Item {
     function isStudioId(id) {
         return id === "agentd_persona" || id === "agentd_thinking_style" ||
                id === "agentd_writing_speed" || id === "agentd_text_size" ||
-               id === "agentd_spacing" || id === "agentd_autopilot" ||
-               id === "agentd_memory" || id === "agentd_model";
+               id === "agentd_spacing";
+    }
+    function isSystemId(id) {
+        return id === "agentd_autopilot" || id === "agentd_memory" ||
+               id === "agentd_model";
     }
     readonly property var leftEntries: {
         const out = [];
         for (let i = 0; i < entries.length; ++i) {
-            if (!isStudioId(entries[i].id || "")) out.push(entries[i]);
+            const eid = entries[i].id || "";
+            if (!isStudioId(eid) && !isSystemId(eid)) out.push(entries[i]);
         }
         return out;
     }
@@ -52,6 +57,13 @@ Item {
         const out = [];
         for (let i = 0; i < entries.length; ++i) {
             if (isStudioId(entries[i].id || "")) out.push(entries[i]);
+        }
+        return out;
+    }
+    readonly property var systemEntries: {
+        const out = [];
+        for (let i = 0; i < entries.length; ++i) {
+            if (isSystemId(entries[i].id || "")) out.push(entries[i]);
         }
         return out;
     }
@@ -486,7 +498,7 @@ Item {
             const minLocalY = margin - root.btnY;
             return Math.max(minLocalY, Math.min(0, maxLocalY));
         }
-        width: 560
+        width: 470
         height: rows.height
         color: "white"
 
@@ -621,7 +633,7 @@ Item {
             const minLocalY = margin - root.btnY;
             return Math.max(minLocalY, Math.min(panel.y, maxLocalY));
         }
-        width: 500
+        width: 430
         height: studioRows.height
         color: "white"
 
@@ -663,6 +675,68 @@ Item {
             Repeater {
                 model: root.studioEntries
                 delegate: DockRow { width: studioRows.width; listRef: root.studioEntries }
+            }
+        }
+
+        OrnateFrame { z: 10 }
+    }
+
+    // ── Third Column: Intelligence & System Controls ────────────────────────────────────────────
+    Rectangle {
+        id: systemPanel
+        objectName: "codrawer-dock-system"
+        z: 3
+        visible: root.open && root.systemEntries.length > 0
+        enabled: root.open && root.systemEntries.length > 0
+        x: studioPanel.visible ? (studioPanel.x + studioPanel.width + 16) : (panel.x + panel.width + 16)
+        y: {
+            const margin = 24;
+            const maxLocalY = root.winH - height - margin - root.btnY;
+            const minLocalY = margin - root.btnY;
+            return Math.max(minLocalY, Math.min(panel.y, maxLocalY));
+        }
+        width: 430
+        height: systemRows.height
+        color: "white"
+
+        Rectangle { z: -1; x: 6; y: 6; width: parent.width; height: parent.height; color: "black" }
+        MultiPointTouchArea { anchors.fill: parent }
+
+        Column {
+            id: systemRows
+            width: systemPanel.width
+
+            Rectangle {
+                width: systemRows.width
+                height: 68
+                color: "white"
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: 22
+                    spacing: 1
+                    Text {
+                        text: "cortex"
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 25
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 1.8
+                        color: "black"
+                    }
+                    Text {
+                        text: "AUTOPILOT · MODEL"
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
+                        font.letterSpacing: 2.0
+                        color: "black"
+                    }
+                }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
+            }
+
+            Repeater {
+                model: root.systemEntries
+                delegate: DockRow { width: systemRows.width; listRef: root.systemEntries }
             }
         }
 
