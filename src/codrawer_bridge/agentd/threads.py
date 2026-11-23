@@ -76,6 +76,11 @@ class ThreadStore:
         self.dir = root / "threads"
         self.db_path = root / "threads.db"
         self._conn: sqlite3.Connection | None = None
+        self._page_cache: dict[tuple[str, str], list[Exchange]] = {}
+        self._digest_cache: dict[tuple[str, str], str] = {}
+        self._stats_cache: dict[str, tuple[int, int]] = {}
+        self._settings_cache: dict[str, object] | None = None
+        self._search_cache: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
     def _db(self) -> sqlite3.Connection:
         if self._conn is not None:
@@ -110,6 +115,8 @@ class ThreadStore:
                 PRIMARY KEY (doc, page)
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS exchanges_fts USING fts5(
+                doc,
+                pinned,
                 seen,
                 answer,
                 content='exchanges',
@@ -117,21 +124,60 @@ class ThreadStore:
                 tokenize='porter unicode61'
             );
             CREATE TRIGGER IF NOT EXISTS exchanges_ai AFTER INSERT ON exchanges BEGIN
-                INSERT INTO exchanges_fts(rowid, seen, answer)
-                VALUES (new.id, new.seen, new.answer);
+                INSERT INTO exchanges_fts(rowid, doc, pinned, seen, answer)
+                VALUES (new.id, new.doc, CAST(new.pinned AS TEXT), new.seen, new.answer);
             END;
             CREATE TRIGGER IF NOT EXISTS exchanges_ad AFTER DELETE ON exchanges BEGIN
-                INSERT INTO exchanges_fts(exchanges_fts, rowid, seen, answer)
-                VALUES('delete', old.id, old.seen, old.answer);
+                INSERT INTO exchanges_fts(exchanges_fts, rowid, doc, pinned, seen, answer)
+                VALUES('delete', old.id, old.doc, CAST(old.pinned AS TEXT), old.seen, old.answer);
             END;
             CREATE TRIGGER IF NOT EXISTS exchanges_au AFTER UPDATE ON exchanges BEGIN
-                INSERT INTO exchanges_fts(exchanges_fts, rowid, seen, answer)
-                VALUES('delete', old.id, old.seen, old.answer);
-                INSERT INTO exchanges_fts(rowid, seen, answer)
-                VALUES (new.id, new.seen, new.answer);
+                INSERT INTO exchanges_fts(exchanges_fts, rowid, doc, pinned, seen, answer)
+                VALUES('delete', old.id, old.doc, CAST(old.pinned AS TEXT), old.seen, old.answer);
+                INSERT INTO exchanges_fts(rowid, doc, pinned, seen, answer)
+                VALUES (new.id, new.doc, CAST(new.pinned AS TEXT), new.seen, new.answer);
             END;
             """
         )
+        ver = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if ver < 2:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS exchanges_ai;
+                DROP TRIGGER IF EXISTS exchanges_ad;
+                DROP TRIGGER IF EXISTS exchanges_au;
+                DROP TABLE IF EXISTS exchanges_fts;
+                CREATE VIRTUAL TABLE exchanges_fts USING fts5(
+                    doc,
+                    pinned,
+                    seen,
+                    answer,
+                    content='exchanges',
+                    content_rowid='id',
+                    tokenize='porter unicode61'
+                );
+                CREATE TRIGGER exchanges_ai AFTER INSERT ON exchanges BEGIN
+                    INSERT INTO exchanges_fts(rowid, doc, pinned, seen, answer)
+                    VALUES (new.id, new.doc, CAST(new.pinned AS TEXT), new.seen, new.answer);
+                END;
+                CREATE TRIGGER exchanges_ad AFTER DELETE ON exchanges BEGIN
+                    INSERT INTO exchanges_fts(exchanges_fts, rowid, doc, pinned, seen, answer)
+                    VALUES(
+                        'delete', old.id, old.doc, CAST(old.pinned AS TEXT), old.seen, old.answer
+                    );
+                END;
+                CREATE TRIGGER exchanges_au AFTER UPDATE ON exchanges BEGIN
+                    INSERT INTO exchanges_fts(exchanges_fts, rowid, doc, pinned, seen, answer)
+                    VALUES(
+                        'delete', old.id, old.doc, CAST(old.pinned AS TEXT), old.seen, old.answer
+                    );
+                    INSERT INTO exchanges_fts(rowid, doc, pinned, seen, answer)
+                    VALUES (new.id, new.doc, CAST(new.pinned AS TEXT), new.seen, new.answer);
+                END;
+                INSERT INTO exchanges_fts(exchanges_fts) VALUES('rebuild');
+                PRAGMA user_version = 2;
+                """
+            )
         self._conn = conn
         self._migrate_legacy_json(conn)
         return conn
@@ -184,19 +230,21 @@ class ThreadStore:
 
     def setting(self, key: str, default):
         """One value from ``settings.json`` (the user's choices from the dock), or ``default``."""
-        try:
-            data = json.loads((self.root / "settings.json").read_text(encoding="utf-8"))
-            return data.get(key, default)
-        except (OSError, ValueError, AttributeError):
-            return default
+        if self._settings_cache is None:
+            try:
+                data = json.loads((self.root / "settings.json").read_text(encoding="utf-8"))
+                self._settings_cache = data if isinstance(data, dict) else {}
+            except (OSError, ValueError, AttributeError):
+                self._settings_cache = {}
+        return self._settings_cache.get(key, default)
 
     def set_setting(self, key: str, value) -> None:
         path = self.root / "settings.json"
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
+        if self._settings_cache is None:
+            self.setting(key, None)
+        data = dict(self._settings_cache or {})
         data[key] = value
+        self._settings_cache = data
         self.root.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data), encoding="utf-8")
 
@@ -214,23 +262,31 @@ class ThreadStore:
         """The page's active verbatim thread (oldest first); empty when memory is off."""
         if not self.memory or not page:
             return []
+        key = (doc, page)
+        if key in self._page_cache:
+            return list(self._page_cache[key])
         rows = self._db().execute(
             "SELECT seen, answer, ts, pinned FROM exchanges "
             "WHERE doc = ? AND page = ? ORDER BY ts ASC, id ASC",
             (doc, page),
         ).fetchall()
-        return [
-            Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])) for r in rows
-        ]
+        out = [Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])) for r in rows]
+        self._page_cache[key] = out
+        return list(out)
 
     def page_digest(self, doc: str, page: str) -> str:
         """The compacted meso-level digest of exchanges previously evicted from ``page``."""
         if not self.memory or not page:
             return ""
+        key = (doc, page)
+        if key in self._digest_cache:
+            return self._digest_cache[key]
         row = self._db().execute(
             "SELECT digest FROM pages WHERE doc = ? AND page = ?", (doc, page)
         ).fetchone()
-        return str(row["digest"]) if row else ""
+        val = str(row["digest"]) if row else ""
+        self._digest_cache[key] = val
+        return val
 
     def _append_digest(self, conn: sqlite3.Connection, doc: str, page: str, line: str) -> None:
         if not line:
@@ -283,6 +339,10 @@ class ThreadStore:
                     conn.execute("DELETE FROM exchanges WHERE id = ?", (victim["id"],))
                     total_chars -= len(victim["seen"]) + len(victim["answer"])
                     rows = [r for r in rows if r["id"] != victim["id"]]
+        self._page_cache.pop((doc, page), None)
+        self._digest_cache.pop((doc, page), None)
+        self._stats_cache.pop(doc, None)
+        self._search_cache.clear()
 
     def pin_last(self, doc: str, page: str, note: str = "") -> bool:
         """Mark the latest exchange on ``(doc, page)`` (or add a pinned note) as durable."""
@@ -296,6 +356,8 @@ class ThreadStore:
                     "VALUES (?, ?, 'pinned', ?, ?, 1)",
                     (doc, page, note.strip()[:600], time.time()),
                 )
+                self._page_cache.pop((doc, page), None)
+                self._stats_cache.pop(doc, None)
                 return True
             row = conn.execute(
                 "SELECT id FROM exchanges WHERE doc = ? AND page = ? "
@@ -305,6 +367,8 @@ class ThreadStore:
             if row is None:
                 return False
             conn.execute("UPDATE exchanges SET pinned = 1 WHERE id = ?", (row["id"],))
+            self._page_cache.pop((doc, page), None)
+            self._stats_cache.pop(doc, None)
             return True
 
     def forget(self, doc: str, page: str) -> bool:
@@ -317,6 +381,10 @@ class ThreadStore:
             c2 = conn.execute(
                 "DELETE FROM pages WHERE doc = ? AND page = ?", (doc, page)
             ).rowcount
+        self._page_cache.pop((doc, page), None)
+        self._digest_cache.pop((doc, page), None)
+        self._stats_cache.pop(doc, None)
+        self._search_cache.clear()
         return bool(c1 or c2)
 
     # ── macro & meta (FTS5 BM25 + half-life recency + pin retrieval) ───────────────────────
@@ -331,37 +399,43 @@ class ThreadStore:
         limit: int = 3,
         pinned_only: bool = False,
     ) -> list[tuple[str, str]]:
+        cache_key = (doc_filter, exclude_doc, exclude_page, query, limit, pinned_only)
+        if cache_key in self._search_cache:
+            return list(self._search_cache[cache_key])
         conn = self._db()
         now = time.time()
         candidates: dict[int, tuple[float, Exchange]] = {}
 
-        # Stage 1a: FTS5 BM25 lexical/symbol candidates
+        # Stage 1a: Pre-scoped FTS5 postings intersection without full-corpus bm25 sort
         fts_q = _sanitize_fts_query(query)
         if fts_q:
-            sql = (
-                "SELECT e.id, e.seen, e.answer, e.ts, e.pinned, bm25(exchanges_fts) AS rank "
-                "FROM exchanges_fts f JOIN exchanges e ON e.id = f.rowid "
-                "WHERE exchanges_fts MATCH ? "
-            )
-            params: list[object] = [fts_q]
+            match_expr = f"{{seen answer}} : ({fts_q})"
             if doc_filter:
-                sql += "AND e.doc = ? "
-                params.append(doc_filter)
+                safe_doc = doc_filter.replace('"', "")
+                match_expr = f'doc : "{safe_doc}" AND ({match_expr})'
+            if pinned_only:
+                match_expr = f"pinned : 1 AND ({match_expr})"
+            sql = (
+                "WITH hits AS ("
+                "  SELECT rowid AS id FROM exchanges_fts WHERE exchanges_fts MATCH ? LIMIT 32"
+                ") "
+                "SELECT e.id, e.seen, e.answer, e.ts, e.pinned "
+                "FROM hits JOIN exchanges e ON e.id = hits.id "
+                "WHERE 1=1 "
+            )
+            params: list[object] = [match_expr]
             if exclude_doc:
                 sql += "AND e.doc != ? "
                 params.append(exclude_doc)
             if exclude_page:
                 sql += "AND e.page != ? "
                 params.append(exclude_page)
-            if pinned_only:
-                sql += "AND e.pinned = 1 "
-            sql += "ORDER BY rank LIMIT 16"
             try:
                 rows = conn.execute(sql, params).fetchall()
-                raw_ranks = [-float(r["rank"]) for r in rows]
-                max_r = max(raw_ranks, default=1.0) or 1.0
-                for r, pos_r in zip(rows, raw_ranks, strict=True):
-                    bm25_norm = max(0.0, min(1.0, pos_r / max_r))
+                q_terms = {t.lower() for t in fts_q.split(" OR ") if t}
+                for r in rows:
+                    hay = f"{r['seen']} {r['answer']}".lower()
+                    bm25_norm = min(1.0, sum(1 for t in q_terms if t in hay) / max(1, len(q_terms)))
                     rec = _recency_score(float(r["ts"]), now)
                     score = (10.0 if r["pinned"] else 0.0) + 0.65 * bm25_norm + 0.35 * rec
                     candidates[int(r["id"])] = (
@@ -401,7 +475,11 @@ class ThreadStore:
         ranked = sorted(candidates.values(), key=lambda item: item[0], reverse=True)
         top = [ex for _, ex in ranked[:limit]]
         top.sort(key=lambda e: e.ts)
-        return [(e.seen, e.answer) for e in top]
+        res = [(e.seen, e.answer) for e in top]
+        if len(self._search_cache) >= 128:
+            self._search_cache.clear()
+        self._search_cache[cache_key] = res
+        return list(res)
 
     def notebook_context(
         self, doc: str, exclude_page: str, query: str = "", limit: int = 3
@@ -431,9 +509,13 @@ class ThreadStore:
         """Return ``(page_count, pinned_count)`` for ``doc``."""
         if not self.memory or not doc:
             return 0, 0
+        if doc in self._stats_cache:
+            return self._stats_cache[doc]
         row = self._db().execute(
             "SELECT COUNT(DISTINCT page) AS pages, COALESCE(SUM(pinned), 0) AS pins "
             "FROM exchanges WHERE doc = ?",
             (doc,),
         ).fetchone()
-        return (int(row["pages"]), int(row["pins"])) if row else (0, 0)
+        res = (int(row["pages"]), int(row["pins"])) if row else (0, 0)
+        self._stats_cache[doc] = res
+        return res
