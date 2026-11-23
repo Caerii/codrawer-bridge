@@ -203,6 +203,8 @@ class Agentd:
         self._joined_at = 0.0  # monotonic s of the latest join (replayed taps are not taps)
         self._last_tap: dict[tuple, float] = {}  # ask signature -> monotonic s (debounce)
         self._open_status: dict[str, tuple] = {}  # agent_status id -> page-unit box, until done
+        self._autopilot_task: asyncio.Task | None = None
+        self._autopilot_seen: set[tuple[str, int]] = set()
         self.health = HealthMonitor(self)
 
     @property
@@ -303,17 +305,29 @@ class Agentd:
 
     def handle(self, msg: dict[str, Any]) -> None:
         self.model.observe(msg)
-        if msg.get("t") == "settings" and isinstance(msg.get("set"), dict):
+        mt = msg.get("t")
+        if mt in ("stroke_begin", "stroke_pts") and self._autopilot_task is not None:
+            self._autopilot_task.cancel()
+        if mt == "stroke_end" and self.setting("autopilot") == "on":
+            self._schedule_autopilot()
+        if mt == "settings" and isinstance(msg.get("set"), dict):
             self._spawn(self._apply_settings(msg["set"]))
             return
-        if msg.get("t") == "dock_query":
+        if mt == "dock_query":
             self._spawn(self._dock_entries())
             return
-        if msg.get("t") != "dock_action":
+        if mt != "dock_action":
             return
         aid = msg.get("id")
         if aid == "agent_ink":
             self._ink_checked = 0.0  # the user toggled it: read the setting again next time
+            return
+        if aid == AUTOPILOT_ID:
+            nxt = "off" if self.setting("autopilot") == "on" else "on"
+            self.threads.set_setting("autopilot", nxt)
+            if nxt == "off" and self._autopilot_task is not None:
+                self._autopilot_task.cancel()
+            self._spawn(self._dock_entries())
             return
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
@@ -377,6 +391,12 @@ class Agentd:
                         "label": "Memory",
                         "badge": "on" if on else "off",
                         "hint": "Asks on the same page follow on from each other",
+                    },
+                    {
+                        "id": AUTOPILOT_ID,
+                        "label": "Autopilot",
+                        "badge": "on" if self.setting("autopilot") == "on" else "off",
+                        "hint": "Proactively respond after a 3.5 s writing pause",
                     },
                     {"id": FORGET_ID, "label": "Forget this page's thread"},
                     {
@@ -504,6 +524,37 @@ class Agentd:
         log.info("dock %s: %s", MODEL_ID, note)
         await self._dock_entries()
         await self._glasses(note, note)
+
+    def _schedule_autopilot(self) -> None:
+        if self._autopilot_task is not None:
+            self._autopilot_task.cancel()
+
+        async def _wait_and_ask() -> None:
+            await asyncio.sleep(4.0)
+            if self.setting("autopilot") != "on" or self.health.in_flight > 0:
+                return
+            m = self.model
+            if not m.page:
+                return
+            user_strokes = [st for st in m.ink() if not st.id.startswith("agentd_")]
+            sig = (m.page, len(user_strokes))
+            if not user_strokes or sig in self._autopilot_seen:
+                return
+            self._autopilot_seen.add(sig)
+            self.queue.submit(
+                ("autopilot", m.page),
+                self.answer(
+                    {
+                        "t": "dock_action",
+                        "id": "ask_page",
+                        "doc": m.doc,
+                        "page": m.page,
+                        "source": "autopilot",
+                    }
+                ),
+            )
+
+        self._autopilot_task = self._spawn(_wait_and_ask())
 
     async def _on_memory_entry(self, msg: dict[str, Any]) -> None:
         if msg.get("id") == MEMORY_ID:
@@ -1065,6 +1116,7 @@ RETRY_MIN_S = 10.0
 
 #: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
 MEMORY_ID = "agentd_memory"
+AUTOPILOT_ID = "agentd_autopilot"
 MODEL_ID = "agentd_model"
 SIZE_ID = "agentd_text_size"
 SPACING_ID = "agentd_spacing"
@@ -1079,6 +1131,7 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
     "spacing": (SPACINGS, "compact"),
     "writing_speed": (SPEEDS, "fast"),
+    "autopilot": (("off", "on"), "on"),
 }
 
 #: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried

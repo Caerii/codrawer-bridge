@@ -101,11 +101,13 @@ def mark_messages(
         t0 = pts[0][3]
         t1 = pts[-1][3]
         start_msg = {
-            "t": "stroke_start",
+            "t": "stroke_begin",
             "id": sid,
+            "layer": "ai",
             "brush": "pen",
             "color": MARK_COLOR,
             "author": author,
+            "ts": int(t0),
         }
         msgs.append((t0, start_msg))
         msgs.append((t0 + 20.0, {"t": "stroke_pts", "id": sid, "pts": pts}))

@@ -77,6 +77,6 @@ def test_marks_extraction_and_strokes() -> None:
     assert clean_answer(raw) == "Nice insight here."
 
     msgs = mark_messages(marks, (100.0, 200.0, 500.0, 400.0), 1620.0, 2160.0, run="99")
-    assert any(m["t"] == "stroke_start" for _, m in msgs)
+    assert any(m["t"] == "stroke_begin" for _, m in msgs)
     assert any(m["t"] == "stroke_pts" for _, m in msgs)
     assert any(m["t"] == "stroke_end" for _, m in msgs)

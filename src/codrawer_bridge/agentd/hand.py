@@ -78,7 +78,7 @@ class Layout:
 
 def apply_prosody(lays: list[Layout]) -> list[Layout]:
     """
-    Shape per-stroke pressure envelopes for more musical, dynamical ink: a gentle nib attack,
+    Shape per-stroke pressure envelopes for vivid calligraphic dynamism: crisp hairline attack,
     expressive mid-stroke swell (richer on longer strokes), and a tapered feather lift-off.
     """
     for lay in lays:
@@ -86,16 +86,16 @@ def apply_prosody(lays: list[Layout]) -> list[Layout]:
             n = len(pts)
             if n < 3:
                 continue
-            swell = 1.12 if n >= 10 else 1.04
+            swell = 1.35 if n >= 8 else 1.18
             for i, pt in enumerate(pts):
                 u = i / (n - 1)
-                if u < 0.15:
-                    env = 0.84 + 0.16 * (u / 0.15)
-                elif u > 0.82:
-                    env = 1.0 - 0.28 * ((u - 0.82) / 0.18)
+                if u < 0.18:
+                    env = 0.25 + 0.75 * (u / 0.18)
+                elif u > 0.78:
+                    env = 1.0 - 0.78 * ((u - 0.78) / 0.22)
                 else:
-                    env = swell - 0.06 * abs(u - 0.5)
-                pt[2] = round(max(0.08, min(1.0, pt[2] * env)), 3)
+                    env = swell - 0.15 * abs(u - 0.5)
+                pt[2] = round(max(0.06, min(1.0, pt[2] * env)), 3)
     return lays
 
 
@@ -324,7 +324,7 @@ def to_messages(
     id_prefix: str = "agentd_",
     color: str | None = None,
     author: str | None = None,
-    batch_ms: float = 50.0,
+    batch_ms: float = 20.0,
 ) -> list[tuple[float, dict]]:
     """``(due_ms, message)`` pairs for every stroke: begin, point batches, end."""
     ox, oy = origin

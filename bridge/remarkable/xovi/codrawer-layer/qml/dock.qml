@@ -544,6 +544,16 @@ Item {
                                 ctx.bezierCurveTo(9, 25, 6, 27, 4, 25);
                                 ctx.stroke();
                                 star4(24.5, 23.5, 5.5, 1.6);
+                            } else if (gid === "agentd_autopilot") {
+                                // Autonomous orbital spark (ring + orbiting satellite + center star)
+                                ctx.lineWidth = 1.4;
+                                ctx.beginPath();
+                                ctx.arc(16, 16, 10, 0.2 * Math.PI, 1.8 * Math.PI);
+                                ctx.stroke();
+                                ctx.beginPath();
+                                ctx.arc(24.5, 10.5, 2.2, 0, 2 * Math.PI);
+                                ctx.fill();
+                                star4(16, 16, 4.5, 1.5);
                             } else if (gid === "agentd_memory") {
                                 // Interlaced lemniscate knot with diamond clasp
                                 ctx.lineWidth = 1.8;

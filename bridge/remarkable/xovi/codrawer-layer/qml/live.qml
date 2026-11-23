@@ -333,7 +333,7 @@ Item {
         ctx.lineJoin = "round";
         if (pts.length === 1) {
             const pr = pts[0].p !== undefined ? pts[0].p : 0.6;
-            ctx.lineWidth = Math.max(0.8, width * (0.45 + 0.85 * pr));
+            ctx.lineWidth = Math.max(0.7, width * (0.35 + 1.55 * pr));
             ctx.beginPath();
             ctx.moveTo(pts[0].x, pts[0].y);
             ctx.lineTo(pts[0].x, pts[0].y);
@@ -344,7 +344,7 @@ Item {
             const a = pts[i - 1], b = pts[i];
             const p0 = a.p !== undefined ? a.p : 0.6;
             const p1 = b.p !== undefined ? b.p : 0.6;
-            ctx.lineWidth = Math.max(0.8, width * (0.45 + 0.85 * ((p0 + p1) * 0.5)));
+            ctx.lineWidth = Math.max(0.7, width * (0.35 + 1.55 * ((p0 + p1) * 0.5)));
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
