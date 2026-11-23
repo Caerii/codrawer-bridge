@@ -537,18 +537,19 @@ class Agentd:
         await self._dock_entries()
         await self._glasses(note, note)
 
-    def _schedule_autopilot(self, reset: bool = True) -> None:
+    def _schedule_autopilot(self, reset: bool = True, delay_s: float = 4.0) -> None:
         if reset and self._autopilot_task is not None:
             self._autopilot_task.cancel()
 
         async def _wait_and_ask() -> None:
-            await asyncio.sleep(4.0)
-            while self.health.in_flight > 0:
+            await asyncio.sleep(delay_s)
+            while self._reserved:
                 await asyncio.sleep(1.5)
             if self.setting("autopilot") != "on":
                 return
             m = self.model
             if not m.page:
+                log.info("autopilot: skipped (no page snapshot yet)")
                 return
             user_strokes = [st for st in m.ink() if not st.id.startswith("agentd_")]
             sig = (m.page, len(user_strokes))
@@ -561,8 +562,8 @@ class Agentd:
                 len(user_strokes),
             )
             self.queue.submit(
-                ("autopilot", m.page),
-                self.answer(
+                f"autopilot:{m.page}",
+                lambda: self.answer(
                     {
                         "t": "dock_action",
                         "id": "ask_page",
@@ -591,10 +592,11 @@ class Agentd:
         log.info("dock %s: %s", msg.get("id"), note)
         await self._glasses(note, note)
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.ensure_future(coro)
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
+        return t
 
     # ── agent ink on or off ────────────────────────────────────────────────────────────────
 

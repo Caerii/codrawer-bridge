@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -80,3 +81,33 @@ def test_marks_extraction_and_strokes() -> None:
     assert any(m["t"] == "stroke_begin" for _, m in msgs)
     assert any(m["t"] == "stroke_pts" for _, m in msgs)
     assert any(m["t"] == "stroke_end" for _, m in msgs)
+
+
+def test_autopilot_triggers_after_user_stroke_end(tmp_path: Path) -> None:
+    from codrawer_bridge.agentd.service import Agentd, Config
+
+    async def go() -> list[dict]:
+        a = Agentd(Config(ws="ws://x", term_cwd=str(tmp_path), backend="agy-stream", dry_run=True))
+        triggered: list[dict] = []
+
+        async def fake_answer(msg: dict) -> None:
+            triggered.append(msg)
+
+        a.answer = fake_answer  # type: ignore[method-assign]
+        a.handle(
+            {"t": "page", "doc": "d1", "page": "p1", "rev": 1, "w": 1620, "h": 2160, "strokes": []}
+        )
+        a.handle({"t": "stroke_begin", "id": "u1", "layer": "user", "brush": "pen"})
+        a.handle({"t": "stroke_pts", "id": "u1", "pts": [[0.1, 0.1, 0.5, 10], [0.2, 0.1, 0.5, 20]]})
+        a.handle({"t": "stroke_end", "id": "u1"})
+        assert a._autopilot_task is not None
+        a._autopilot_task.cancel()
+        a._schedule_autopilot(reset=True, delay_s=0.05)
+        await asyncio.sleep(0.15)
+        if a.claude is not None:
+            await a.claude.close()
+        return triggered
+
+    out = asyncio.run(go())
+    assert len(out) == 1
+    assert out[0]["id"] == "ask_page" and out[0]["source"] == "autopilot"
