@@ -108,16 +108,16 @@ Item {
                          { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" },
                          { id: "agentd_text_size", label: "Text size", badge: "medium", owner: "agentd" }];
             d.toggle();
-            check(findText(panel, "medium") !== null, "a value badge shows its value");
-            check(findText(panel, "Ask about this page") && findText(panel, "Memory: page thread"), "the agent's rows below the built-ins");
-            const pills = findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; });
+            check(findText(d, "medium") !== null, "a value badge shows its value");
+            check(findText(d, "Ask about this page") && findText(d, "Memory: page thread"), "the agent's rows in the dock");
+            const pills = findAll(d, "codrawer-dock-badge", []).filter(function(p) { return p.visible; });
             check(pills.length === 2, "two badges shown (" + pills.length + ")");
             d.entries = [{ id: "status", label: "codrawer status" }, { id: "ask_page", label: "Ask about this page" },
                          { id: "agentd_memory", label: "Memory", badge: "off", owner: "agentd" },
                          { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" }];
-            check(findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; }).length === 1, "badge off shows outlined pill");
-            check(findText(panel, "off") !== null, "off pill text visible");
-            check(findText(panel, "Memory"), "the label updates in place");
+            check(findAll(d, "codrawer-dock-badge", []).filter(function(p) { return p.visible; }).length === 1, "badge off shows outlined pill");
+            check(findText(d, "off") !== null, "off pill text visible");
+            check(findText(d, "Memory"), "the label updates in place");
             // viewport clamping: a 12-row panel opened near y=988 stays inside 2160 px height
             redo.y = 988;
             d.y = 988;
@@ -136,7 +136,7 @@ Item {
             d.toggle(); d.toggle();  // re-open at y=988
             const panelBottom = d.y + panel.y + panel.height;
             check(panelBottom <= 2160 - 24, "12-row panel clamped inside viewport (bottom=" + panelBottom + ")");
-            check(findText(panel, "very fast") !== null, "underscore formatted in pill");
+            check(findText(d, "very fast") !== null, "underscore formatted in pill");
             // a tap on the agent's row sends its id and closes the panel
             const row = findText(panel, "Forget this page's thread");
             d.action("agentd_forget");

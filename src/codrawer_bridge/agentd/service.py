@@ -344,11 +344,13 @@ class Agentd:
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
             return
-        if aid in (SIZE_ID, SPACING_ID, SPEED_ID):
+        if aid in (SIZE_ID, SPACING_ID, SPEED_ID, PERSONA_ID, THINKING_STYLE_ID):
             key, order = {
                 SIZE_ID: ("text_size", SIZES),
                 SPACING_ID: ("spacing", SPACINGS),
                 SPEED_ID: ("writing_speed", SPEEDS),
+                PERSONA_ID: ("persona", PERSONAS),
+                THINKING_STYLE_ID: ("thinking_style", THINKING_STYLES),
             }[aid]
             now = self.setting(key)
             self._spawn(self._apply_settings({key: order[(order.index(now) + 1) % len(order)]}))
@@ -411,6 +413,16 @@ class Agentd:
                         "hint": "Proactively respond after a 3.5 s writing pause",
                     },
                     {"id": FORGET_ID, "label": "Forget this page's thread"},
+                    {
+                        "id": PERSONA_ID,
+                        "label": "Persona",
+                        "badge": self.setting("persona"),
+                    },
+                    {
+                        "id": THINKING_STYLE_ID,
+                        "label": "Thinking",
+                        "badge": self.setting("thinking_style"),
+                    },
                     {
                         "id": SIZE_ID,
                         "label": "Text size",
@@ -926,7 +938,7 @@ class Agentd:
         """
         m = self.model
         try:
-            met = self.effective_metrics(await self.hand.metrics(self.cfg.persona))
+            met = self.effective_metrics(await self.hand.metrics(self.setting("persona")))
         except handmod.HandUnavailable:
             return None
         dots_w = DOTS_PU if self.cfg.thinking == "dots" else 0.0
@@ -1032,6 +1044,7 @@ class Agentd:
             "id": f"agentd_{rec.n}",
             "agent": "agentd",
             "state": state,
+            "style": self.setting("thinking_style"),
             "bbox": bbox,
             "doc": rec.doc or self.model.doc,
             "page": rec.page or self.model.page,
@@ -1157,6 +1170,8 @@ RETRY_MIN_S = 10.0
 #: agentd's own dock entries (dock_entries): the page-thread memory toggle, and forgetting.
 MEMORY_ID = "agentd_memory"
 AUTOPILOT_ID = "agentd_autopilot"
+PERSONA_ID = "agentd_persona"
+THINKING_STYLE_ID = "agentd_thinking_style"
 MODEL_ID = "agentd_model"
 SIZE_ID = "agentd_text_size"
 SPACING_ID = "agentd_spacing"
@@ -1167,11 +1182,15 @@ SPACING_ID = "agentd_spacing"
 SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smallest to largest
 SPACINGS = ("compact", "normal", "airy")
 SPEEDS = ("calm", "fast", "very_fast")
+PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
+THINKING_STYLES = ("pen", "drop", "glyph")
 SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
     "spacing": (SPACINGS, "compact"),
     "writing_speed": (SPEEDS, "fast"),
     "autopilot": (("off", "on"), "on"),
+    "persona": (PERSONAS, "archivist"),
+    "thinking_style": (THINKING_STYLES, "pen"),
 }
 
 #: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried

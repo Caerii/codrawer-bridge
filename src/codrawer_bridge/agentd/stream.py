@@ -130,7 +130,7 @@ class InkStream:
                 lay = (
                     await a.hand.layouts(
                         chunk,
-                        a.cfg.persona,
+                        a.setting("persona"),
                         (self.width_mm,),
                         seed=7 + k,
                         pitch=self.metrics.pitch,
@@ -168,7 +168,7 @@ class InkStream:
                 speed=a.playback,
                 run=f"{self.run}c{k}",
                 color=a.cfg.color,
-                author=f"agentd:{a.cfg.persona}",
+                author=f"agentd:{a.setting('persona')}",
             )
             if k == 0:
                 await a._status(rec, "writing", rec.status_box or rect)
