@@ -77,66 +77,84 @@ class Layout:
         return ox, oy
 
 
+def _resample_stroke(pts: list[list[float]], max_step_mm: float = 0.6) -> list[list[float]]:
+    """Subdivide segments longer than ``max_step_mm`` for smooth broad-nib chisel transitions."""
+    if len(pts) < 2:
+        return pts
+    dense: list[list[float]] = [pts[0]]
+    for a, b in zip(pts, pts[1:], strict=False):
+        dist = math.hypot(b[0] - a[0], b[1] - a[1])
+        if dist > max_step_mm:
+            steps = min(6, int(dist / (max_step_mm * 0.83)))
+            for s in range(1, steps):
+                f = s / steps
+                dense.append([a[k] + (b[k] - a[k]) * f for k in range(4)])
+        dense.append(b)
+    return dense
+
+
+def _env_calligrapher(pts: list[list[float]], i: int, u: float) -> float:
+    prev = pts[max(0, i - 1)]
+    nxt = pts[min(len(pts) - 1, i + 1)]
+    ang = math.atan2(nxt[1] - prev[1], nxt[0] - prev[0])
+    chisel = 0.45 + 0.78 * abs(math.sin(ang - 0.7))
+    return chisel * (0.30 + 0.70 * min(1.0, u / 0.12, (1.0 - u) / 0.14))
+
+
+def _env_sketcher(pts: list[list[float]], i: int, u: float) -> float:
+    del pts, i
+    edge = min(1.0, u / 0.16, (1.0 - u) / 0.22)
+    return (0.78 + 0.26 * math.sin(6.5 * math.pi * u)) * (0.25 + 0.75 * edge)
+
+
+def _env_mathematician(pts: list[list[float]], i: int, u: float) -> float:
+    del pts, i
+    return 0.96 * (0.45 + 0.55 * min(1.0, u / 0.10, (1.0 - u) / 0.10))
+
+
+def _env_elder(pts: list[list[float]], i: int, u: float) -> float:
+    del pts, i
+    edge = min(1.0, u / 0.20, (1.0 - u) / 0.22)
+    return (1.32 + 0.10 * math.sin(9.0 * u)) * (0.28 + 0.72 * edge)
+
+
+def _env_archivist(pts: list[list[float]], i: int, u: float) -> float:
+    del i
+    if u < 0.18:
+        return 0.25 + 0.75 * (u / 0.18)
+    if u > 0.78:
+        return 1.0 - 0.78 * ((u - 0.78) / 0.22)
+    swell = 1.35 if len(pts) >= 8 else 1.18
+    return swell - 0.15 * abs(u - 0.5)
+
+
+_PROSODY_PROFILES = {
+    "calligrapher": _env_calligrapher,
+    "sketcher": _env_sketcher,
+    "mathematician": _env_mathematician,
+    "elder": _env_elder,
+    "archivist": _env_archivist,
+}
+
+
 def apply_prosody(lays: list[Layout], persona: str = "archivist") -> list[Layout]:
     """
-    Shape per-stroke pressure envelopes by persona for vivid calligraphic dynamism:
-    - ``calligrapher``: broad-nib 40-deg chisel angle modulation + crisp hairline serifs.
-    - ``sketcher``: light, airy harmonic pressure variation.
-    - ``mathematician``: steady, deliberate technical-pen weight.
-    - ``elder``: warm fountain-pen swell with gentle hand cadence.
-    - ``archivist`` (default): balanced editorial italic swell and feather lift-off.
+    Shape per-stroke pressure envelopes by persona for vivid calligraphic dynamism.
+
+    ``calligrapher`` resamples long segments before computing 40-deg broad-nib chisel
+    modulation; other personas modulate pressure directly via :data:`_PROSODY_PROFILES`.
     """
+    env_fn = _PROSODY_PROFILES.get(persona, _env_archivist)
     for lay in lays:
         for idx, (down, up, pts) in enumerate(lay.strokes):
-            if persona == "calligrapher" and len(pts) >= 2:
-                dense: list[list[float]] = [pts[0]]
-                for a, b in zip(pts, pts[1:], strict=False):
-                    dist = math.hypot(b[0] - a[0], b[1] - a[1])
-                    if dist > 0.6:
-                        steps = min(6, int(dist / 0.5))
-                        for s in range(1, steps):
-                            f = s / steps
-                            dense.append(
-                                [
-                                    a[0] + (b[0] - a[0]) * f,
-                                    a[1] + (b[1] - a[1]) * f,
-                                    a[2] + (b[2] - a[2]) * f,
-                                    a[3] + (b[3] - a[3]) * f,
-                                ]
-                            )
-                    dense.append(b)
-                pts = dense
+            if persona == "calligrapher":
+                pts = _resample_stroke(pts)
                 lay.strokes[idx] = (down, up, pts)
             n = len(pts)
             if n < 3:
                 continue
-            swell = 1.35 if n >= 8 else 1.18
             for i, pt in enumerate(pts):
-                u = i / (n - 1)
-                if persona == "calligrapher":
-                    prev = pts[max(0, i - 1)]
-                    nxt = pts[min(n - 1, i + 1)]
-                    ang = math.atan2(nxt[1] - prev[1], nxt[0] - prev[0])
-                    chisel = 0.45 + 0.78 * abs(math.sin(ang - 0.7))
-                    edge = min(1.0, u / 0.12, (1.0 - u) / 0.14)
-                    env = chisel * (0.30 + 0.70 * edge)
-                elif persona == "sketcher":
-                    edge = min(1.0, u / 0.16, (1.0 - u) / 0.22)
-                    env = (0.78 + 0.26 * math.sin(6.5 * math.pi * u)) * (0.25 + 0.75 * edge)
-                elif persona == "mathematician":
-                    edge = min(1.0, u / 0.10, (1.0 - u) / 0.10)
-                    env = 0.96 * (0.45 + 0.55 * edge)
-                elif persona == "elder":
-                    edge = min(1.0, u / 0.20, (1.0 - u) / 0.22)
-                    cadence = 1.32 + 0.10 * math.sin(9.0 * u)
-                    env = cadence * (0.28 + 0.72 * edge)
-                else:
-                    if u < 0.18:
-                        env = 0.25 + 0.75 * (u / 0.18)
-                    elif u > 0.78:
-                        env = 1.0 - 0.78 * ((u - 0.78) / 0.22)
-                    else:
-                        env = swell - 0.15 * abs(u - 0.5)
+                env = env_fn(pts, i, i / (n - 1))
                 pt[2] = round(max(0.06, min(1.0, pt[2] * env)), 3)
     return lays
 

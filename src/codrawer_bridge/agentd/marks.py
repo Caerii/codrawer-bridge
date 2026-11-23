@@ -53,6 +53,73 @@ def _tapered_pts(
     return out
 
 
+def _mark_circle(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+    cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+    ax, ay = max(12.0, abs(x1 - x0) * 0.55), max(10.0, abs(y1 - y0) * 0.55)
+    steps = 28
+    out: list[tuple[float, float]] = []
+    for i in range(steps + 1):
+        th = -0.25 + (2.0 * math.pi + 0.28) * (i / steps)
+        wobble = 1.0 + 0.04 * math.sin(3.0 * th)
+        out.append((cx + ax * wobble * math.cos(th), cy + ay * wobble * math.sin(th)))
+    return out
+
+
+def _mark_underline(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+    y_mid = max(y0, y1)
+    return [
+        (x0 + (x1 - x0) * (i / 16), y_mid + 2.5 * math.sin(math.pi * i / 16))
+        for i in range(17)
+    ]
+
+
+def _mark_bracket(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+    del x1
+    ym = (y0 + y1) * 0.5
+    dx = max(10.0, min(18.0, abs(y1 - y0) * 0.12))
+    out: list[tuple[float, float]] = []
+    for i in range(21):
+        u = i / 20
+        if u < 0.5:
+            t = u * 2.0
+            out.append((x0 + dx * (1.0 - math.sin(t * math.pi * 0.5)), y0 + (ym - y0) * t))
+        else:
+            t = (u - 0.5) * 2.0
+            out.append((x0 + dx * math.sin(t * math.pi * 0.5), ym + (y1 - ym) * t))
+    return out
+
+
+def _mark_star(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+    del x1, y1
+    r = 12.0
+    out: list[tuple[float, float]] = []
+    for a in (0.0, math.pi / 2.0, math.pi / 4.0, -math.pi / 4.0):
+        dx, dy = r * math.cos(a), r * math.sin(a)
+        out.extend([(x0 - dx, y0 - dy), (x0 + dx, y0 + dy), (x0, y0)])
+    return out
+
+
+def _mark_arrow(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+    out = [
+        (x0 + (x1 - x0) * (i / 12), y0 + (y1 - y0) * (i / 12) - 6.0 * math.sin(math.pi * i / 12))
+        for i in range(13)
+    ]
+    ang = math.atan2(y1 - y0, x1 - x0)
+    head = 16.0
+    for side in (0.45, -0.45):
+        out.extend([(x1, y1), (x1 - head * math.cos(ang + side), y1 - head * math.sin(ang + side))])
+    return out
+
+
+_MARK_BUILDERS = {
+    "circle": _mark_circle,
+    "underline": _mark_underline,
+    "bracket": _mark_bracket,
+    "star": _mark_star,
+    "arrow": _mark_arrow,
+}
+
+
 def mark_messages(
     marks: list[tuple[str, Box]],
     region_pu: Box,
@@ -68,68 +135,25 @@ def mark_messages(
     msgs: list[tuple[float, dict]] = []
 
     for idx, (kind, (nx0, ny0, nx1, ny1)) in enumerate(marks):
-        x0, y0 = rx0 + nx0 * rw, ry0 + ny0 * rh
-        x1, y1 = rx0 + nx1 * rw, ry0 + ny1 * rh
-        raw: list[tuple[float, float]] = []
-        if kind == "circle":
-            cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
-            ax, ay = max(12.0, abs(x1 - x0) * 0.55), max(10.0, abs(y1 - y0) * 0.55)
-            steps = 28
-            for i in range(steps + 1):
-                th = -0.25 + (2.0 * math.pi + 0.28) * (i / steps)
-                wobble = 1.0 + 0.04 * math.sin(3.0 * th)
-                raw.append((cx + ax * wobble * math.cos(th), cy + ay * wobble * math.sin(th)))
-        elif kind == "underline":
-            steps = 16
-            y_mid = max(y0, y1)
-            for i in range(steps + 1):
-                u = i / steps
-                raw.append((x0 + (x1 - x0) * u, y_mid + 2.5 * math.sin(math.pi * u)))
-        elif kind == "bracket":
-            # Graceful editorial curly brace '{' along y0..y1 at x0
-            ym = (y0 + y1) * 0.5
-            bx = x0
-            dx = max(10.0, min(18.0, abs(y1 - y0) * 0.12))
-            for i in range(21):
-                u = i / 20
-                if u < 0.5:
-                    t = u * 2.0
-                    raw.append((bx + dx * (1.0 - math.sin(t * math.pi * 0.5)), y0 + (ym - y0) * t))
-                else:
-                    t = (u - 0.5) * 2.0
-                    raw.append((bx + dx * math.sin(t * math.pi * 0.5), ym + (y1 - ym) * t))
-        elif kind == "star":
-            # Crisp 4-point editorial asterisk ornament centered at (x0, y0)
-            r = 12.0
-            for a in (0.0, math.pi / 2.0, math.pi / 4.0, -math.pi / 4.0):
-                raw.append((x0 - r * math.cos(a), y0 - r * math.sin(a)))
-                raw.append((x0 + r * math.cos(a), y0 + r * math.sin(a)))
-                raw.append((x0, y0))
-        else:  # arrow from (x0, y0) to (x1, y1)
-            steps = 12
-            for i in range(steps + 1):
-                u = i / steps
-                raw.append((x0 + (x1 - x0) * u, y0 + (y1 - y0) * u - 6.0 * math.sin(math.pi * u)))
-            ang = math.atan2(y1 - y0, x1 - x0)
-            head = 16.0
-            for side in (0.45, -0.45):
-                raw.append((x1, y1))
-                raw.append((x1 - head * math.cos(ang + side), y1 - head * math.sin(ang + side)))
-
+        builder = _MARK_BUILDERS.get(kind, _mark_arrow)
+        raw = builder(rx0 + nx0 * rw, ry0 + ny0 * rh, rx0 + nx1 * rw, ry0 + ny1 * rh)
         pts = _tapered_pts(raw, page_w, page_h, t_base + idx * 280.0)
         sid = f"agentd_{run}m{idx}"
-        t0 = pts[0][3]
-        t1 = pts[-1][3]
-        start_msg = {
-            "t": "stroke_begin",
-            "id": sid,
-            "layer": "ai",
-            "brush": "pen",
-            "color": MARK_COLOR,
-            "author": author,
-            "ts": int(t0),
-        }
-        msgs.append((t0, start_msg))
+        t0, t1 = pts[0][3], pts[-1][3]
+        msgs.append(
+            (
+                t0,
+                {
+                    "t": "stroke_begin",
+                    "id": sid,
+                    "layer": "ai",
+                    "brush": "pen",
+                    "color": MARK_COLOR,
+                    "author": author,
+                    "ts": int(t0),
+                },
+            )
+        )
         msgs.append((t0 + 20.0, {"t": "stroke_pts", "id": sid, "pts": pts}))
         msgs.append((t1, {"t": "stroke_end", "id": sid}))
     return msgs
