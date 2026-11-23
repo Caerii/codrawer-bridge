@@ -53,7 +53,7 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--backend",
-        choices=("claude-stream", "even-terminal"),
+        choices=("claude-stream", "agy-stream", "even-terminal"),
         default="claude-stream",
         help="claude-stream: warm `claude -p` processes, the image attached (claude_stream.py; "
         "~1 s warm); even-terminal: the --term-url server, the image Read from a file (~23 s)",

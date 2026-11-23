@@ -64,6 +64,7 @@ from typing import Any
 
 from . import hand as handmod
 from . import placement, prompt, render
+from .agy_stream import AgyPool
 from .aio import within
 from .claude_stream import ClaudePool
 from .health import HealthMonitor
@@ -176,11 +177,19 @@ class Agentd:
         )
         self._turn = asyncio.Lock()  # one even-terminal turn at a time (its sessions slow down)
         self.threads = ThreadStore(self.state)  # the page thread, the memory and model choices
-        self.claude = (
-            ClaudePool(self.agent_cwd, size=cfg.pool + 1, model=self.model_id)
-            if cfg.backend == "claude-stream"
-            else None
-        )
+        if cfg.backend == "claude-stream":
+            self.claude: ClaudePool | AgyPool | None = ClaudePool(
+                self.agent_cwd, size=cfg.pool + 1, model=self.model_id
+            )
+        elif cfg.backend == "agy-stream":
+            self.claude = AgyPool(
+                self.agent_cwd,
+                size=cfg.pool + 1,
+                model=self.model_id,
+                add_dirs=(self.state,),
+            )
+        else:
+            self.claude = None
         self._asks = asyncio.Semaphore(max(1, cfg.pool))  # asks in their model turn at once
         self._reserved: dict[int, Box] = {}  # in-flight asks' answer blocks (page units)
         self._ws = None
@@ -477,7 +486,17 @@ class Agentd:
         self.threads.set_setting("model", "careful" if self.speed == "fast" else "fast")
         if self.claude is not None:
             old = self.claude
-            self.claude = ClaudePool(self.agent_cwd, size=self.cfg.pool + 1, model=self.model_id)
+            if self.cfg.backend == "agy-stream":
+                self.claude = AgyPool(
+                    self.agent_cwd,
+                    size=self.cfg.pool + 1,
+                    model=self.model_id,
+                    add_dirs=(self.state,),
+                )
+            else:
+                self.claude = ClaudePool(
+                    self.agent_cwd, size=self.cfg.pool + 1, model=self.model_id
+                )
             self.claude.fill()
             await old.close()  # asks already running keep their process until they finish
         note = f"Model: {self.speed} ({_model_name(self.model_id)})"
@@ -676,7 +695,7 @@ class Agentd:
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
-                image=None if self.claude is not None else rec.image,  # attached: no Read
+                image=None if self.cfg.backend == "claude-stream" else rec.image,
                 n_strokes=len(selected),
                 region=sel_box,
                 title=m.title,

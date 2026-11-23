@@ -161,8 +161,10 @@ def parse(text: str) -> Config:
         a.state_dir = f"{cfg.service.source}/.codrawer/agentd"
     if "checkout" not in raw.get("service", {}):
         cfg.service.checkout = f"{cfg.service.source}-agentd-live"
-    if a.backend not in ("claude-stream", "even-terminal"):
-        raise ConfigError(f"[agentd] backend = {a.backend!r}: claude-stream or even-terminal")
+    if a.backend not in ("claude-stream", "agy-stream", "even-terminal"):
+        raise ConfigError(
+            f"[agentd] backend = {a.backend!r}: claude-stream, agy-stream, or even-terminal"
+        )
     if a.ink not in ("auto", "on", "off"):
         raise ConfigError(f"[agentd] ink = {a.ink!r}: auto, on or off")
     if a.thinking not in ("dots", "overlay", "none"):
