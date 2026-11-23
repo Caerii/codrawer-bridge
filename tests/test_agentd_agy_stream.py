@@ -63,3 +63,20 @@ def test_clause_streaming_and_prosody() -> None:
     apply_prosody([lay])
     assert pts[0][2] < pts[5][2]  # gentle attack < mid-stroke swell
     assert pts[-1][2] < pts[5][2]  # tapered lift-off < mid-stroke swell
+
+
+def test_marks_extraction_and_strokes() -> None:
+    from codrawer_bridge.agentd.marks import extract_marks, mark_messages
+    from codrawer_bridge.agentd.prompt import clean_answer
+
+    raw = "MARK: circle 0.1 0.2 0.8 0.9\nMARK: underline 0.2 0.7 0.7 0.7\nNice insight here."
+    marks, prose = extract_marks(raw)
+    assert len(marks) == 2
+    assert marks[0][0] == "circle" and marks[1][0] == "underline"
+    assert prose == "Nice insight here."
+    assert clean_answer(raw) == "Nice insight here."
+
+    msgs = mark_messages(marks, (100.0, 200.0, 500.0, 400.0), 1620.0, 2160.0, run="99")
+    assert any(m["t"] == "stroke_start" for _, m in msgs)
+    assert any(m["t"] == "stroke_pts" for _, m in msgs)
+    assert any(m["t"] == "stroke_end" for _, m in msgs)

@@ -33,7 +33,9 @@ from .page import Box
 INSTRUCTION = (
     "The user selected this handwriting on their reMarkable and asked for your thoughts. "
     "Read the image. Answer briefly (≤ 3 short sentences) as a thoughtful co-thinker, grounded "
-    "in what's written. If it's math, check it; don't solve unasked homework, give a hint instead."
+    "in what's written. If it's math, check it; don't solve unasked homework, give a hint instead. "
+    "Optionally start with up to 2 lines `MARK: circle|underline|arrow x0 y0 x1 y1` (0..1 "
+    "fractions of the image) to annotate directly on their ink."
 )
 
 #: The same for a whole page.
@@ -164,7 +166,7 @@ def clean_answer(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
     removed, whitespace folded to single spaces, typographic quotes and dashes made plain, and
     cut at the last sentence end within ``limit`` characters (else at a word, with "...").
     """
-    s = text or ""
+    s = re.sub(r"^\s*MARK:.*$", "", text or "", flags=re.M)
     for a, b in _REPLACE.items():
         s = s.replace(a, b)
     s = re.sub(r"`+", "", s)

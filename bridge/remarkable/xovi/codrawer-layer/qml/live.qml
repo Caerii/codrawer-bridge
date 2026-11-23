@@ -329,13 +329,27 @@ Item {
 
     function paintStroke(ctx, pts, width, color) {
         ctx.strokeStyle = color;
-        ctx.lineWidth = width;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; ++i) ctx.lineTo(pts[i].x, pts[i].y);
-        ctx.stroke();
+        if (pts.length === 1) {
+            const pr = pts[0].p !== undefined ? pts[0].p : 0.6;
+            ctx.lineWidth = Math.max(0.8, width * (0.45 + 0.85 * pr));
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            ctx.lineTo(pts[0].x, pts[0].y);
+            ctx.stroke();
+            return;
+        }
+        for (let i = 1; i < pts.length; ++i) {
+            const a = pts[i - 1], b = pts[i];
+            const p0 = a.p !== undefined ? a.p : 0.6;
+            const p1 = b.p !== undefined ? b.p : 0.6;
+            ctx.lineWidth = Math.max(0.8, width * (0.45 + 0.85 * ((p0 + p1) * 0.5)));
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -378,7 +392,7 @@ Item {
                 due = s.pts.length ? Math.max(s.pts[s.pts.length - 1].due, arrival) : 0;
             }
             if (s.pts.length && due < s.pts[s.pts.length - 1].due) due = s.pts[s.pts.length - 1].due;
-            s.pts.push({ x: p[0], y: p[1], due: due });
+            s.pts.push({ x: p[0], y: p[1], p: (p[2] > 0 ? p[2] : 0.6), due: due });
             s.bbox = grow(s.bbox, p[0], p[1], width + 4);
         }
         s.panel.ensure(s.bbox);
@@ -429,7 +443,9 @@ Item {
             if (idx >= 0 && idx + 1 < s.pts.length) {
                 const a = s.pts[idx], b = s.pts[idx + 1];
                 const f = b.due > a.due ? Math.max(0, Math.min(1, (play - a.due) / (b.due - a.due))) : 1;
-                head = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+                const pa = a.p !== undefined ? a.p : 0.6;
+                const pb = b.p !== undefined ? b.p : 0.6;
+                head = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, p: pa + (pb - pa) * f };
             }
             // from where the last frame stopped (its interpolated head, or a real point) through
             // the points now due to this frame's head

@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from . import hand as handmod
+from . import marks as marksmod
 from . import placement, prompt, render
 from .agy_stream import AgyPool
 from .aio import within
@@ -756,6 +757,18 @@ class Agentd:
             # 6. the glasses
             await self._glasses(text, text)
             if stream is not None:
+                # Optional visual marks (MARK: circle|underline|arrow) in selection/page.
+                marks, _ = marksmod.extract_marks(answer_raw)
+                if marks and (sel_box or rec.region):
+                    box = sel_box or rec.region
+                    assert box is not None
+                    m_msgs = marksmod.mark_messages(
+                        marks, box, m.w, m.h, run=f"{rec.n}", author=f"agentd:{self.cfg.persona}"
+                    )
+                    if m_msgs:
+                        await self._play(m_msgs, rec=rec)
+                        for sid, pts in _mark_strokes(m_msgs):
+                            m.add_own(sid, pts)
                 await stream.finish(answer_raw)
                 if stream.stopped and not rec.status_note:
                     rec.status_note = "Ran out of room - the rest is on your glasses"
@@ -1171,6 +1184,10 @@ def ask_signature(msg: dict[str, Any]) -> tuple:
         tuple(round(float(v) / 10) for v in box) if isinstance(box, list) and len(box) == 4 else ()
     )
     return (str(msg.get("id")), rounded)
+
+
+def _mark_strokes(msgs: list[tuple[float, dict]]) -> list[tuple[str, list[list[float]]]]:
+    return [(msg["id"], msg["pts"]) for _, msg in msgs if msg.get("t") == "stroke_pts"]
 
 
 def _model_name(model: str) -> str:
