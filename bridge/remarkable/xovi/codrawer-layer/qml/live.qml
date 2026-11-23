@@ -776,6 +776,21 @@ Item {
                     const ox = tip.x + 10 * scale * Math.cos(tau * 3.4);
                     const oy = tip.y + 10 * scale * Math.sin(tau * 3.4);
                     out.push({ dot: { x: ox, y: oy }, r: 1.4 * scale });
+                    // Effervescent rising thought-bubbles (3 phased rings)
+                    for (let b = 0; b < 3; ++b) {
+                        const ph = ((tau * 0.42 + b * 0.333) % 1.0);
+                        const bx = d.cx + (b - 1) * 14 * scale + 6 * Math.sin(tau * 1.9 + b * 2.1);
+                        const by = d.cy + 16 * scale - ph * 48 * scale;
+                        const br = (2.8 + 4.2 * Math.sin(ph * Math.PI)) * scale;
+                        if (br > 0.9) {
+                            const ring = [];
+                            for (let k = 0; k <= 14; ++k) {
+                                const a = (k / 14) * 2 * Math.PI;
+                                ring.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
+                            }
+                            out.push({ pts: ring, width: 1.2 + 0.6 * Math.sin(ph * Math.PI) });
+                        }
+                    }
                 }
             }
         } else if (d.style === "drop") {
