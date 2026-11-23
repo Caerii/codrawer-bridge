@@ -551,7 +551,7 @@ class Agentd:
             if not m.page:
                 log.info("autopilot: skipped (no page snapshot yet)")
                 return
-            user_strokes = [st for st in m.ink() if not st.id.startswith("agentd_")]
+            user_strokes = m.ink(include_ai=False)
             sig = (m.page, len(user_strokes))
             if not user_strokes or sig in self._autopilot_seen:
                 return
