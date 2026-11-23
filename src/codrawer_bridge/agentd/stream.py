@@ -156,7 +156,12 @@ class InkStream:
                 self.baseline + y1 * s / mm,
             )
             # Re-check live user/AI ink in case new strokes arrived while the model was thinking.
-            occ = placement.Occupancy(m.ink(), m.w, m.h)
+            occ = placement.Occupancy(
+                [st.pts for st in m.ink()],
+                m.w,
+                m.h,
+                height=max(m.h, self.page_bottom) + 400,
+            )
             for _ in range(12):
                 if occ.free(rect, 18.0):
                     break

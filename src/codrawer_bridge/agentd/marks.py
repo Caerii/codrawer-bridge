@@ -152,14 +152,16 @@ def _parse_xy_pairs(tokens: list[str]) -> list[tuple[float, float]]:
 
 def extract_sketches(text: str) -> list[tuple[str, list[tuple[float, float]], str | None]]:
     """
-    Parse up to 8 ``SKETCH:`` primitives from a reply:
-    - ``SKETCH: box|circle|arrow x0 y0 x1 y1 [#rrggbb]``
-    - ``SKETCH: curve x0,y0 cx,cy x1,y1 [#rrggbb]``
+    Parse up to 16 ``SKETCH:`` primitives from a reply:
+    - ``SKETCH: box|rect|circle|ellipse|line|arrow x0 y0 x1 y1 [#rrggbb]``
+    - ``SKETCH: arc cx cy r a0_deg a1_deg [#rrggbb]``
+    - ``SKETCH: dot|star x y [r] [#rrggbb]``
+    - ``SKETCH: curve x0,y0 cx,cy x1,y1 [#rrggbb]`` (or 4-point cubic)
     - ``SKETCH: poly x0,y0 x1,y1 ... [#rrggbb]``
     """
     out: list[tuple[str, list[tuple[float, float]], str | None]] = []
     for m in _SKETCH_LINE.finditer(text or ""):
-        if len(out) >= 8:
+        if len(out) >= 16:
             break
         parts = m.group(1).strip().split()
         if not parts:
@@ -169,10 +171,33 @@ def extract_sketches(text: str) -> list[tuple[str, list[tuple[float, float]], st
         if parts[-1].startswith("#") and len(parts[-1]) == 7:
             color = parts.pop()
         args = parts[1:]
-        if kind in ("box", "circle", "arrow") and len(args) >= 4:
+        if kind in ("box", "rect", "circle", "ellipse", "line", "arrow") and len(args) >= 4:
             try:
                 coords = [max(0.0, min(1.0, float(args[i]))) for i in range(4)]
                 out.append((kind, [(coords[0], coords[1]), (coords[2], coords[3])], color))
+            except ValueError:
+                continue
+        elif kind == "arc" and len(args) >= 5:
+            try:
+                cx = max(0.0, min(1.0, float(args[0])))
+                cy = max(0.0, min(1.0, float(args[1])))
+                r = max(0.02, min(0.5, float(args[2])))
+                a0, a1 = float(args[3]), float(args[4])
+                pts_arc: list[tuple[float, float]] = []
+                for i in range(17):
+                    th = math.radians(a0 + (a1 - a0) * (i / 16))
+                    ax = max(0.0, min(1.0, cx + r * math.cos(th)))
+                    ay = max(0.0, min(1.0, cy + r * math.sin(th)))
+                    pts_arc.append((ax, ay))
+                out.append(("poly", pts_arc, color))
+            except ValueError:
+                continue
+        elif kind in ("dot", "star") and len(args) >= 2:
+            try:
+                x = max(0.0, min(1.0, float(args[0])))
+                y = max(0.0, min(1.0, float(args[1])))
+                r = max(0.01, min(0.25, float(args[2]))) if len(args) >= 3 else 0.03
+                out.append((kind, [(x, y), (r, r)], color))
             except ValueError:
                 continue
         elif kind in ("curve", "poly"):
@@ -200,16 +225,34 @@ def sketch_messages(
     for idx, (kind, npts, col) in enumerate(sketches):
         pu = [(rx0 + nx * rw, ry0 + ny * rh) for nx, ny in npts]
         raw: list[tuple[float, float]] = []
-        if kind == "box" and len(pu) >= 2:
+        if kind in ("box", "rect") and len(pu) >= 2:
             (x0, y0), (x1, y1) = pu[0], pu[1]
             raw = _hand_pts(
                 [(x0 - 3, y0), (x1 + 2, y0), (x1, y1 + 2), (x0 - 2, y1), (x0, y0 - 2)]
             )
         elif kind == "circle" and len(pu) >= 2:
+            cx = (pu[0][0] + pu[1][0]) * 0.5
+            cy = (pu[0][1] + pu[1][1]) * 0.5
+            r = max(8.0, min(abs(pu[1][0] - pu[0][0]), abs(pu[1][1] - pu[0][1])) * 0.5)
+            raw = _mark_circle(cx - r, cy - r, cx + r, cy + r)
+        elif kind == "ellipse" and len(pu) >= 2:
             raw = _mark_circle(pu[0][0], pu[0][1], pu[1][0], pu[1][1])
+        elif kind == "line" and len(pu) >= 2:
+            (x0, y0), (x1, y1) = pu[0], pu[1]
+            pts_line = [(x0 + (x1 - x0) * (i / 8), y0 + (y1 - y0) * (i / 8)) for i in range(9)]
+            raw = _hand_pts(pts_line, wobble=0.7)
         elif kind == "arrow" and len(pu) >= 2:
             raw = _mark_arrow(pu[0][0], pu[0][1], pu[1][0], pu[1][1])
-        elif kind == "curve" and len(pu) >= 3:
+        elif kind == "dot" and len(pu) >= 2:
+            cx, cy = pu[0]
+            r = max(3.5, min(14.0, npts[1][0] * min(rw, rh)))
+            raw = [
+                (cx + r * math.cos(2 * math.pi * i / 10), cy + r * math.sin(2 * math.pi * i / 10))
+                for i in range(11)
+            ]
+        elif kind == "star" and len(pu) >= 1:
+            raw = _mark_star(pu[0][0], pu[0][1], pu[0][0], pu[0][1])
+        elif kind == "curve" and len(pu) == 3:
             (x0, y0), (cx, cy), (x1, y1) = pu[0], pu[1], pu[2]
             for i in range(17):
                 u = i / 16
@@ -219,11 +262,22 @@ def sketch_messages(
                         (1 - u) ** 2 * y0 + 2 * (1 - u) * u * cy + u**2 * y1,
                     )
                 )
+        elif kind == "curve" and len(pu) >= 4:
+            (x0, y0), (c1x, c1y), (c2x, c2y), (x1, y1) = pu[0], pu[1], pu[2], pu[3]
+            for i in range(21):
+                u = i / 20
+                m = 1.0 - u
+                raw.append(
+                    (
+                        m**3 * x0 + 3 * m**2 * u * c1x + 3 * m * u**2 * c2x + u**3 * x1,
+                        m**3 * y0 + 3 * m**2 * u * c1y + 3 * m * u**2 * c2y + u**3 * y1,
+                    )
+                )
         else:
             raw = _hand_pts(pu, wobble=0.9)
         if len(raw) < 2:
             continue
-        pts = _tapered_pts(raw, page_w, page_h, t_base + idx * 190.0, dur_ms=260.0)
+        pts = _tapered_pts(raw, page_w, page_h, t_base + idx * 110.0, dur_ms=160.0)
         sid = f"agentd_{run}s{idx}"
         t0, t1 = pts[0][3], pts[-1][3]
         msgs.append(
@@ -240,7 +294,7 @@ def sketch_messages(
                 },
             )
         )
-        msgs.append((t0 + 20.0, {"t": "stroke_pts", "id": sid, "pts": pts}))
+        msgs.append((t0 + 15.0, {"t": "stroke_pts", "id": sid, "pts": pts}))
         msgs.append((t1, {"t": "stroke_end", "id": sid}))
     return msgs
 

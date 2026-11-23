@@ -177,6 +177,131 @@ Item {
         onPressed: if (!root.pinned) root.open = false
     }
 
+    // Reusable Victorian-Gothic panel header shared across all 3 columns.
+    component PanelHeader: Rectangle {
+        id: phdr
+        property string titleText: ""
+        property string subtitleText: ""
+        property string pillText: ""
+        property bool pillActive: false
+        property bool clickable: false
+        signal pillClicked()
+        signal headerClicked()
+
+        width: parent ? parent.width : 430
+        height: 72
+        color: (clickable && hdrTap.pressed) ? "black" : "white"
+
+        Column {
+            anchors.verticalCenter: parent.verticalCenter
+            x: 22
+            spacing: 2
+            Text {
+                text: phdr.titleText
+                font.family: "reMarkable Sans"
+                font.pixelSize: 25
+                font.weight: Font.DemiBold
+                font.letterSpacing: 1.8
+                color: (phdr.clickable && hdrTap.pressed) ? "white" : "black"
+            }
+            Text {
+                visible: phdr.subtitleText.length > 0
+                text: phdr.subtitleText
+                font.family: "reMarkable Sans"
+                font.pixelSize: 12
+                font.weight: Font.Medium
+                font.letterSpacing: 2.0
+                color: (phdr.clickable && hdrTap.pressed) ? "white" : "black"
+            }
+        }
+
+        Rectangle {
+            visible: phdr.pillText.length > 0
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            width: hdrPillLbl.implicitWidth + 24
+            height: 32
+            radius: 16
+            color: phdr.pillActive ? ((phdr.clickable && hdrTap.pressed) ? "white" : "black") : "transparent"
+            border.width: 2
+            border.color: (phdr.clickable && hdrTap.pressed) ? "white" : "black"
+            Text {
+                id: hdrPillLbl
+                anchors.centerIn: parent
+                text: phdr.pillText
+                font.family: "reMarkable Sans"
+                font.pixelSize: 17
+                font.weight: Font.Medium
+                color: phdr.pillActive
+                    ? ((phdr.clickable && hdrTap.pressed) ? "black" : "white")
+                    : ((phdr.clickable && hdrTap.pressed) ? "white" : "black")
+            }
+            MouseArea {
+                enabled: !phdr.clickable && phdr.pillText.length > 0
+                anchors.fill: parent
+                onClicked: phdr.pillClicked()
+            }
+        }
+
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
+        MouseArea {
+            id: hdrTap
+            enabled: phdr.clickable
+            anchors.fill: parent
+            onClicked: phdr.headerClicked()
+        }
+    }
+
+    // Reusable Column 1 tab switch row (Atelier / Cortex).
+    component TabSwitchRow: Rectangle {
+        id: trow
+        property string label: ""
+        property bool active: false
+        property bool topRuleHeavy: false
+        signal tapped()
+
+        width: parent ? parent.width : 440
+        height: 66
+        color: tabTap.pressed ? "black" : "white"
+
+        Rectangle { anchors.top: parent.top; width: parent.width; height: trow.topRuleHeavy ? 2 : 1; color: "black" }
+        Text {
+            x: 22
+            anchors.verticalCenter: parent.verticalCenter
+            text: trow.label
+            font.family: "reMarkable Sans"
+            font.pixelSize: 25
+            font.weight: Font.DemiBold
+            color: tabTap.pressed ? "white" : "black"
+        }
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            width: tabPillLbl.implicitWidth + 24
+            height: 32
+            radius: 16
+            color: trow.active ? (tabTap.pressed ? "white" : "black") : "transparent"
+            border.width: 2
+            border.color: tabTap.pressed ? "white" : "black"
+            Text {
+                id: tabPillLbl
+                anchors.centerIn: parent
+                text: trow.active ? "open" : "›"
+                font.family: "reMarkable Sans"
+                font.pixelSize: 17
+                font.weight: Font.Medium
+                color: trow.active ? (tabTap.pressed ? "black" : "white") : (tabTap.pressed ? "white" : "black")
+            }
+        }
+        MouseArea {
+            id: tabTap
+            anchors.fill: parent
+            onClicked: trow.tapped()
+        }
+    }
+
     // Reusable Victorian-Gothic entry row with custom 32 x 32 spline glyph + pill.
     component DockRow: Rectangle {
         id: drow
@@ -678,85 +803,21 @@ Item {
             }
 
             // Tab switches for Column 2 (Atelier vs Cortex)
-            Rectangle {
+            TabSwitchRow {
                 width: rows.width
-                height: 66
                 visible: root.studioEntries.length > 0
-                color: tabAtTap.pressed ? "black" : "white"
-                Rectangle { anchors.top: parent.top; width: parent.width; height: 2; color: "black" }
-                Text {
-                    x: 22
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Atelier"
-                    font.family: "reMarkable Sans"
-                    font.pixelSize: 25
-                    font.weight: Font.DemiBold
-                    color: tabAtTap.pressed ? "white" : "black"
-                }
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    width: tabAtPill.implicitWidth + 24
-                    height: 32
-                    radius: 16
-                    color: root.activeTab === "atelier" ? (tabAtTap.pressed ? "white" : "black") : "transparent"
-                    border.width: 2
-                    border.color: tabAtTap.pressed ? "white" : "black"
-                    Text {
-                        id: tabAtPill
-                        anchors.centerIn: parent
-                        text: root.activeTab === "atelier" ? "open" : "›"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 18
-                        color: root.activeTab === "atelier" ? (tabAtTap.pressed ? "black" : "white") : (tabAtTap.pressed ? "white" : "black")
-                    }
-                }
-                MouseArea {
-                    id: tabAtTap
-                    anchors.fill: parent
-                    onClicked: { root.activeTab = "atelier"; root.pickerFor = ""; }
-                }
+                label: "Atelier"
+                active: root.activeTab === "atelier"
+                topRuleHeavy: true
+                onTapped: { root.activeTab = "atelier"; root.pickerFor = ""; }
             }
-            Rectangle {
+            TabSwitchRow {
                 width: rows.width
-                height: 66
                 visible: root.systemEntries.length > 0
-                color: tabCxTap.pressed ? "black" : "white"
-                Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: "black" }
-                Text {
-                    x: 22
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Cortex"
-                    font.family: "reMarkable Sans"
-                    font.pixelSize: 25
-                    font.weight: Font.DemiBold
-                    color: tabCxTap.pressed ? "white" : "black"
-                }
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    width: tabCxPill.implicitWidth + 24
-                    height: 32
-                    radius: 16
-                    color: root.activeTab === "cortex" ? (tabCxTap.pressed ? "white" : "black") : "transparent"
-                    border.width: 2
-                    border.color: tabCxTap.pressed ? "white" : "black"
-                    Text {
-                        id: tabCxPill
-                        anchors.centerIn: parent
-                        text: root.activeTab === "cortex" ? "open" : "›"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 18
-                        color: root.activeTab === "cortex" ? (tabCxTap.pressed ? "black" : "white") : (tabCxTap.pressed ? "white" : "black")
-                    }
-                }
-                MouseArea {
-                    id: tabCxTap
-                    anchors.fill: parent
-                    onClicked: { root.activeTab = "cortex"; root.pickerFor = ""; }
-                }
+                label: "Cortex"
+                active: root.activeTab === "cortex"
+                topRuleHeavy: false
+                onTapped: { root.activeTab = "cortex"; root.pickerFor = ""; }
             }
 
             Item {
@@ -808,53 +869,13 @@ Item {
             id: studioRows
             width: studioPanel.width
 
-            Rectangle {
+            PanelHeader {
                 width: studioRows.width
-                height: 68
-                color: "white"
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    x: 22
-                    spacing: 1
-                    Text {
-                        text: studioPanel.showCortex ? "cortex" : "atelier"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 25
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 1.8
-                        color: "black"
-                    }
-                    Text {
-                        text: studioPanel.showCortex ? "AUTOPILOT · MEMORY · MODEL" : "PERSONALITY · MOTION"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 12
-                        font.weight: Font.Medium
-                        font.letterSpacing: 2.0
-                        color: "black"
-                    }
-                }
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: 18
-                    width: pinLabel.implicitWidth + 22
-                    height: 30
-                    radius: 15
-                    color: root.pinned ? "black" : "transparent"
-                    border.width: 1.5
-                    border.color: "black"
-                    Text {
-                        id: pinLabel
-                        anchors.centerIn: parent
-                        text: root.pinned ? "pinned" : "pin"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 16
-                        font.weight: Font.Medium
-                        color: root.pinned ? "white" : "black"
-                    }
-                    MouseArea { anchors.fill: parent; onClicked: root.pinned = !root.pinned }
-                }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
+                titleText: studioPanel.showCortex ? "cortex" : "atelier"
+                subtitleText: studioPanel.showCortex ? "AUTOPILOT · MEMORY · MODEL" : "PERSONALITY · MOTION"
+                pillText: root.pinned ? "pinned" : "pin"
+                pillActive: root.pinned
+                onPillClicked: root.pinned = !root.pinned
             }
 
             Repeater {
@@ -886,7 +907,7 @@ Item {
             const minLocalY = margin - root.btnY;
             return Math.max(minLocalY, Math.min(studioPanel.y, maxLocalY));
         }
-        width: 420
+        width: 430
         height: pickerCol.height
         color: "white"
 
@@ -897,32 +918,12 @@ Item {
             id: pickerCol
             width: systemPanel.width
 
-            Rectangle {
+            PanelHeader {
                 width: pickerCol.width
-                height: 68
-                color: "white"
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    x: 22
-                    spacing: 1
-                    Text {
-                        text: "thinking"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 25
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 1.8
-                        color: "black"
-                    }
-                    Text {
-                        text: "COMPANION · ANIMATIONS"
-                        font.family: "reMarkable Sans"
-                        font.pixelSize: 12
-                        font.weight: Font.Medium
-                        font.letterSpacing: 2.0
-                        color: "black"
-                    }
-                }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
+                titleText: "thinking"
+                subtitleText: "COMPANION · ANIMATIONS"
+                pillText: systemPanel.currentThinking
+                pillActive: true
             }
 
             Grid {

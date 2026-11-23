@@ -460,7 +460,7 @@ class Agentd:
                         "id": MODEL_ID,
                         "label": "Model",
                         "badge": f"{self.speed} · {_model_name(self.model_id)}",
-                        "hint": "careful reads handwriting best; fast answers sooner",
+                        "hint": "fast answers in seconds; careful thinks deeper",
                     },
                 ],
             }
@@ -618,6 +618,8 @@ class Agentd:
                 rxs = [p[0] * m.w - m.w / 2 for st in cluster for p in st.pts]
                 rys = [p[1] * m.h for st in cluster for p in st.pts]
                 bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
+                if (bx1 - bx0) < 25.0 and (by1 - by0) < 25.0:
+                    return
             bbox = [round(bx0, 1), round(by0, 1), round(bx1, 1), round(by1, 1)]
             spot = [round(bx0, 1), round(by1 + 36.0, 1), round(bx1, 1), round(by1 + 236.0, 1)]
             log.info(
@@ -978,9 +980,18 @@ class Agentd:
                         await self._play(m_msgs, rec=rec)
                         for sid, pts in _mark_strokes(m_msgs):
                             m.add_own(sid, pts)
-                if sketches and (sel_box or rec.region or rec.placement):
-                    sbox = sel_box or rec.region or rec.placement
-                    assert sbox is not None
+                if sketches and (rec.placement or sel_box or rec.region):
+                    if rec.placement:
+                        px0, py0, px1, _ = rec.placement
+                        sy0 = (stream.bottom + 18.0) if stream.bottom is not None else py0
+                        sw = min(360.0, max(160.0, px1 - px0))
+                        sh = 220.0
+                        sbox: Box = (px0, sy0, px0 + sw, sy0 + sh)
+                        if stream.bottom is None:
+                            stream.baseline = max(stream.baseline, sy0 + sh + 28.0)
+                        stream.bottom = max(stream.bottom or 0.0, sy0 + sh)
+                    else:
+                        sbox = sel_box or rec.region  # type: ignore[assignment]
                     s_msgs = marksmod.sketch_messages(
                         sketches,
                         sbox,
@@ -991,9 +1002,9 @@ class Agentd:
                         author=f"agentd:{self.cfg.persona}",
                     )
                     if s_msgs:
-                        await self._play(s_msgs, rec=rec)
                         for sid, pts in _mark_strokes(s_msgs):
                             m.add_own(sid, pts)
+                        await self._play(s_msgs, rec=rec)
                 await stream.finish(answer_raw)
                 if stream.stopped and not rec.status_note:
                     rec.status_note = "Ran out of room - the rest is on your glasses"

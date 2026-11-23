@@ -221,16 +221,32 @@ def test_sketch_primitives_and_messages() -> None:
 
     raw = (
         "SKETCH: box 0.1 0.1 0.4 0.4 #1f6fe0\n"
+        "SKETCH: rect 0.1 0.5 0.3 0.7\n"
+        "SKETCH: ellipse 0.4 0.4 0.7 0.6\n"
+        "SKETCH: line 0.1 0.8 0.9 0.8\n"
+        "SKETCH: arc 0.5 0.5 0.2 0 180\n"
+        "SKETCH: dot 0.3 0.3 0.04\n"
+        "SKETCH: star 0.8 0.2\n"
         "SKETCH: curve 0.4,0.25 0.55,0.1 0.7,0.25\n"
         "SKETCH: poly 0.7,0.2 0.8,0.3 0.7,0.4\n"
         "Here is a quick diagram."
     )
     sketches = extract_sketches(raw)
-    assert [s[0] for s in sketches] == ["box", "curve", "poly"]
+    assert [s[0] for s in sketches] == [
+        "box",
+        "rect",
+        "ellipse",
+        "line",
+        "poly",
+        "dot",
+        "star",
+        "curve",
+        "poly",
+    ]
     assert sketches[0][2] == "#1f6fe0"
     assert clean_answer(raw) == "Here is a quick diagram."
     msgs = sketch_messages(sketches, (100.0, 200.0, 600.0, 600.0), 1620.0, 2160.0, run="21")
-    assert len(msgs) == 9
+    assert len(msgs) == 27
 
 
 def test_marks_extraction_and_strokes() -> None:
