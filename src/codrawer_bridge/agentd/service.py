@@ -311,9 +311,17 @@ class Agentd:
             if self._autopilot_task is not None:
                 self._autopilot_task.cancel()
         if (
-            (mt == "stroke_end" and not sid.startswith("agentd_")) or mt == "page"
-        ) and self.setting("autopilot") == "on":
-            self._schedule_autopilot()
+            mt == "stroke_end"
+            and not sid.startswith("agentd_")
+            and self.setting("autopilot") == "on"
+        ):
+            self._schedule_autopilot(reset=True)
+        elif (
+            mt == "page"
+            and self.setting("autopilot") == "on"
+            and (self._autopilot_task is None or self._autopilot_task.done())
+        ):
+            self._schedule_autopilot(reset=False)
         if mt == "settings" and isinstance(msg.get("set"), dict):
             self._spawn(self._apply_settings(msg["set"]))
             return
@@ -529,13 +537,15 @@ class Agentd:
         await self._dock_entries()
         await self._glasses(note, note)
 
-    def _schedule_autopilot(self) -> None:
-        if self._autopilot_task is not None:
+    def _schedule_autopilot(self, reset: bool = True) -> None:
+        if reset and self._autopilot_task is not None:
             self._autopilot_task.cancel()
 
         async def _wait_and_ask() -> None:
             await asyncio.sleep(4.0)
-            if self.setting("autopilot") != "on" or self.health.in_flight > 0:
+            while self.health.in_flight > 0:
+                await asyncio.sleep(1.5)
+            if self.setting("autopilot") != "on":
                 return
             m = self.model
             if not m.page:
