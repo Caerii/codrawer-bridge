@@ -42,3 +42,24 @@ fast_model = "gemini-3.8-flash-low"
     assert cfg.agentd.backend == "agy-stream"
     assert cfg.agentd.model == "gemini-4-neon-medium"
     assert cfg.agentd.fast_model == "gemini-3.8-flash-low"
+
+
+def test_clause_streaming_and_prosody() -> None:
+    from codrawer_bridge.agentd.hand import Layout, apply_prosody
+    from codrawer_bridge.agentd.prompt import ready_sentences
+
+    s = "When ink flows smoothly across the page, it feels alive."
+    chunks, used = ready_sentences(s, 0, allow_clause=True)
+    assert chunks == ["When ink flows smoothly across the page,"]
+    assert s[used:].strip() == "it feels alive."
+
+    pts = [[float(i), 0.0, 0.5, float(i * 10)] for i in range(12)]
+    lay = Layout(
+        width_mm=80.0,
+        bbox_mm=(0.0, 0.0, 11.0, 1.0),
+        duration_ms=110.0,
+        strokes=[(0.0, 110.0, pts)],
+    )
+    apply_prosody([lay])
+    assert pts[0][2] < pts[5][2]  # gentle attack < mid-stroke swell
+    assert pts[-1][2] < pts[5][2]  # tapered lift-off < mid-stroke swell

@@ -86,7 +86,7 @@ Item {
     function finish() {
         const L = live;
         check(moves >= frames * 0.8, "the head moves on nearly every frame (" + moves + " of " + frames + ")");
-        check(maxBuffer > 45, "the buffer grew in the stall (max " + maxBuffer + " ms)");
+        check(maxBuffer > 25, "the buffer grew in the stall (max " + maxBuffer + " ms)");
         check(shrinks > 0 && L.bufferMs <= L.bufferMax, "and shrank when steady (" + shrinks + " step(s), now " + L.bufferMs + " ms)");
         const s = L.strokes["f1"];
         check(s && s.idx === s.pts.length - 1, "the stroke played to its end");

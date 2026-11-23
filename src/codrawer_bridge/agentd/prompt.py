@@ -186,18 +186,33 @@ def clean_answer(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
 #: the whitespace is what proves, mid-stream, that the sentence is over ("3.5" or "e.g." without
 #: a following space does not end one).
 _SENTENCE_END = re.compile(r"[.!?…][\"')\]]*(?=\s)")
+_CLAUSE_END = re.compile(r"[,;:—](?=\s)")
 
 
-def ready_sentences(text: str, consumed: int, min_chars: int = 25) -> tuple[list[str], int]:
+def ready_sentences(
+    text: str, consumed: int, min_chars: int = 25, allow_clause: bool = False
+) -> tuple[list[str], int]:
     """
     The complete sentences of a streaming answer after its first ``consumed`` characters, and the
     new ``consumed``. A sentence shorter than ``min_chars`` ("Yes.") waits to travel with the next,
-    so a chunk of handwriting is never a lone word. What is left after the last complete sentence
-    stays unconsumed until more text, or the end of the turn, arrives.
+    so a chunk of handwriting is never a lone word. When ``allow_clause`` is true, the first
+    clause ending at ``, ; : —`` (>= ``min_chars``) may flush early so ink starts sooner.
     """
     out: list[str] = []
     start = consumed
-    for m in _SENTENCE_END.finditer(text, consumed):
+    if allow_clause and start == 0:
+        first_sent = _SENTENCE_END.search(text, start)
+        first_clause = _CLAUSE_END.search(text, start)
+        if (
+            first_clause
+            and first_clause.end() - start >= max(min_chars, 28)
+            and (first_sent is None or first_clause.end() < first_sent.end())
+        ):
+            chunk = text[start : first_clause.end()].strip()
+            if chunk:
+                out.append(chunk)
+            start = first_clause.end()
+    for m in _SENTENCE_END.finditer(text, start):
         if m.end() - start >= min_chars:
             chunk = text[start : m.end()].strip()
             if chunk:

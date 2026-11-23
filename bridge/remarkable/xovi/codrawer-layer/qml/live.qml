@@ -109,12 +109,12 @@ Item {
     // A pending doodle (thinkPending) waited its time and no agent answered.
     signal noAgent()
 
-    readonly property int frameMs: 25      // 40 frames a second while live strokes play
+    readonly property int frameMs: 16      // 60 frames a second while live strokes play
     readonly property int doodleMs: 100    // doodles keep 10 a second
     // playback runs this far behind the newest point (ms): adaptive, see "Live ink" above
-    property real bufferMs: 45
-    readonly property real bufferMin: 30
-    readonly property real bufferMax: 160
+    property real bufferMs: 25
+    readonly property real bufferMin: 16
+    readonly property real bufferMax: 120
     property int steadyFrames: 0
     property bool lastStarved: false
     property int starvedFrames: 0

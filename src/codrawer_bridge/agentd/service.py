@@ -1073,7 +1073,7 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
 #: fast; past a hurry of 2 the letters lose their shape (2026-10-07), so the rest of the speed is
 #: playback. With the Archivist: calm ~4.6 letters/s, fast ~7.3, very fast ~9.9 (fast print is
 #: 8-12). The pre-setting live default (no hurry, playback 3) wrote ~4.2.
-WRITING_SPEED = {"calm": (1.5, 2.0), "fast": (2.0, 2.2), "very_fast": (2.0, 3.0)}
+WRITING_SPEED = {"calm": (1.5, 2.0), "fast": (2.0, 2.2), "very_fast": (2.0, 3.6)}
 SPEED_ID = "agentd_writing_speed"
 
 #: Text size presets as factors on the scales placement chooses from (Config.scales, 1, 0.8 and

@@ -79,7 +79,9 @@ class InkStream:
     def feed(self, text: str) -> None:
         """The answer so far (terminal.py ``on_text``): queue the sentences now complete."""
         self.fed = text
-        chunks, self.consumed = prompt.ready_sentences(text, self.consumed)
+        chunks, self.consumed = prompt.ready_sentences(
+            text, self.consumed, allow_clause=(self.consumed == 0)
+        )
         for c in chunks:
             self._put(c)
 

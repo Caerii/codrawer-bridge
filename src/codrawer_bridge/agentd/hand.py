@@ -76,6 +76,29 @@ class Layout:
         return ox, oy
 
 
+def apply_prosody(lays: list[Layout]) -> list[Layout]:
+    """
+    Shape per-stroke pressure envelopes for more musical, dynamical ink: a gentle nib attack,
+    expressive mid-stroke swell (richer on longer strokes), and a tapered feather lift-off.
+    """
+    for lay in lays:
+        for _, _, pts in lay.strokes:
+            n = len(pts)
+            if n < 3:
+                continue
+            swell = 1.12 if n >= 10 else 1.04
+            for i, pt in enumerate(pts):
+                u = i / (n - 1)
+                if u < 0.15:
+                    env = 0.84 + 0.16 * (u / 0.15)
+                elif u > 0.82:
+                    env = 1.0 - 0.28 * ((u - 0.82) / 0.18)
+                else:
+                    env = swell - 0.06 * abs(u - 0.5)
+                pt[2] = round(max(0.08, min(1.0, pt[2] * env)), 3)
+    return lays
+
+
 class HandUnavailable(RuntimeError):
     """No Node, pnpm or packages/hand, or the simulation failed (the message says which)."""
 
@@ -255,7 +278,7 @@ class HandWorker:
                     line = await within(self._proc.stdout.readline(), self.timeout_s)
                     if not line:
                         raise HandUnavailable("layouts.ts --serve exited")
-                    return _parse(json.loads(line))
+                    return apply_prosody(_parse(json.loads(line)))
                 except (TimeoutError, OSError, ValueError, HandUnavailable) as e:
                     await self.close()
                     if attempt:
