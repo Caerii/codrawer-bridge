@@ -129,7 +129,7 @@ def build_prompt(ask: Ask) -> str:
         else "- Use no tools.",
         "- To change your own properties when requested in handwriting, emit `SET: <key>=<value>` "
         "lines before your answer: `persona=archivist|sketcher|elder|mathematician|calligrapher`, "
-        "`thinking_style=drop|pen|glyph|orbit|spark`, `writing_speed=slow|medium|fast|very_fast`, "
+        "`thinking_style=navi|pen|glyph|orbit|spark`, `writing_speed=slow|medium|fast|very_fast`, "
         "`text_size=small|medium|large`, `spacing=compact|normal|airy`, `autopilot=on|off`, "
         "`memory=on|off`, `model=careful|fast`, `color=auto|blue|red|green|black|gold`. "
         "To draw freehand sketches or diagrams alongside the user, emit up to 8 `SKETCH:` lines "

@@ -28,7 +28,10 @@ Item {
 
     property bool open: false
     property bool pinned: false
+    property string activeTab: "atelier"
+    property string pickerFor: ""
     property real animPhase: 0
+    onOpenChanged: if (!open) pickerFor = ""
     Timer {
         interval: 80
         repeat: true
@@ -116,6 +119,9 @@ Item {
         tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
                   'Epaper.ScreenModeItem { objectName: "codrawer-studio-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
                   studioPanel, "codrawer-studio-screenmode");
+        tryCreate('import QtQuick\nimport xofm.libs.epaper as Epaper\n' +
+                  'Epaper.ScreenModeItem { objectName: "codrawer-picker-screenmode"; anchors.fill: parent; mode: Epaper.ScreenModeItem.Overlay }',
+                  systemPanel, "codrawer-picker-screenmode");
     }
 
     Rectangle {
@@ -497,6 +503,10 @@ Item {
             id: rowTap
             anchors.fill: parent
             onClicked: {
+                if (modelData.id === "agentd_thinking_style") {
+                    root.pickerFor = (root.pickerFor === "thinking") ? "" : "thinking";
+                    return;
+                }
                 root.action(modelData.id);
                 if (modelData.id !== "status" && modelData.badge === undefined) root.open = false;
             }
@@ -667,6 +677,88 @@ Item {
                 delegate: DockRow { width: rows.width; listRef: root.leftEntries }
             }
 
+            // Tab switches for Column 2 (Atelier vs Cortex)
+            Rectangle {
+                width: rows.width
+                height: 66
+                visible: root.studioEntries.length > 0
+                color: tabAtTap.pressed ? "black" : "white"
+                Rectangle { anchors.top: parent.top; width: parent.width; height: 2; color: "black" }
+                Text {
+                    x: 22
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Atelier"
+                    font.family: "reMarkable Sans"
+                    font.pixelSize: 25
+                    font.weight: Font.DemiBold
+                    color: tabAtTap.pressed ? "white" : "black"
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    width: tabAtPill.implicitWidth + 24
+                    height: 32
+                    radius: 16
+                    color: root.activeTab === "atelier" ? (tabAtTap.pressed ? "white" : "black") : "transparent"
+                    border.width: 2
+                    border.color: tabAtTap.pressed ? "white" : "black"
+                    Text {
+                        id: tabAtPill
+                        anchors.centerIn: parent
+                        text: root.activeTab === "atelier" ? "open" : "›"
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 18
+                        color: root.activeTab === "atelier" ? (tabAtTap.pressed ? "black" : "white") : (tabAtTap.pressed ? "white" : "black")
+                    }
+                }
+                MouseArea {
+                    id: tabAtTap
+                    anchors.fill: parent
+                    onClicked: { root.activeTab = "atelier"; root.pickerFor = ""; }
+                }
+            }
+            Rectangle {
+                width: rows.width
+                height: 66
+                visible: root.systemEntries.length > 0
+                color: tabCxTap.pressed ? "black" : "white"
+                Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: "black" }
+                Text {
+                    x: 22
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Cortex"
+                    font.family: "reMarkable Sans"
+                    font.pixelSize: 25
+                    font.weight: Font.DemiBold
+                    color: tabCxTap.pressed ? "white" : "black"
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    width: tabCxPill.implicitWidth + 24
+                    height: 32
+                    radius: 16
+                    color: root.activeTab === "cortex" ? (tabCxTap.pressed ? "white" : "black") : "transparent"
+                    border.width: 2
+                    border.color: tabCxTap.pressed ? "white" : "black"
+                    Text {
+                        id: tabCxPill
+                        anchors.centerIn: parent
+                        text: root.activeTab === "cortex" ? "open" : "›"
+                        font.family: "reMarkable Sans"
+                        font.pixelSize: 18
+                        color: root.activeTab === "cortex" ? (tabCxTap.pressed ? "black" : "white") : (tabCxTap.pressed ? "white" : "black")
+                    }
+                }
+                MouseArea {
+                    id: tabCxTap
+                    anchors.fill: parent
+                    onClicked: { root.activeTab = "cortex"; root.pickerFor = ""; }
+                }
+            }
+
             Item {
                 width: rows.width
                 height: statusText.implicitHeight + 32
@@ -689,13 +781,15 @@ Item {
         OrnateFrame { z: 10 }
     }
 
-    // ── Right Companion Column: Personality & Animation Controls ────────────────────────────────
+    // ── Second Column: Atelier OR Cortex (selected from Column 1 tab) ───────────────────────────
     Rectangle {
         id: studioPanel
         objectName: "codrawer-dock-studio"
         z: 3
-        visible: root.open && root.studioEntries.length > 0
-        enabled: root.open && root.studioEntries.length > 0
+        readonly property bool showCortex: (root.activeTab === "cortex" && root.systemEntries.length > 0) || root.studioEntries.length === 0
+        readonly property var activeList: showCortex ? root.systemEntries : root.studioEntries
+        visible: root.open && activeList.length > 0
+        enabled: root.open && activeList.length > 0
         x: panel.x + panel.width + 16
         y: {
             const margin = 24;
@@ -723,7 +817,7 @@ Item {
                     x: 22
                     spacing: 1
                     Text {
-                        text: "atelier"
+                        text: studioPanel.showCortex ? "cortex" : "atelier"
                         font.family: "reMarkable Sans"
                         font.pixelSize: 25
                         font.weight: Font.DemiBold
@@ -731,7 +825,7 @@ Item {
                         color: "black"
                     }
                     Text {
-                        text: "PERSONALITY · MOTION"
+                        text: studioPanel.showCortex ? "AUTOPILOT · MEMORY · MODEL" : "PERSONALITY · MOTION"
                         font.family: "reMarkable Sans"
                         font.pixelSize: 12
                         font.weight: Font.Medium
@@ -764,41 +858,47 @@ Item {
             }
 
             Repeater {
-                model: root.studioEntries
-                delegate: DockRow { width: studioRows.width; listRef: root.studioEntries }
+                model: studioPanel.activeList
+                delegate: DockRow { width: studioRows.width; listRef: studioPanel.activeList }
             }
         }
 
         OrnateFrame { z: 10 }
     }
 
-    // ── Third Column: Intelligence & System Controls ────────────────────────────────────────────
+    // ── Third Column: Live Animated Thinking-Style Grid (opened by tapping Thinking) ────────────
     Rectangle {
         id: systemPanel
         objectName: "codrawer-dock-system"
         z: 3
-        visible: root.open && root.systemEntries.length > 0
-        enabled: root.open && root.systemEntries.length > 0
-        x: studioPanel.visible ? (studioPanel.x + studioPanel.width + 16) : (panel.x + panel.width + 16)
+        readonly property string currentThinking: {
+            for (let i = 0; i < root.studioEntries.length; ++i) {
+                if (root.studioEntries[i].id === "agentd_thinking_style") return (root.studioEntries[i].badge || "navi");
+            }
+            return "navi";
+        }
+        visible: root.open && root.pickerFor === "thinking" && studioPanel.visible && !studioPanel.showCortex
+        enabled: visible
+        x: studioPanel.x + studioPanel.width + 16
         y: {
             const margin = 24;
             const maxLocalY = root.winH - height - margin - root.btnY;
             const minLocalY = margin - root.btnY;
-            return Math.max(minLocalY, Math.min(panel.y, maxLocalY));
+            return Math.max(minLocalY, Math.min(studioPanel.y, maxLocalY));
         }
-        width: 430
-        height: systemRows.height
+        width: 420
+        height: pickerCol.height
         color: "white"
 
         Rectangle { z: -1; x: 6; y: 6; width: parent.width; height: parent.height; color: "black" }
         MultiPointTouchArea { anchors.fill: parent }
 
         Column {
-            id: systemRows
+            id: pickerCol
             width: systemPanel.width
 
             Rectangle {
-                width: systemRows.width
+                width: pickerCol.width
                 height: 68
                 color: "white"
                 Column {
@@ -806,7 +906,7 @@ Item {
                     x: 22
                     spacing: 1
                     Text {
-                        text: "cortex"
+                        text: "thinking"
                         font.family: "reMarkable Sans"
                         font.pixelSize: 25
                         font.weight: Font.DemiBold
@@ -814,7 +914,7 @@ Item {
                         color: "black"
                     }
                     Text {
-                        text: "AUTOPILOT · MODEL"
+                        text: "COMPANION · ANIMATIONS"
                         font.family: "reMarkable Sans"
                         font.pixelSize: 12
                         font.weight: Font.Medium
@@ -825,9 +925,106 @@ Item {
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2; color: "black" }
             }
 
-            Repeater {
-                model: root.systemEntries
-                delegate: DockRow { width: systemRows.width; listRef: root.systemEntries }
+            Grid {
+                width: pickerCol.width - 28
+                anchors.horizontalCenter: parent.horizontalCenter
+                topPadding: 14
+                bottomPadding: 14
+                columns: 2
+                spacing: 12
+
+                Repeater {
+                    model: ["navi", "pen", "glyph", "orbit", "spark"]
+                    delegate: Rectangle {
+                        id: tile
+                        required property string modelData
+                        readonly property bool active: systemPanel.currentThinking === modelData
+                        width: (pickerCol.width - 40) / 2
+                        height: 112
+                        color: tileTap.pressed || active ? "black" : "white"
+                        border.width: 2
+                        border.color: "black"
+
+                        Canvas {
+                            id: tileCanvas
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            y: 12
+                            width: 56
+                            height: 56
+                            property real ph: systemPanel.visible ? root.animPhase : 0
+                            property bool inv: tileTap.pressed || tile.active
+                            onPhChanged: requestPaint()
+                            onInvChanged: requestPaint()
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.clearRect(0, 0, width, height);
+                                const fg = inv ? "#ffffff" : "#000000";
+                                ctx.strokeStyle = fg;
+                                ctx.fillStyle = fg;
+                                ctx.lineCap = "round";
+                                ctx.lineJoin = "round";
+                                const s = modelData;
+                                if (s === "navi") {
+                                    const fx = 28 + 4.5 * Math.sin(ph * 1.1);
+                                    const fy = 28 + 3.0 * Math.sin(ph * 2.2);
+                                    const flap = 0.5 + 0.5 * Math.sin(ph * 5.0);
+                                    ctx.lineWidth = 2.0;
+                                    for (let sd = -1; sd <= 1; sd += 2) {
+                                        ctx.beginPath();
+                                        ctx.moveTo(fx, fy);
+                                        ctx.quadraticCurveTo(fx + sd * (18 * flap + 4), fy - 18, fx + sd * (10 * flap + 3), fy - 1);
+                                        ctx.quadraticCurveTo(fx + sd * (13 * flap + 3), fy + 13, fx, fy + 3);
+                                        ctx.stroke();
+                                    }
+                                    ctx.beginPath(); ctx.arc(fx, fy, 4.2, 0, 2 * Math.PI); ctx.fill();
+                                } else if (s === "pen") {
+                                    const nx = 38 + 3.5 * Math.cos(ph * 1.4);
+                                    const ny = 18 + 3.8 * Math.sin(ph * 2.1);
+                                    ctx.lineWidth = 2.2;
+                                    ctx.beginPath(); ctx.moveTo(10, 42); ctx.bezierCurveTo(18, 24, 28, 34, nx, ny); ctx.stroke();
+                                    ctx.beginPath(); ctx.arc(nx + 2, ny - 2, 3.2, 0, 2 * Math.PI); ctx.fill();
+                                    const bph = (ph * 0.35) % 1.0;
+                                    ctx.lineWidth = 1.5;
+                                    ctx.beginPath(); ctx.arc(18 + 3 * Math.sin(ph), 34 - bph * 20, 2.2 + 2.0 * Math.sin(bph * Math.PI), 0, 2 * Math.PI); ctx.stroke();
+                                } else if (s === "glyph") {
+                                    const rot = ph * 0.7;
+                                    ctx.lineWidth = 2.1;
+                                    ctx.beginPath(); ctx.arc(28, 28, 13, rot, rot + 1.65 * Math.PI); ctx.stroke();
+                                    ctx.beginPath(); ctx.arc(28, 28, 6.5, -rot, -rot + 1.5 * Math.PI); ctx.stroke();
+                                } else if (s === "orbit") {
+                                    ctx.lineWidth = 1.7;
+                                    ctx.beginPath(); ctx.arc(28, 28, 3.5, 0, 2 * Math.PI); ctx.fill();
+                                    ctx.beginPath(); ctx.ellipse(9, 17, 38, 22); ctx.stroke();
+                                    const pa = ph * 2.0;
+                                    ctx.beginPath(); ctx.arc(28 + 19 * Math.cos(pa), 28 + 11 * Math.sin(pa), 3.4, 0, 2 * Math.PI); ctx.fill();
+                                } else {
+                                    const r = 15.0 + 4.0 * Math.sin(ph * 2.5);
+                                    ctx.lineWidth = 1.8;
+                                    for (let k = 0; k < 6; ++k) {
+                                        const a = ph * 0.6 + (k / 6) * 2 * Math.PI;
+                                        ctx.beginPath(); ctx.moveTo(28, 28); ctx.lineTo(28 + r * Math.cos(a), 28 + r * Math.sin(a)); ctx.stroke();
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            y: 76
+                            text: tile.modelData
+                            font.family: "reMarkable Sans"
+                            font.pixelSize: 21
+                            font.weight: Font.Medium
+                            color: tileTap.pressed || tile.active ? "white" : "black"
+                        }
+
+                        MouseArea {
+                            id: tileTap
+                            anchors.fill: parent
+                            onClicked: root.action("agentd_thinking_style:" + tile.modelData)
+                        }
+                    }
+                }
             }
         }
 

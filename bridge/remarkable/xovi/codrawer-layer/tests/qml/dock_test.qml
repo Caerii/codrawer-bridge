@@ -109,9 +109,10 @@ Item {
                          { id: "agentd_text_size", label: "Text size", badge: "medium", owner: "agentd" }];
             d.toggle();
             check(findText(d, "medium") !== null, "a value badge shows its value");
+            d.activeTab = "cortex";
             check(findText(d, "Ask about this page") && findText(d, "Memory: page thread"), "the agent's rows in the dock");
             const pills = findAll(d, "codrawer-dock-badge", []).filter(function(p) { return p.visible; });
-            check(pills.length === 2, "two badges shown (" + pills.length + ")");
+            check(pills.length === 1, "one badge shown in cortex (" + pills.length + ")");
             d.entries = [{ id: "status", label: "codrawer status" }, { id: "ask_page", label: "Ask about this page" },
                          { id: "agentd_memory", label: "Memory", badge: "off", owner: "agentd" },
                          { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" }];
@@ -133,6 +134,7 @@ Item {
                 { id: "agentd_model", label: "Model", badge: "careful · Sonnet", owner: "agentd" },
                 { id: "agentd_health", label: "Responder: online · Sonnet", badge: "ok", owner: "agentd-health" }
             ];
+            d.activeTab = "atelier";
             d.toggle(); d.toggle();  // re-open at y=988
             const panelBottom = d.y + panel.y + panel.height;
             check(panelBottom <= 2160 - 24, "12-row panel clamped inside viewport (bottom=" + panelBottom + ")");

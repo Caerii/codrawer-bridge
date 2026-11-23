@@ -345,6 +345,13 @@ class Agentd:
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
             return
+        if aid.startswith(f"{THINKING_STYLE_ID}:"):
+            want_style = aid.split(":", 1)[1].strip().lower()
+            if want_style == "drop":
+                want_style = "navi"
+            if want_style in THINKING_STYLES:
+                self._spawn(self._apply_settings({"thinking_style": want_style}))
+            return
         if aid in (SIZE_ID, SPACING_ID, SPEED_ID, PERSONA_ID, THINKING_STYLE_ID, COLOR_ID):
             key, order = {
                 SIZE_ID: ("text_size", SIZES),
@@ -464,6 +471,8 @@ class Agentd:
         """A user setting with a fixed set of values (SETTINGS), from settings.json."""
         values, default = SETTINGS[key]
         v = self.threads.setting(key, default)
+        if key == "thinking_style" and v == "drop":
+            v = "navi"
         return v if v in values else default
 
     @property
@@ -1283,7 +1292,7 @@ SIZES = ("micro", "tiny", "small", "medium", "large")  # the dock cycles smalles
 SPACINGS = ("compact", "normal", "airy")
 SPEEDS = ("calm", "fast", "very_fast")
 PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
-THINKING_STYLES = ("drop", "pen", "glyph", "orbit", "spark")
+THINKING_STYLES = ("navi", "pen", "glyph", "orbit", "spark")
 COLORS = ("auto", "blue", "red", "green", "purple", "gold", "black")
 INK_COLORS = {
     "blue": "#1f6fe0",
@@ -1306,7 +1315,7 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "writing_speed": (SPEEDS, "fast"),
     "autopilot": (("off", "on"), "on"),
     "persona": (PERSONAS, "archivist"),
-    "thinking_style": (THINKING_STYLES, "drop"),
+    "thinking_style": (THINKING_STYLES, "navi"),
     "color": (COLORS, "auto"),
 }
 

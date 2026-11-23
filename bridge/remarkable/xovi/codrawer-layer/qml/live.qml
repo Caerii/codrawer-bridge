@@ -533,7 +533,7 @@ Item {
     }
 
     function newDoodle(id, cx, cy, style) {
-        const okStyle = (style === "drop" || style === "glyph" || style === "orbit" || style === "spark") ? style : "pen";
+        const okStyle = (style === "navi" || style === "drop" || style === "glyph" || style === "orbit" || style === "spark") ? style : "pen";
         const d = { id: id, style: okStyle, cx: cx, cy: cy, t0: clock(),
                     trail: [], items: null, rect: null, handoff: null, clearAt: 0, target: null, frames: 0,
                     pending: false, move: null, noAgent: 0, done: null, panel: newPanel() };
@@ -794,7 +794,7 @@ Item {
                     }
                 }
             }
-        } else if (d.style === "drop") {
+        } else if (d.style === "navi" || d.style === "drop") {
             // Persistent Navi-style ink fairy companion: figure-8 hover, 4 fluttering wings,
             // pixie-dust comet ribbon, and twinkling star-sparkles.
             const fx = d.cx + 18.0 * scale * Math.sin(tau * 2.1);
@@ -986,7 +986,7 @@ Item {
                 for (let i = 1; i < h.path.length; ++i) items.push({ pts: [h.path[i - 1], h.path[i]], width: 0.8 + 2.4 * i / h.path.length });
                 if (u < 1) {
                     items.push({ dot: { x: x, y: y }, r: 3 });
-                    if (d.style === "drop") {
+                    if (d.style === "navi" || d.style === "drop") {
                         for (let p = 0; p < 4; ++p) {
                             const pa = p * Math.PI * 0.5 + 0.4;
                             const dist = 16 + 26 * u;
