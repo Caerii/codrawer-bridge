@@ -40,9 +40,8 @@ class Exchange:
 
 
 def _sanitize_fts_query(query: str) -> str:
-    """Turn arbitrary page text into a safe FTS5 ``OR`` query over alphanumeric/word tokens."""
+    """Turn arbitrary page text into a safe FTS5 ``OR`` query over up to 8 high-signal tokens."""
     tokens = [t for t in re.findall(r"[A-Za-z0-9_]+", query or "") if len(t) >= 2]
-    # Preserve order while deduplicating; cap to 16 terms to keep FTS5 fast.
     seen_tok: set[str] = set()
     unique: list[str] = []
     for tok in tokens:
@@ -51,9 +50,9 @@ def _sanitize_fts_query(query: str) -> str:
             continue
         seen_tok.add(low)
         unique.append(tok)
-        if len(unique) >= 16:
-            break
-    return " OR ".join(unique)
+    # Prefer longer, more specific terms for fast FTS5 postings-list lookup.
+    unique.sort(key=len, reverse=True)
+    return " OR ".join(unique[:8])
 
 
 def _recency_score(ts: float, now: float, half_life_days: float = HALF_LIFE_DAYS) -> float:
@@ -88,6 +87,9 @@ class ThreadStore:
             """
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA cache_size=-16384;
+            PRAGMA mmap_size=67108864;
             CREATE TABLE IF NOT EXISTS exchanges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doc TEXT NOT NULL,
@@ -98,6 +100,8 @@ class ThreadStore:
                 pinned INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_ex_doc_page ON exchanges(doc, page, ts);
+            CREATE INDEX IF NOT EXISTS idx_ex_doc_pin_ts ON exchanges(doc, pinned DESC, ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_ex_pinned_ts ON exchanges(ts DESC) WHERE pinned = 1;
             CREATE TABLE IF NOT EXISTS pages (
                 doc TEXT NOT NULL,
                 page TEXT NOT NULL,
@@ -131,6 +135,12 @@ class ThreadStore:
         self._conn = conn
         self._migrate_legacy_json(conn)
         return conn
+
+    def close(self) -> None:
+        """Close the SQLite connection cleanly."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def _migrate_legacy_json(self, conn: sqlite3.Connection) -> None:
         if not self.dir.exists():
@@ -345,7 +355,7 @@ class ThreadStore:
                 params.append(exclude_page)
             if pinned_only:
                 sql += "AND e.pinned = 1 "
-            sql += "ORDER BY rank LIMIT 40"
+            sql += "ORDER BY rank LIMIT 16"
             try:
                 rows = conn.execute(sql, params).fetchall()
                 raw_ranks = [-float(r["rank"]) for r in rows]
@@ -361,31 +371,32 @@ class ThreadStore:
             except sqlite3.OperationalError:
                 pass
 
-        # Stage 1b: Pinned + recent fallback candidates so empty/non-matching queries still recall
-        sql2 = "SELECT id, seen, answer, ts, pinned FROM exchanges WHERE 1=1 "
-        p2: list[object] = []
-        if doc_filter:
-            sql2 += "AND doc = ? "
-            p2.append(doc_filter)
-        if exclude_doc:
-            sql2 += "AND doc != ? "
-            p2.append(exclude_doc)
-        if exclude_page:
-            sql2 += "AND page != ? "
-            p2.append(exclude_page)
-        if pinned_only:
-            sql2 += "AND pinned = 1 "
-        sql2 += "ORDER BY pinned DESC, ts DESC LIMIT 24"
-        for r in conn.execute(sql2, p2).fetchall():
-            rid = int(r["id"])
-            if rid in candidates:
-                continue
-            rec = _recency_score(float(r["ts"]), now)
-            score = (10.0 if r["pinned"] else 0.0) + 0.35 * rec
-            candidates[rid] = (
-                score,
-                Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])),
-            )
+        # Stage 1b: Fast indexed fallback only when FTS5 returned fewer than `limit` hits
+        if len(candidates) < limit:
+            sql2 = "SELECT id, seen, answer, ts, pinned FROM exchanges WHERE 1=1 "
+            p2: list[object] = []
+            if doc_filter:
+                sql2 += "AND doc = ? "
+                p2.append(doc_filter)
+            if exclude_doc:
+                sql2 += "AND doc != ? "
+                p2.append(exclude_doc)
+            if exclude_page:
+                sql2 += "AND page != ? "
+                p2.append(exclude_page)
+            if pinned_only:
+                sql2 += "AND pinned = 1 "
+            sql2 += "ORDER BY pinned DESC, ts DESC LIMIT 12"
+            for r in conn.execute(sql2, p2).fetchall():
+                rid = int(r["id"])
+                if rid in candidates:
+                    continue
+                rec = _recency_score(float(r["ts"]), now)
+                score = (10.0 if r["pinned"] else 0.0) + 0.35 * rec
+                candidates[rid] = (
+                    score,
+                    Exchange(r["seen"], r["answer"], float(r["ts"]), bool(r["pinned"])),
+                )
 
         ranked = sorted(candidates.values(), key=lambda item: item[0], reverse=True)
         top = [ex for _, ex in ranked[:limit]]
