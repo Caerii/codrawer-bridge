@@ -306,9 +306,13 @@ class Agentd:
     def handle(self, msg: dict[str, Any]) -> None:
         self.model.observe(msg)
         mt = msg.get("t")
-        if mt in ("stroke_begin", "stroke_pts") and self._autopilot_task is not None:
-            self._autopilot_task.cancel()
-        if mt == "stroke_end" and self.setting("autopilot") == "on":
+        sid = str(msg.get("id") or "")
+        if mt in ("stroke_begin", "stroke_pts") and not sid.startswith("agentd_"):
+            if self._autopilot_task is not None:
+                self._autopilot_task.cancel()
+        if (
+            (mt == "stroke_end" and not sid.startswith("agentd_")) or mt == "page"
+        ) and self.setting("autopilot") == "on":
             self._schedule_autopilot()
         if mt == "settings" and isinstance(msg.get("set"), dict):
             self._spawn(self._apply_settings(msg["set"]))
@@ -541,6 +545,11 @@ class Agentd:
             if not user_strokes or sig in self._autopilot_seen:
                 return
             self._autopilot_seen.add(sig)
+            log.info(
+                "autopilot: triggering ask_page on %s (%d user strokes)",
+                m.page,
+                len(user_strokes),
+            )
             self.queue.submit(
                 ("autopilot", m.page),
                 self.answer(
