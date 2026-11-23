@@ -114,13 +114,58 @@ def _recognize_question(
     return "question", _bbox(hook + dot)
 
 
+def _recognize_box_lasso(
+    strokes: list[Stroke], page_w: float, page_h: float
+) -> tuple[str, tuple[float, float, float, float]] | None:
+    """Recognize a 4-stroke hand-drawn box enclosing earlier user strokes."""
+    if len(strokes) < 5:
+        return None
+    sides = [_stroke_pts_pu(st, page_w, page_h) for st in strokes[-4:]]
+    if any(len(p) < 2 for p in sides):
+        return None
+    horiz, vert = 0, 0
+    all_pts: list[tuple[float, float]] = []
+    for p in sides:
+        bx0, by0, bx1, by1 = _bbox(p)
+        dx, dy = bx1 - bx0, by1 - by0
+        if dx >= 40.0 and dy <= 0.4 * dx:
+            horiz += 1
+        elif dy >= 35.0 and dx <= 0.4 * dy:
+            vert += 1
+        else:
+            return None
+        all_pts.extend(p)
+    if horiz != 2 or vert != 2:
+        return None
+    x0, y0, x1, y1 = _bbox(all_pts)
+    if (x1 - x0) < 70.0 or (y1 - y0) < 50.0:
+        return None
+    enclosed: list[tuple[float, float]] = []
+    for st in strokes[:-4]:
+        s_pts = _stroke_pts_pu(st, page_w, page_h)
+        if not s_pts:
+            continue
+        sx0, sy0, sx1, sy1 = _bbox(s_pts)
+        cx, cy = (sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            enclosed.extend(s_pts)
+    if not enclosed:
+        return None
+    return "lasso", _bbox(enclosed)
+
+
 def recognize_idiolect(
     strokes: list[Stroke], page_w: float, page_h: float
 ) -> tuple[str, tuple[float, float, float, float]] | None:
     """Return ``(kind, bbox_pu)`` if the newest user strokes form a recognized idiolect."""
     if not strokes:
         return None
-    for recognizer in (_recognize_lasso, _recognize_star, _recognize_question):
+    for recognizer in (
+        _recognize_lasso,
+        _recognize_box_lasso,
+        _recognize_star,
+        _recognize_question,
+    ):
         hit = recognizer(strokes, page_w, page_h)
         if hit is not None:
             return hit

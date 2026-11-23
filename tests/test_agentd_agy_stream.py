@@ -202,6 +202,19 @@ def test_multiscale_compaction_and_cross_notebook_fts(tmp_path: Path) -> None:
     assert gl == [("superintelligent.group workflow", "Dispatch research via MCP.")]
 
 
+def test_four_stroke_box_lasso_idiolect() -> None:
+    from codrawer_bridge.agentd.idiolect import recognize_idiolect
+    from codrawer_bridge.agentd.page import Stroke
+
+    inner = Stroke(id="i1", layer="user", tool="pen", pts=[[0.40, 0.40], [0.45, 0.40]])
+    top = Stroke(id="b1", layer="user", tool="pen", pts=[[0.35, 0.35], [0.55, 0.35]])
+    bot = Stroke(id="b2", layer="user", tool="pen", pts=[[0.35, 0.45], [0.55, 0.45]])
+    left = Stroke(id="b3", layer="user", tool="pen", pts=[[0.35, 0.35], [0.35, 0.45]])
+    right = Stroke(id="b4", layer="user", tool="pen", pts=[[0.55, 0.35], [0.55, 0.45]])
+    hit = recognize_idiolect([inner, top, bot, left, right], 1620.0, 2160.0)
+    assert hit is not None and hit[0] == "lasso"
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

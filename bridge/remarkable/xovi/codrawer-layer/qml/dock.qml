@@ -39,8 +39,8 @@ Item {
 
     function isStudioId(id) {
         return id === "agentd_persona" || id === "agentd_thinking_style" ||
-               id === "agentd_writing_speed" || id === "agentd_text_size" ||
-               id === "agentd_spacing";
+               id === "agentd_color" || id === "agentd_writing_speed" ||
+               id === "agentd_text_size" || id === "agentd_spacing";
     }
     function isSystemId(id) {
         return id === "agentd_autopilot" || id === "agentd_memory" ||
@@ -325,6 +325,16 @@ Item {
                         ctx.beginPath(); ctx.arc(10, 24, 2.2, 0, 2 * Math.PI); ctx.stroke();
                         ctx.beginPath(); ctx.arc(6, 28, 1.4, 0, 2 * Math.PI); ctx.stroke();
                     }
+                } else if (gid === "agentd_color") {
+                    // Inkwell droplet + highlight glint
+                    ctx.lineWidth = 1.7;
+                    ctx.beginPath();
+                    ctx.moveTo(16, 4);
+                    ctx.bezierCurveTo(24, 13, 25, 22, 16, 27);
+                    ctx.bezierCurveTo(7, 22, 8, 13, 16, 4);
+                    ctx.stroke();
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath(); ctx.arc(14, 19, 3.2, 0.3, 2.2); ctx.stroke();
                 } else if (gid === "agentd_autopilot") {
                     ctx.lineWidth = 1.5;
                     ctx.beginPath(); ctx.arc(16, 16, 10, 0.2 * Math.PI, 1.8 * Math.PI); ctx.stroke();

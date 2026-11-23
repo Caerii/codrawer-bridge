@@ -345,13 +345,14 @@ class Agentd:
         if aid in (MEMORY_ID, FORGET_ID):
             self._spawn(self._on_memory_entry(msg))
             return
-        if aid in (SIZE_ID, SPACING_ID, SPEED_ID, PERSONA_ID, THINKING_STYLE_ID):
+        if aid in (SIZE_ID, SPACING_ID, SPEED_ID, PERSONA_ID, THINKING_STYLE_ID, COLOR_ID):
             key, order = {
                 SIZE_ID: ("text_size", SIZES),
                 SPACING_ID: ("spacing", SPACINGS),
                 SPEED_ID: ("writing_speed", SPEEDS),
                 PERSONA_ID: ("persona", PERSONAS),
                 THINKING_STYLE_ID: ("thinking_style", THINKING_STYLES),
+                COLOR_ID: ("color", COLORS),
             }[aid]
             now = self.setting(key)
             self._spawn(self._apply_settings({key: order[(order.index(now) + 1) % len(order)]}))
@@ -427,6 +428,11 @@ class Agentd:
                         "id": THINKING_STYLE_ID,
                         "label": "Thinking",
                         "badge": self.setting("thinking_style"),
+                    },
+                    {
+                        "id": COLOR_ID,
+                        "label": "Color",
+                        "badge": self.setting("color"),
                     },
                     {
                         "id": SIZE_ID,
@@ -1234,6 +1240,7 @@ MEMORY_ID = "agentd_memory"
 AUTOPILOT_ID = "agentd_autopilot"
 PERSONA_ID = "agentd_persona"
 THINKING_STYLE_ID = "agentd_thinking_style"
+COLOR_ID = "agentd_color"
 MODEL_ID = "agentd_model"
 SIZE_ID = "agentd_text_size"
 SPACING_ID = "agentd_spacing"
