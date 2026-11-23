@@ -66,6 +66,24 @@ def test_clause_streaming_and_prosody() -> None:
     assert pts[-1][2] < pts[5][2]  # tapered lift-off < mid-stroke swell
 
 
+def test_extract_sets_and_clean_answer() -> None:
+    from codrawer_bridge.agentd.prompt import answer_so_far, clean_answer, extract_sets
+
+    raw = (
+        "SEEN: switch to mathematician and drop\n"
+        "SET: persona=mathematician\n"
+        "SET: thinking_style=drop\n"
+        "SET: memory=off\n"
+        "Switched to mathematician with cloud thinking."
+    )
+    assert extract_sets(raw) == {
+        "persona": "mathematician",
+        "thinking_style": "drop",
+        "memory": False,
+    }
+    assert clean_answer(answer_so_far(raw)) == "Switched to mathematician with cloud thinking."
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

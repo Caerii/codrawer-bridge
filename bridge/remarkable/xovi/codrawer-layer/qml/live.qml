@@ -110,7 +110,7 @@ Item {
     signal noAgent()
 
     readonly property int frameMs: 16      // 60 frames a second while live strokes play
-    readonly property int doodleMs: 50     // 20 frames a second for silky thinking doodles
+    readonly property int doodleMs: 25     // 40 frames a second for silky fluid cloud & doodles
     // playback runs this far behind the newest point (ms): adaptive, see "Live ink" above
     property real bufferMs: 25
     readonly property real bufferMin: 16
@@ -794,42 +794,54 @@ Item {
                 }
             }
         } else if (d.style === "drop") {
-            // Breathing scalloped thought-cloud + rising effervescent thought-bubbles
-            const breath = 1.0 + 0.08 * Math.sin(tau * 2.2);
+            // Silky billowing thought-cloud fused with a wandering ink-doodle tendril + rising bubbles
+            const breath = 1.0 + 0.09 * Math.sin(tau * 1.9);
             const puffs = [
-                { dx: 0, dy: -2, r: 17 },
-                { dx: -16, dy: 4, r: 12.5 },
-                { dx: 16, dy: 3, r: 13 },
-                { dx: -9, dy: -11, r: 12 },
-                { dx: 10, dy: -10, r: 11.5 }
+                { dx: 0, dy: -2, r: 18 },
+                { dx: -17, dy: 4, r: 13.5 },
+                { dx: 17, dy: 3, r: 14 },
+                { dx: -10, dy: -12, r: 12.5 },
+                { dx: 11, dy: -11, r: 12 }
             ];
             for (let p = 0; p < puffs.length; ++p) {
                 const P = puffs[p];
-                const px = d.cx + P.dx * scale * breath + 2.0 * Math.sin(tau * 1.6 + p * 1.3);
-                const py = d.cy + P.dy * scale * breath + 1.8 * Math.cos(tau * 1.4 + p * 1.1);
+                const driftX = 2.6 * Math.sin(tau * 1.35 + p * 1.25) + 1.2 * Math.cos(tau * 2.1 + p * 0.7);
+                const driftY = 2.2 * Math.cos(tau * 1.15 + p * 1.45) + 1.0 * Math.sin(tau * 1.85 + p * 0.9);
+                const px = d.cx + P.dx * scale * breath + driftX * scale;
+                const py = d.cy + P.dy * scale * breath + driftY * scale;
                 const pr = P.r * scale * breath;
                 if (pr < 1.0) continue;
                 const ring = [];
-                for (let i = 0; i <= 20; ++i) {
-                    const th = (i / 20) * 2 * Math.PI;
-                    const n = noise(Math.cos(th) * 1.1 + tau * 0.45 + p * 3, Math.sin(th) * 1.1 - tau * 0.35);
-                    const rr = pr * (0.90 + 0.18 * n);
+                for (let i = 0; i <= 32; ++i) {
+                    const th = (i / 32) * 2 * Math.PI;
+                    const n = noise(Math.cos(th) * 1.15 + tau * 0.55 + p * 3.1, Math.sin(th) * 1.15 - tau * 0.45);
+                    const rr = pr * (0.88 + 0.22 * n);
                     ring.push({ x: px + rr * Math.cos(th), y: py + rr * Math.sin(th) });
                 }
-                out.push({ pts: ring, width: 1.8 });
+                out.push({ pts: ring, width: 1.75 });
+            }
+            // Wandering ink-doodle tendril weaving inside the cloud
+            const ix = d.cx + 10 * scale * Math.sin(tau * 2.3) * Math.cos(tau * 0.9);
+            const iy = d.cy - 2 * scale + 7 * scale * Math.sin(tau * 3.1 + 0.8);
+            d.trail.push({ x: ix, y: iy });
+            const keepWisp = Math.max(0, Math.round(20 * scale));
+            while (d.trail.length > keepWisp) d.trail.shift();
+            for (let i = 1; i < d.trail.length; ++i) {
+                const f = i / d.trail.length;
+                out.push({ pts: [d.trail[i - 1], d.trail[i]], width: (0.6 + 2.1 * f) * scale });
             }
             for (let b = 0; b < 4; ++b) {
-                const ph = ((tau * 0.45 + b * 0.25) % 1.0);
-                const bx = d.cx - 22 * scale + ph * 14 * scale + 4 * Math.sin(tau * 2.0 + b);
-                const by = d.cy + 34 * scale - ph * 34 * scale;
-                const br = (2.6 + 4.4 * Math.sin(ph * Math.PI)) * scale;
+                const ph = ((tau * 0.48 + b * 0.25) % 1.0);
+                const bx = d.cx - 24 * scale + ph * 16 * scale + 4.5 * Math.sin(tau * 2.1 + b * 1.4);
+                const by = d.cy + 36 * scale - ph * 36 * scale;
+                const br = (2.8 + 4.8 * Math.sin(ph * Math.PI)) * scale;
                 if (br > 0.8) {
                     const bRing = [];
-                    for (let k = 0; k <= 14; ++k) {
-                        const a = (k / 14) * 2 * Math.PI;
+                    for (let k = 0; k <= 20; ++k) {
+                        const a = (k / 20) * 2 * Math.PI;
                         bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
                     }
-                    out.push({ pts: bRing, width: 1.4 + 0.6 * Math.sin(ph * Math.PI) });
+                    out.push({ pts: bRing, width: 1.4 + 0.7 * Math.sin(ph * Math.PI) });
                 }
             }
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark

@@ -843,6 +843,10 @@ class Agentd:
             rec.reply["raw"] = reply.text
             seen, answer_raw = prompt.split_seen(reply.text or "")
             rec.seen = seen
+            if answer_raw and not reply.error:
+                sets = prompt.extract_sets(answer_raw)
+                if sets:
+                    await self._apply_settings(sets)
             text = prompt.clean_answer(answer_raw) if answer_raw and not reply.error else ""
             if not text:
                 rec.error = reply.error or "empty answer"
