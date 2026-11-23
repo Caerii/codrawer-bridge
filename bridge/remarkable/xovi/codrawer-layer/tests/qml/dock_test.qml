@@ -91,7 +91,7 @@ Item {
             if (d.nativeButton) check(d.nativeButton.state === "selected", "native state selected while open");
             if (panel) {
                 check(panel.visible && panel.color == "#ffffff", "an opaque white panel");
-                check(panel.height >= 2 * 112 + 48, "one 112 px row per entry plus the status row");
+                check(panel.height >= 68 + 2 * 78 + 32, "masthead + 78 px row per entry + status row");
             }
             d.action("status");  // what a status row tap emits; the dock keeps itself open
             check(d.open, "status keeps the panel open");
@@ -113,10 +113,30 @@ Item {
             const pills = findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; });
             check(pills.length === 2, "two badges shown (" + pills.length + ")");
             d.entries = [{ id: "status", label: "codrawer status" }, { id: "ask_page", label: "Ask about this page" },
-                         { id: "agentd_memory", label: "Memory: off", badge: "off", owner: "agentd" },
+                         { id: "agentd_memory", label: "Memory", badge: "off", owner: "agentd" },
                          { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" }];
-            check(findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; }).length === 0, "badge off hides it");
-            check(findText(panel, "Memory: off"), "the label updates in place");
+            check(findAll(panel, "codrawer-dock-badge", []).filter(function(p) { return p.visible; }).length === 1, "badge off shows outlined pill");
+            check(findText(panel, "off") !== null, "off pill text visible");
+            check(findText(panel, "Memory"), "the label updates in place");
+            // viewport clamping: a 12-row panel opened near y=988 stays inside 2160 px height
+            redo.y = 988;
+            d.y = 988;
+            d.entries = [
+                { id: "status", label: "codrawer status" }, { id: "agent_ink", label: "Agent ink on/off" },
+                { id: "practice_coach", label: "Practice coach" }, { id: "ask_page", label: "Ask about this page" },
+                { id: "ask_selection", label: "Ask about selection" },
+                { id: "agentd_memory", label: "Memory", badge: "on", owner: "agentd" },
+                { id: "agentd_forget", label: "Forget this page's thread", owner: "agentd" },
+                { id: "agentd_text_size", label: "Text size", badge: "small", owner: "agentd" },
+                { id: "agentd_spacing", label: "Spacing", badge: "compact", owner: "agentd" },
+                { id: "agentd_writing_speed", label: "Writing speed", badge: "very_fast", owner: "agentd" },
+                { id: "agentd_model", label: "Model", badge: "careful · Sonnet", owner: "agentd" },
+                { id: "agentd_health", label: "Responder: online · Sonnet", badge: "ok", owner: "agentd-health" }
+            ];
+            d.toggle(); d.toggle();  // re-open at y=988
+            const panelBottom = d.y + panel.y + panel.height;
+            check(panelBottom <= 2160 - 24, "12-row panel clamped inside viewport (bottom=" + panelBottom + ")");
+            check(findText(panel, "very fast") !== null, "underscore formatted in pill");
             // a tap on the agent's row sends its id and closes the panel
             const row = findText(panel, "Forget this page's thread");
             d.action("agentd_forget");

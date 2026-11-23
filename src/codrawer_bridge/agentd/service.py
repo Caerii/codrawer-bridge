@@ -364,31 +364,30 @@ class Agentd:
                 "entries": [
                     {
                         "id": MEMORY_ID,
-                        "label": "Memory: page thread" if on else "Memory: off",
+                        "label": "Memory",
                         "badge": "on" if on else "off",
                         "hint": "Asks on the same page follow on from each other",
                     },
                     {"id": FORGET_ID, "label": "Forget this page's thread"},
                     {
                         "id": SIZE_ID,
-                        "label": f"Text size: {self.setting('text_size')}",
+                        "label": "Text size",
                         "badge": self.setting("text_size"),
                     },
                     {
                         "id": SPACING_ID,
-                        "label": f"Spacing: {self.setting('spacing')}",
+                        "label": "Spacing",
                         "badge": self.setting("spacing"),
                     },
                     {
                         "id": SPEED_ID,
-                        "label": "Writing speed: "
-                        + self.setting("writing_speed").replace("_", " "),
-                        "badge": self.setting("writing_speed"),
+                        "label": "Writing speed",
+                        "badge": self.setting("writing_speed").replace("_", " "),
                     },
                     {
                         "id": MODEL_ID,
-                        "label": f"Model: {self.speed} ({_model_name(self.model_id)})",
-                        "badge": self.speed,
+                        "label": "Model",
+                        "badge": f"{self.speed} · {_model_name(self.model_id)}",
                         "hint": "careful reads handwriting best; fast answers sooner",
                     },
                 ],

@@ -350,7 +350,7 @@ def test_the_model_toggle_switches_careful_and_fast(tmp_path, monkeypatch):
         assert a.speed == "fast" and a.claude.model == "claude-haiku-4-5-20251001"
         entries = [m for m in sent if m["t"] == "dock_entries"][-1]["entries"]
         entry = next(e for e in entries if e["id"] == service.MODEL_ID)
-        assert entry["badge"] == "fast" and "Haiku" in entry["label"]
+        assert entry["label"] == "Model" and "fast" in entry["badge"] and "Haiku" in entry["badge"]
         b = agentd()  # kept across a restart
         assert b.speed == "fast" and b.claude.model == "claude-haiku-4-5-20251001"
 
@@ -372,8 +372,10 @@ def test_size_and_spacing_settings_cycle_persist_and_label(tmp_path):
         await asyncio.sleep(0.05)
         assert a.setting("text_size") == "large" and a.setting("spacing") == "normal"
         entries = {e["id"]: e for e in [m for m in sent if m["t"] == "dock_entries"][-1]["entries"]}
-        assert entries[service.SIZE_ID]["label"] == "Text size: large"
-        assert entries[service.SPACING_ID]["label"] == "Spacing: normal"
+        assert entries[service.SIZE_ID]["label"] == "Text size"
+        assert entries[service.SIZE_ID]["badge"] == "large"
+        assert entries[service.SPACING_ID]["label"] == "Spacing"
+        assert entries[service.SPACING_ID]["badge"] == "normal"
         # the same from another surface: a settings message
         a.handle({"t": "settings", "set": {"text_size": "small", "spacing": "airy", "bogus": 1}})
         await asyncio.sleep(0.05)
@@ -507,7 +509,8 @@ def test_writing_speed_presets_hurry_the_hand_and_the_playback(tmp_path):
     speeds = {name: hurry * playback for name, hurry, playback in out}
     assert speeds["calm"] < speeds["fast"] < speeds["very_fast"]
     assert all(h <= 2.0 for _, h, _ in out)  # past 2 the hand's letters lose their shape
-    assert entries[service.SPEED_ID]["label"] == "Writing speed: fast"
+    assert entries[service.SPEED_ID]["label"] == "Writing speed"
+    assert entries[service.SPEED_ID]["badge"] == "fast"
 
 
 def test_no_ink_below_what_the_bridge_accepts(tmp_path):
