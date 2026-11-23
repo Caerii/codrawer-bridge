@@ -625,7 +625,7 @@ class Agentd:
                         "ink": bbox,
                         "spot": spot,
                         "contains_stroke": True,
-                        "items": len(user_strokes),
+                        "items": len(cluster),
                         "source": "autopilot",
                         "idiolect": kind_id,
                     }
@@ -759,7 +759,17 @@ class Agentd:
                         await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
-                anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
+                user_only = m.ink(include_ai=False)
+                if user_only:
+                    last_y = user_only[-1].pts[-1][1] * m.h
+                    recent = [
+                        st
+                        for st in user_only
+                        if any(abs(p[1] * m.h - last_y) <= 220.0 for p in st.pts)
+                    ] or user_only[-12:]
+                    anchor = _bounds(recent)
+                else:
+                    anchor = m.ink_box(include_ai=False) or (0.1, 0.05, 0.9, 0.1)
                 spot = _scene_box(msg.get("spot"), m.w)
                 reserved = await self._reserve(anchor, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
