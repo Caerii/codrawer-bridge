@@ -584,7 +584,7 @@ class Agentd:
                 log.info("autopilot: skipped (no page snapshot yet)")
                 return
             user_strokes = m.ink(include_ai=False)
-            sig = (m.page, len(user_strokes))
+            sig = (m.doc, m.page, len(user_strokes))
             if not user_strokes or sig in self._autopilot_seen:
                 return
             self._autopilot_seen.add(sig)
@@ -827,7 +827,6 @@ class Agentd:
             digest = self.threads.page_digest(doc_id, page_id)
             nb_query = f"{m.title} " + " ".join(e.seen for e in thread[-2:])
             nb_thread = self.threads.notebook_context(doc_id, page_id, query=nb_query)
-            gl_thread = self.threads.global_context(doc_id, query=nb_query)
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
@@ -838,7 +837,7 @@ class Agentd:
                 thread=[(e.seen, e.answer) for e in thread],
                 page_digest=digest,
                 notebook_thread=nb_thread,
-                global_thread=gl_thread,
+                global_thread=[],
                 persona=self.setting("persona"),
                 idiolect=str(msg.get("idiolect") or ""),
             )
@@ -1075,7 +1074,7 @@ class Agentd:
             m.h,
             time.time() * 1000,
             run,
-            color=self.cfg.color,
+            color=self.ink_color(),
             author=f"agentd:{self.cfg.persona}",
         )
         await self._play(msgs)
@@ -1253,20 +1252,21 @@ SPACINGS = ("compact", "normal", "airy")
 SPEEDS = ("calm", "fast", "very_fast")
 PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
 THINKING_STYLES = ("pen", "drop", "glyph")
-COLORS = ("auto", "blue", "red", "green", "black", "gold")
+COLORS = ("auto", "blue", "red", "green", "purple", "gold", "black")
 INK_COLORS = {
-    "blue": "#1e6091",
-    "red": "#b3261e",
-    "green": "#2d5a3c",
+    "blue": "#1f6fe0",
+    "red": "#d93025",
+    "green": "#188038",
+    "purple": "#7b2cbf",
+    "gold": "#c26401",
     "black": "#141414",
-    "gold": "#9a6b16",
 }
 PERSONA_COLORS = {
-    "archivist": "#2c3e50",
-    "sketcher": "#1e6091",
-    "elder": "#2d5a3c",
-    "mathematician": "#1b365d",
-    "calligrapher": "#6b1d2f",
+    "archivist": "#1f6fe0",
+    "sketcher": "#7b2cbf",
+    "elder": "#188038",
+    "mathematician": "#1558b0",
+    "calligrapher": "#b3261e",
 }
 SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
