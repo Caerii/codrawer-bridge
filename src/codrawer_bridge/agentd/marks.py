@@ -16,7 +16,7 @@ from .page import Box
 
 MARK_COLOR = "#b3261e"  # warm editorial crimson
 _MARK_RE = re.compile(
-    r"^\s*MARK:\s*(circle|underline|arrow)\s+"
+    r"^\s*MARK:\s*(circle|underline|arrow|bracket|star)\s+"
     r"([01](?:\.\d+)?)\s+([01](?:\.\d+)?)\s+([01](?:\.\d+)?)\s+([01](?:\.\d+)?)\s*$",
     re.MULTILINE,
 )
@@ -85,6 +85,26 @@ def mark_messages(
             for i in range(steps + 1):
                 u = i / steps
                 raw.append((x0 + (x1 - x0) * u, y_mid + 2.5 * math.sin(math.pi * u)))
+        elif kind == "bracket":
+            # Graceful editorial curly brace '{' along y0..y1 at x0
+            ym = (y0 + y1) * 0.5
+            bx = x0
+            dx = max(10.0, min(18.0, abs(y1 - y0) * 0.12))
+            for i in range(21):
+                u = i / 20
+                if u < 0.5:
+                    t = u * 2.0
+                    raw.append((bx + dx * (1.0 - math.sin(t * math.pi * 0.5)), y0 + (ym - y0) * t))
+                else:
+                    t = (u - 0.5) * 2.0
+                    raw.append((bx + dx * math.sin(t * math.pi * 0.5), ym + (y1 - ym) * t))
+        elif kind == "star":
+            # Crisp 4-point editorial asterisk ornament centered at (x0, y0)
+            r = 12.0
+            for a in (0.0, math.pi / 2.0, math.pi / 4.0, -math.pi / 4.0):
+                raw.append((x0 - r * math.cos(a), y0 - r * math.sin(a)))
+                raw.append((x0 + r * math.cos(a), y0 + r * math.sin(a)))
+                raw.append((x0, y0))
         else:  # arrow from (x0, y0) to (x1, y1)
             steps = 12
             for i in range(steps + 1):

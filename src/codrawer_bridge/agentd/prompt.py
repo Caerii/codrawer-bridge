@@ -34,8 +34,8 @@ INSTRUCTION = (
     "The user selected this handwriting on their reMarkable and asked for your thoughts. "
     "Read the image. Answer briefly (≤ 3 short sentences) as a thoughtful co-thinker, grounded "
     "in what's written. If it's math, check it; don't solve unasked homework, give a hint instead. "
-    "Optionally start with up to 2 lines `MARK: circle|underline|arrow x0 y0 x1 y1` (0..1 "
-    "fractions of the image) to annotate directly on their ink."
+    "Optionally start with up to 2 lines `MARK: circle|underline|arrow|bracket|star x0 y0 x1 y1` "
+    "(0..1 fractions of the image) to annotate directly on their ink."
 )
 
 #: The same for a whole page.

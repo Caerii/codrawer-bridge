@@ -84,6 +84,28 @@ def test_extract_sets_and_clean_answer() -> None:
     assert clean_answer(answer_so_far(raw)) == "Switched to mathematician with cloud thinking."
 
 
+def test_persona_prosody_and_ornamental_marks() -> None:
+    from codrawer_bridge.agentd.hand import Layout, apply_prosody
+    from codrawer_bridge.agentd.marks import extract_marks, mark_messages
+
+    for persona in ("calligrapher", "sketcher", "mathematician", "elder"):
+        pts = [[float(i), float((i % 3) * 2), 0.5, float(i * 10)] for i in range(10)]
+        lay = Layout(
+            width_mm=80.0,
+            bbox_mm=(0.0, 0.0, 9.0, 2.0),
+            duration_ms=90.0,
+            strokes=[(0.0, 90.0, pts)],
+        )
+        apply_prosody([lay], persona=persona)
+        assert all(0.06 <= p[2] <= 1.0 for p in pts)
+
+    marks, prose = extract_marks("MARK: bracket 0.1 0.1 0.1 0.8\nMARK: star 0.9 0.2 0.9 0.2\nGood.")
+    assert [m[0] for m in marks] == ["bracket", "star"]
+    assert prose == "Good."
+    msgs = mark_messages(marks, (100.0, 200.0, 500.0, 600.0), 1620.0, 2160.0, run="7")
+    assert len(msgs) == 6
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

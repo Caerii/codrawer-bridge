@@ -841,7 +841,7 @@ Item {
                         const a = (k / 20) * 2 * Math.PI;
                         bRing.push({ x: bx + br * Math.cos(a), y: by + br * Math.sin(a) });
                     }
-                    out.push({ pts: bRing, width: 1.4 + 0.7 * Math.sin(ph * Math.PI) });
+                    out.push({ pts: bRing, width: 1.4 + 0.7 * Math.sin(ph * Math.PI) + 0.25 * Math.sin(tau * 1.8) });
                 }
             }
         } else {  // glyph: sketch, hold, un-sketch; spiral then question mark
@@ -944,7 +944,16 @@ Item {
                 h.path.push({ x: x, y: y });
                 while (h.path.length > 6) h.path.shift();
                 for (let i = 1; i < h.path.length; ++i) items.push({ pts: [h.path[i - 1], h.path[i]], width: 0.8 + 2.4 * i / h.path.length });
-                if (u < 1) items.push({ dot: { x: x, y: y }, r: 3 });
+                if (u < 1) {
+                    items.push({ dot: { x: x, y: y }, r: 3 });
+                    if (d.style === "drop") {
+                        for (let p = 0; p < 4; ++p) {
+                            const pa = p * Math.PI * 0.5 + 0.4;
+                            const dist = 16 + 26 * u;
+                            items.push({ dot: { x: d.cx + dist * Math.cos(pa), y: d.cy + dist * Math.sin(pa) }, r: Math.max(0.6, 2.8 * (1 - u)) });
+                        }
+                    }
+                }
             }
             if (u >= 1) return thinkEnd(d.id, h.to ? "hand-off" : "cleared");
         }

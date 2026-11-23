@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -76,10 +77,14 @@ class Layout:
         return ox, oy
 
 
-def apply_prosody(lays: list[Layout]) -> list[Layout]:
+def apply_prosody(lays: list[Layout], persona: str = "archivist") -> list[Layout]:
     """
-    Shape per-stroke pressure envelopes for vivid calligraphic dynamism: crisp hairline attack,
-    expressive mid-stroke swell (richer on longer strokes), and a tapered feather lift-off.
+    Shape per-stroke pressure envelopes by persona for vivid calligraphic dynamism:
+    - ``calligrapher``: broad-nib 40-deg chisel angle modulation + crisp hairline serifs.
+    - ``sketcher``: light, airy harmonic pressure variation.
+    - ``mathematician``: steady, deliberate technical-pen weight.
+    - ``elder``: warm fountain-pen swell with gentle hand cadence.
+    - ``archivist`` (default): balanced editorial italic swell and feather lift-off.
     """
     for lay in lays:
         for _, _, pts in lay.strokes:
@@ -89,12 +94,30 @@ def apply_prosody(lays: list[Layout]) -> list[Layout]:
             swell = 1.35 if n >= 8 else 1.18
             for i, pt in enumerate(pts):
                 u = i / (n - 1)
-                if u < 0.18:
-                    env = 0.25 + 0.75 * (u / 0.18)
-                elif u > 0.78:
-                    env = 1.0 - 0.78 * ((u - 0.78) / 0.22)
+                if persona == "calligrapher":
+                    prev = pts[max(0, i - 1)]
+                    nxt = pts[min(n - 1, i + 1)]
+                    ang = math.atan2(nxt[1] - prev[1], nxt[0] - prev[0])
+                    chisel = 0.45 + 0.78 * abs(math.sin(ang - 0.7))
+                    edge = min(1.0, u / 0.12, (1.0 - u) / 0.14)
+                    env = chisel * (0.30 + 0.70 * edge)
+                elif persona == "sketcher":
+                    edge = min(1.0, u / 0.16, (1.0 - u) / 0.22)
+                    env = (0.78 + 0.26 * math.sin(6.5 * math.pi * u)) * (0.25 + 0.75 * edge)
+                elif persona == "mathematician":
+                    edge = min(1.0, u / 0.10, (1.0 - u) / 0.10)
+                    env = 0.96 * (0.45 + 0.55 * edge)
+                elif persona == "elder":
+                    edge = min(1.0, u / 0.20, (1.0 - u) / 0.22)
+                    cadence = 1.32 + 0.10 * math.sin(9.0 * u)
+                    env = cadence * (0.28 + 0.72 * edge)
                 else:
-                    env = swell - 0.15 * abs(u - 0.5)
+                    if u < 0.18:
+                        env = 0.25 + 0.75 * (u / 0.18)
+                    elif u > 0.78:
+                        env = 1.0 - 0.78 * ((u - 0.78) / 0.22)
+                    else:
+                        env = swell - 0.15 * abs(u - 0.5)
                 pt[2] = round(max(0.06, min(1.0, pt[2] * env)), 3)
     return lays
 
@@ -278,7 +301,7 @@ class HandWorker:
                     line = await within(self._proc.stdout.readline(), self.timeout_s)
                     if not line:
                         raise HandUnavailable("layouts.ts --serve exited")
-                    return apply_prosody(_parse(json.loads(line)))
+                    return apply_prosody(_parse(json.loads(line)), persona)
                 except (TimeoutError, OSError, ValueError, HandUnavailable) as e:
                     await self.close()
                     if attempt:

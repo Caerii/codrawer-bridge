@@ -287,20 +287,43 @@ Item {
                     ctx.bezierCurveTo(6, 24, 4, 12, 11, 6); ctx.stroke(); ctx.setLineDash([]);
                     star4(24.5, 23.5, 5.5, 1.6);
                 } else if (gid === "agentd_persona") {
-                    // Ornamental calligraphic crest / nib crown
+                    // Angled fountain nib + calligraphic flourish
                     ctx.lineWidth = 1.7;
-                    ctx.beginPath(); ctx.moveTo(16, 4); ctx.bezierCurveTo(24, 8, 25, 20, 16, 28);
-                    ctx.bezierCurveTo(7, 20, 8, 8, 16, 4); ctx.stroke();
-                    ctx.lineWidth = 1.1;
-                    ctx.beginPath(); ctx.arc(16, 14, 4, 0, 2 * Math.PI); ctx.stroke();
-                    star4(16, 22, 3.0, 1.0);
+                    ctx.beginPath(); ctx.moveTo(16, 4); ctx.bezierCurveTo(23, 9, 24, 19, 16, 27);
+                    ctx.bezierCurveTo(8, 19, 9, 9, 16, 4); ctx.stroke();
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath(); ctx.moveTo(16, 4); ctx.lineTo(16, 15); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(16, 16.5, 2.6, 0, 2 * Math.PI); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(7, 27); ctx.quadraticCurveTo(16, 30, 25, 25); ctx.stroke();
                 } else if (gid === "agentd_thinking_style") {
-                    // Rising effervescent thought-bubbles
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath(); ctx.arc(10, 23, 2.5, 0, 2 * Math.PI); ctx.stroke();
-                    ctx.beginPath(); ctx.arc(16, 16, 4.2, 0, 2 * Math.PI); ctx.stroke();
-                    ctx.beginPath(); ctx.arc(23, 9, 5.5, 0, 2 * Math.PI); ctx.stroke();
-                    star4(23, 9, 2.5, 0.8);
+                    if (bval === "glyph") {
+                        ctx.lineWidth = 1.7;
+                        ctx.beginPath();
+                        ctx.arc(16, 15, 7.5, 0.2 * Math.PI, 1.9 * Math.PI);
+                        ctx.arc(16, 15, 3.8, 0, 1.6 * Math.PI);
+                        ctx.stroke();
+                        star4(24, 7, 3.0, 1.0);
+                    } else if (bval === "pen") {
+                        ctx.lineWidth = 1.7;
+                        ctx.beginPath();
+                        ctx.moveTo(6, 24); ctx.bezierCurveTo(11, 14, 17, 20, 22, 10);
+                        ctx.stroke();
+                        ctx.beginPath(); ctx.arc(24, 8, 2.2, 0, 2 * Math.PI); ctx.fill();
+                        ctx.lineWidth = 1.2;
+                        ctx.beginPath(); ctx.arc(12, 11, 2.4, 0, 2 * Math.PI); ctx.stroke();
+                    } else {
+                        // Scalloped thought-cloud + rising bubbles
+                        ctx.lineWidth = 1.6;
+                        ctx.beginPath();
+                        ctx.arc(13, 13, 5.2, Math.PI * 0.7, Math.PI * 2.1);
+                        ctx.arc(20, 12, 5.5, Math.PI * 1.1, Math.PI * 0.2);
+                        ctx.arc(21, 17, 4.5, -Math.PI * 0.3, Math.PI * 0.65);
+                        ctx.arc(12, 17, 4.5, Math.PI * 0.35, Math.PI * 1.2);
+                        ctx.stroke();
+                        ctx.lineWidth = 1.3;
+                        ctx.beginPath(); ctx.arc(10, 24, 2.2, 0, 2 * Math.PI); ctx.stroke();
+                        ctx.beginPath(); ctx.arc(6, 28, 1.4, 0, 2 * Math.PI); ctx.stroke();
+                    }
                 } else if (gid === "agentd_autopilot") {
                     ctx.lineWidth = 1.5;
                     ctx.beginPath(); ctx.arc(16, 16, 10, 0.2 * Math.PI, 1.8 * Math.PI); ctx.stroke();
