@@ -103,8 +103,34 @@ class ThreadStore:
             ex.pop(0)
         self.dir.mkdir(parents=True, exist_ok=True)
         self._path(doc, page).write_text(
-            json.dumps({"exchanges": [asdict(e) for e in ex]}, ensure_ascii=False), encoding="utf-8"
+            json.dumps(
+                {"doc": doc, "page": page, "exchanges": [asdict(e) for e in ex]},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
         )
+
+    def notebook_context(
+        self, doc: str, exclude_page: str, limit: int = 3
+    ) -> list[tuple[str, str]]:
+        """Recent ``(seen, answer)`` exchanges from other pages of the same notebook."""
+        if not self.memory or not doc or not self.dir.exists():
+            return []
+        collected: list[Exchange] = []
+        for path in self.dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if data.get("doc") != doc or data.get("page") == exclude_page:
+                continue
+            for raw in data.get("exchanges", []):
+                try:
+                    collected.append(Exchange(**raw))
+                except TypeError:
+                    continue
+        collected.sort(key=lambda e: e.ts)
+        return [(e.seen, e.answer) for e in collected[-limit:]]
 
     def forget(self, doc: str, page: str) -> bool:
         """Delete the page's thread; True if there was one."""

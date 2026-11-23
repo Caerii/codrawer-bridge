@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from . import hand as handmod
+from . import idiolect as idiolectmod
 from . import marks as marksmod
 from . import placement, prompt, render
 from .agy_stream import AgyPool
@@ -568,17 +569,23 @@ class Agentd:
             if not user_strokes or sig in self._autopilot_seen:
                 return
             self._autopilot_seen.add(sig)
-            # Anchor Autopilot to the entire active handwriting cluster around the last stroke,
-            # preserving deep per-page thread context in self.threads.for_page(doc, page).
-            last_y = user_strokes[-1].pts[-1][1] * m.h
-            cluster = [
-                st
-                for st in user_strokes
-                if any(abs(p[1] * m.h - last_y) <= 220.0 for p in st.pts)
-            ] or user_strokes[-12:]
-            rxs = [p[0] * m.w - m.w / 2 for st in cluster for p in st.pts]
-            rys = [p[1] * m.h for st in cluster for p in st.pts]
-            bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
+            # Recognize drawn idiolects (lasso, star, question) first; otherwise anchor
+            # Autopilot to the active handwriting cluster around the last stroke.
+            gesture = idiolectmod.recognize_idiolect(user_strokes, m.w, m.h)
+            if gesture is not None:
+                kind_id, (bx0, by0, bx1, by1) = gesture
+                log.info("autopilot: idiolect=%s on %s", kind_id, m.page)
+            else:
+                kind_id = ""
+                last_y = user_strokes[-1].pts[-1][1] * m.h
+                cluster = [
+                    st
+                    for st in user_strokes
+                    if any(abs(p[1] * m.h - last_y) <= 220.0 for p in st.pts)
+                ] or user_strokes[-12:]
+                rxs = [p[0] * m.w - m.w / 2 for st in cluster for p in st.pts]
+                rys = [p[1] * m.h for st in cluster for p in st.pts]
+                bx0, by0, bx1, by1 = min(rxs), min(rys), max(rxs), max(rys)
             bbox = [round(bx0, 1), round(by0, 1), round(bx1, 1), round(by1, 1)]
             spot = [round(bx0, 1), round(by1 + 36.0, 1), round(bx1, 1), round(by1 + 236.0, 1)]
             log.info(
@@ -601,6 +608,7 @@ class Agentd:
                         "contains_stroke": True,
                         "items": len(user_strokes),
                         "source": "autopilot",
+                        "idiolect": kind_id,
                     }
                 ),
             )
@@ -795,7 +803,9 @@ class Agentd:
                 img = self.agent_cwd / img.name  # and where Claude Code may Read it
                 img.write_bytes(png)
             rec.image, rec.n_strokes = self._rel(img), len(selected)
-            thread = self.threads.get(rec.doc or m.doc, rec.page or m.page)
+            doc_id, page_id = rec.doc or m.doc, rec.page or m.page
+            thread = self.threads.get(doc_id, page_id)
+            nb_thread = self.threads.notebook_context(doc_id, page_id)
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
@@ -804,7 +814,9 @@ class Agentd:
                 region=sel_box,
                 title=m.title,
                 thread=[(e.seen, e.answer) for e in thread],
+                notebook_thread=nb_thread,
                 persona=self.setting("persona"),
+                idiolect=str(msg.get("idiolect") or ""),
             )
             rec.image_bytes = len(png)
             rec.prompt = prompt.build_prompt(ask)

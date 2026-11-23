@@ -142,6 +142,28 @@ def test_calligrapher_resampling_and_combined_directives() -> None:
     assert clean_answer(prose) == "Differentiate term by term."
 
 
+def test_idiolect_and_cross_page_thread(tmp_path: Path) -> None:
+    from codrawer_bridge.agentd.idiolect import recognize_idiolect
+    from codrawer_bridge.agentd.page import Stroke
+    from codrawer_bridge.agentd.prompt import Ask, build_prompt
+    from codrawer_bridge.agentd.threads import ThreadStore
+
+    store = ThreadStore(tmp_path)
+    store.add("doc-1", "page-1", "Let x = 2", "Then x^2 = 4.")
+    nb = store.notebook_context("doc-1", "page-2")
+    assert nb == [("Let x = 2", "Then x^2 = 4.")]
+
+    p = build_prompt(Ask(kind="ask_page", image="p2.png", notebook_thread=nb, idiolect="lasso"))
+    assert "other page 1, written: Let x = 2" in p
+    assert "idiolect gesture: lasso" in p
+
+    # Starburst: two crossing short strokes
+    s1 = Stroke(id="u1", layer="user", tool="pen", pts=[[0.50, 0.50], [0.52, 0.50]])
+    s2 = Stroke(id="u2", layer="user", tool="pen", pts=[[0.51, 0.49], [0.51, 0.51]])
+    hit = recognize_idiolect([s1, s2], 1620.0, 2160.0)
+    assert hit is not None and hit[0] == "star"
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer
