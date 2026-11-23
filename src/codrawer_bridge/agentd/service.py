@@ -605,7 +605,11 @@ class Agentd:
                 log.info("autopilot: idiolect=%s on %s", kind_id, m.page)
             else:
                 kind_id = ""
-                last_y = user_strokes[-1].pts[-1][1] * m.h
+                newest = max(
+                    enumerate(user_strokes),
+                    key=lambda item: (1 if item[1].live else 0, item[1].begin_ts or 0.0, item[0]),
+                )[1]
+                last_y = newest.pts[-1][1] * m.h
                 cluster = [
                     st
                     for st in user_strokes
@@ -757,7 +761,8 @@ class Agentd:
                     first = _bounds(known) if known and len(known) >= want else sel_box
                 reserved = await self._reserve(first, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
-                    await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
+                    think_box = spot if spot is not None else self._shown_box(reserved[0], spot)
+                    await self._status(rec, "thinking", think_box)
                 selected = await self._selection(msg, sel_box, rec)
                 anchor = (
                     first if first is not sel_box else (_bounds(selected) if selected else sel_box)
@@ -765,12 +770,21 @@ class Agentd:
                 if anchor != first:
                     reserved = await self._reserve(anchor, rec.n, at=spot)
                     if reserved is not None and not self.cfg.dry_run:
-                        await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
+                        think_box = spot if spot is not None else self._shown_box(reserved[0], spot)
+                        await self._status(rec, "thinking", think_box)
             else:
                 selected = m.ink(include_ai=self.cfg.include_ai)
                 user_only = m.ink(include_ai=False)
                 if user_only:
-                    last_y = user_only[-1].pts[-1][1] * m.h
+                    newest = max(
+                        enumerate(user_only),
+                        key=lambda item: (
+                            1 if item[1].live else 0,
+                            item[1].begin_ts or 0.0,
+                            item[0],
+                        ),
+                    )[1]
+                    last_y = newest.pts[-1][1] * m.h
                     recent = [
                         st
                         for st in user_only
@@ -782,7 +796,9 @@ class Agentd:
                 spot = _scene_box(msg.get("spot"), m.w)
                 reserved = await self._reserve(anchor, rec.n, at=spot)
                 if reserved is not None and not self.cfg.dry_run:
-                    await self._status(rec, "thinking", self._shown_box(reserved[0], spot))
+                    ax0, _, _, ay1 = placement.to_pu(anchor, m.w, m.h)
+                    near = (ax0, ay1 + 24.0, ax0 + 200.0, ay1 + 144.0)
+                    await self._status(rec, "thinking", spot if spot is not None else near)
             if not selected:
                 # never ask about (or answer) an empty picture
                 rec.error = "empty selection" if sel_box is not None else "empty page"
