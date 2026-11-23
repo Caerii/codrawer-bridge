@@ -40,6 +40,7 @@ class Exchange:
     seen: str
     answer: str
     ts: float = 0.0
+    pinned: bool = False
 
 
 class ThreadStore:
@@ -102,21 +103,69 @@ class ThreadStore:
         while len(ex) > 1 and sum(len(e.seen) + len(e.answer) for e in ex) > MAX_CHARS:
             ex.pop(0)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._path(doc, page).write_text(
+        path = self._path(doc, page)
+        digest = ""
+        try:
+            digest = str(json.loads(path.read_text(encoding="utf-8")).get("digest") or "")
+        except (OSError, ValueError):
+            pass
+        path.write_text(
             json.dumps(
-                {"doc": doc, "page": page, "exchanges": [asdict(e) for e in ex]},
+                {
+                    "doc": doc,
+                    "page": page,
+                    "digest": digest,
+                    "exchanges": [asdict(e) for e in ex],
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
 
+    def pin_last(self, doc: str, page: str, note: str = "") -> bool:
+        """Mark the latest exchange on ``(doc, page)`` (or add a pinned note) as durable."""
+        if not self.memory or not page:
+            return False
+        ex = self.get(doc, page)
+        if note.strip():
+            ex.append(Exchange("pinned", note.strip()[:400], time.time(), pinned=True))
+        elif ex:
+            ex[-1].pinned = True
+        else:
+            return False
+        self.dir.mkdir(parents=True, exist_ok=True)
+        path = self._path(doc, page)
+        digest = ""
+        try:
+            digest = str(json.loads(path.read_text(encoding="utf-8")).get("digest") or "")
+        except (OSError, ValueError):
+            pass
+        path.write_text(
+            json.dumps(
+                {
+                    "doc": doc,
+                    "page": page,
+                    "digest": digest,
+                    "exchanges": [asdict(e) for e in ex[-MAX_EXCHANGES:]],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return True
+
     def notebook_context(
-        self, doc: str, exclude_page: str, limit: int = 3
+        self, doc: str, exclude_page: str, query: str = "", limit: int = 3
     ) -> list[tuple[str, str]]:
-        """Recent ``(seen, answer)`` exchanges from other pages of the same notebook."""
+        """
+        Relevance-ranked ``(seen, answer)`` exchanges from other pages of the same notebook.
+
+        Prioritizes pinned memories, then keyword/symbol overlap with ``query``, then recency.
+        """
         if not self.memory or not doc or not self.dir.exists():
             return []
-        collected: list[Exchange] = []
+        q_terms = {w.lower() for w in query.split() if len(w) >= 3}
+        scored: list[tuple[float, Exchange]] = []
         for path in self.dir.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -124,13 +173,40 @@ class ThreadStore:
                 continue
             if data.get("doc") != doc or data.get("page") == exclude_page:
                 continue
+            digest = str(data.get("digest") or "").strip()
+            if digest:
+                scored.append((2.0, Exchange("page digest", digest, 0.0, pinned=False)))
             for raw in data.get("exchanges", []):
                 try:
-                    collected.append(Exchange(**raw))
+                    ex = Exchange(**raw)
                 except TypeError:
                     continue
-        collected.sort(key=lambda e: e.ts)
-        return [(e.seen, e.answer) for e in collected[-limit:]]
+                hay = f"{ex.seen} {ex.answer}".lower()
+                overlap = sum(1 for t in q_terms if t in hay)
+                score = (10.0 if ex.pinned else 0.0) + overlap * 1.5 + (ex.ts / 1e12)
+                scored.append((score, ex))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        top = [ex for _, ex in scored[:limit]]
+        top.sort(key=lambda e: e.ts)
+        return [(e.seen, e.answer) for e in top]
+
+    def stats(self, doc: str) -> tuple[int, int]:
+        """Return ``(page_count, pinned_count)`` for ``doc``."""
+        if not self.memory or not doc or not self.dir.exists():
+            return 0, 0
+        pages, pinned = 0, 0
+        for path in self.dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if data.get("doc") != doc:
+                continue
+            exs = data.get("exchanges", [])
+            if exs:
+                pages += 1
+                pinned += sum(1 for e in exs if e.get("pinned"))
+        return pages, pinned
 
     def forget(self, doc: str, page: str) -> bool:
         """Delete the page's thread; True if there was one."""

@@ -164,6 +164,27 @@ def test_idiolect_and_cross_page_thread(tmp_path: Path) -> None:
     assert hit is not None and hit[0] == "star"
 
 
+def test_pinned_notebook_recall_ack_and_pins(tmp_path: Path) -> None:
+    from codrawer_bridge.agentd.idiolect import ack_messages
+    from codrawer_bridge.agentd.prompt import clean_answer, extract_pins
+    from codrawer_bridge.agentd.threads import ThreadStore
+
+    store = ThreadStore(tmp_path)
+    store.add("doc-9", "p1", "alpha = 0.05", "Significance level alpha is 0.05.")
+    store.pin_last("doc-9", "p1")
+    store.add("doc-9", "p2", "coffee sketch", "Nice mug.")
+    nb = store.notebook_context("doc-9", "p3", query="alpha", limit=1)
+    assert nb == [("alpha = 0.05", "Significance level alpha is 0.05.")]
+    assert store.stats("doc-9") == (2, 1)
+
+    raw = "PIN: Always check boundary conditions.\nChecked."
+    assert extract_pins(raw) == ["Always check boundary conditions."]
+    assert clean_answer(raw) == "Checked."
+
+    ack = ack_messages("star", (100.0, 200.0, 200.0, 260.0), 1620.0, 2160.0, run="12")
+    assert len(ack) == 3 and ack[0][1]["color"] == "#1e6091"
+
+
 def test_marks_extraction_and_strokes() -> None:
     from codrawer_bridge.agentd.marks import extract_marks, mark_messages
     from codrawer_bridge.agentd.prompt import clean_answer

@@ -404,8 +404,12 @@ class Agentd:
                     {
                         "id": MEMORY_ID,
                         "label": "Memory",
-                        "badge": "on" if on else "off",
-                        "hint": "Asks on the same page follow on from each other",
+                        "badge": (
+                            f"on · {pages}p"
+                            if on and (pages := self.threads.stats(self.model.doc)[0]) > 0
+                            else ("on" if on else "off")
+                        ),
+                        "hint": "Asks follow your page and notebook thread",
                     },
                     {
                         "id": AUTOPILOT_ID,
@@ -491,6 +495,15 @@ class Agentd:
             "airy": 1.25 * met.pitch,
         }[self.setting("spacing")]
         return dataclasses.replace(met, pitch=max(pitch, ink + 0.5))
+
+    def ink_color(self) -> str:
+        """The Paper Pro `#rrggbb` ink color for the active color setting and persona."""
+        choice = self.setting("color")
+        if choice in INK_COLORS:
+            return INK_COLORS[choice]
+        if choice.startswith("#") and len(choice) == 7:
+            return choice
+        return PERSONA_COLORS.get(self.setting("persona"), self.cfg.color)
 
     def settings_state(self) -> dict[str, Any]:
         return {
@@ -805,7 +818,8 @@ class Agentd:
             rec.image, rec.n_strokes = self._rel(img), len(selected)
             doc_id, page_id = rec.doc or m.doc, rec.page or m.page
             thread = self.threads.get(doc_id, page_id)
-            nb_thread = self.threads.notebook_context(doc_id, page_id)
+            nb_query = f"{m.title} " + " ".join(e.seen for e in thread[-2:])
+            nb_thread = self.threads.notebook_context(doc_id, page_id, query=nb_query)
             rec.thread = len(thread)
             ask = prompt.Ask(
                 kind=kind,
@@ -882,9 +896,28 @@ class Agentd:
                 return rec
             rec.answer = text
             self.threads.add(rec.doc or m.doc, rec.page or m.page, seen, text)
+            for pin_note in prompt.extract_pins(answer_raw):
+                self.threads.pin_last(rec.doc or m.doc, rec.page or m.page, pin_note)
+            if msg.get("idiolect") == "star":
+                self.threads.pin_last(rec.doc or m.doc, rec.page or m.page)
             # 6. the glasses
             await self._glasses(text, text)
             if stream is not None:
+                if msg.get("idiolect") and (sel_box or rec.region):
+                    ack_box = sel_box or rec.region
+                    assert ack_box is not None
+                    ack_msgs = idiolectmod.ack_messages(
+                        str(msg["idiolect"]),
+                        ack_box,
+                        m.w,
+                        m.h,
+                        run=f"{rec.n}",
+                        color=self.ink_color(),
+                    )
+                    if ack_msgs:
+                        await self._play(ack_msgs, rec=rec)
+                        for sid, pts in _mark_strokes(ack_msgs):
+                            m.add_own(sid, pts)
                 # Optional visual marks (MARK: circle|underline|arrow) in selection/page.
                 marks, _ = marksmod.extract_marks(answer_raw)
                 if marks and (sel_box or rec.region):
@@ -1209,6 +1242,21 @@ SPACINGS = ("compact", "normal", "airy")
 SPEEDS = ("calm", "fast", "very_fast")
 PERSONAS = ("archivist", "sketcher", "elder", "mathematician", "calligrapher")
 THINKING_STYLES = ("pen", "drop", "glyph")
+COLORS = ("auto", "blue", "red", "green", "black", "gold")
+INK_COLORS = {
+    "blue": "#1e6091",
+    "red": "#b3261e",
+    "green": "#2d5a3c",
+    "black": "#141414",
+    "gold": "#9a6b16",
+}
+PERSONA_COLORS = {
+    "archivist": "#2c3e50",
+    "sketcher": "#1e6091",
+    "elder": "#2d5a3c",
+    "mathematician": "#1b365d",
+    "calligrapher": "#6b1d2f",
+}
 SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "text_size": (SIZES, "medium"),
     "spacing": (SPACINGS, "compact"),
@@ -1216,6 +1264,7 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "autopilot": (("off", "on"), "on"),
     "persona": (PERSONAS, "archivist"),
     "thinking_style": (THINKING_STYLES, "drop"),
+    "color": (COLORS, "auto"),
 }
 
 #: Writing speed presets: (the hand's hurry, packages/hand `hurried`; playback factor). A hurried

@@ -32,10 +32,12 @@ from .page import Box
 #: The user's instruction for an answer (their wording).
 INSTRUCTION = (
     "The user selected this handwriting on their reMarkable and asked for your thoughts. "
-    "Read the image. Answer briefly (≤ 3 short sentences) as a thoughtful co-thinker, grounded "
-    "in what's written. If it's math, check it; don't solve unasked homework, give a hint instead. "
-    "Optionally start with up to 2 lines `MARK: circle|underline|arrow|bracket|star x0 y0 x1 y1` "
-    "(0..1 fractions of the image) to annotate directly on their ink."
+    "Read the image. Answer briefly (≤ 3 short sentences) as a thoughtful, general-purpose "
+    "co-thinker grounded in what's on the page—whether prose, notes, sketches, plans, code, "
+    "or equations. If it looks like an open exercise, offer a sharp next step or perspective "
+    "rather than spoiling it. Optionally start with up to 2 lines "
+    "`MARK: circle|underline|arrow|bracket|star x0 y0 x1 y1` (0..1 fractions of the image) "
+    "to annotate directly on their ink."
 )
 
 #: The same for a whole page.
@@ -68,24 +70,24 @@ class Ask:
 
 PERSONA_VOICES: dict[str, str] = {
     "archivist": (
-        "Persona — Archivist: precise, observant, scholarly. Anchor remarks in exact details "
-        "on the page; favor clear structure and `MARK: underline` or `bracket` on key passages."
+        "Persona — Archivist: precise, observant, synthesizing across notes, sources, and "
+        "structure; favor `MARK: underline` or `bracket` on key passages."
     ),
     "sketcher": (
-        "Persona — Sketcher: visual, playful, spatial. Think in shapes, diagrams, and "
-        "relationships; use `MARK: circle`, `arrow`, and `star` freely to point at ideas."
+        "Persona — Sketcher: visual, spatial, associative—great for diagrams, systems, flows, "
+        "and ideation; use `MARK: circle`, `arrow`, and `star` freely."
     ),
     "elder": (
-        "Persona — Elder: warm, unhurried, Socratic. Offer gentle perspective and guiding "
-        "questions rather than blunt answers; highlight core principles."
+        "Persona — Elder: warm, unhurried, Socratic. Zoom out to intent, framing, and core "
+        "principles with thoughtful perspective and guiding questions."
     ),
     "mathematician": (
-        "Persona — Mathematician: rigorous, concise, step-aware. Check equations, signs, and "
-        "assumptions; give the sharpest minimal hint toward the next step."
+        "Persona — Mathematician: analytical, rigorous, step-aware—great for models, tradeoffs, "
+        "code, and derivations; check assumptions and offer the sharpest next step."
     ),
     "calligrapher": (
-        "Persona — Calligrapher: poised, lyrical, sparing with words. Value rhythm and clarity "
-        "in every phrase; keep replies distilled and evocative."
+        "Persona — Calligrapher: poised, distilled, expressive. Craft concise, rhythmic prose "
+        "and sharp phrasing where every word earns its place."
     ),
 }
 
@@ -118,15 +120,18 @@ def build_prompt(ask: Ask) -> str:
         "to change your own settings/style or use an available tool/MCP to look something up or "
         "perform an action, do so cleanly and concisely.",
         "- Read the image first (`view_file` / `Read`). If the user's handwritten request calls "
-        "for other available tools or MCP servers (search, workspace, utilities), you may call "
-        "them, then summarize the result in plain text."
+        "for other available tools or MCP servers (search, workspace, utilities, or "
+        "`superintelligent.group` control-plane actions), you may call them, then summarize "
+        "the result in plain text."
         if ask.image
         else "- Use no tools.",
         "- To change your own properties when requested in handwriting, emit `SET: <key>=<value>` "
         "lines before your answer: `persona=archivist|sketcher|elder|mathematician|calligrapher`, "
         "`thinking_style=drop|pen|glyph`, `writing_speed=slow|medium|fast|very_fast`, "
         "`text_size=small|medium|large`, `spacing=compact|normal|airy`, `autopilot=on|off`, "
-        "`memory=on|off`, `model=careful|fast`.",
+        "`memory=on|off`, `model=careful|fast`, `color=auto|blue|red|green|black|gold`. "
+        "To pin a key insight, decision, definition, or open thread to durable notebook memory, "
+        "emit `PIN: <short note>`.",
         f"- First line: `{SEEN} ` and a literal transcription of what is written in the image "
         "(at most 20 words). Then, on the next line, the answer alone, as plain text: no preamble, "
         "no markdown, no LaTeX, no emoji, no lists. Write math in plain words or simple symbols "
@@ -175,7 +180,8 @@ def split_seen(text: str) -> tuple[str, str]:
     return first[len(SEEN) :].strip(), rest.strip()
 
 
-_SET_LINE = re.compile(r"^\s*SET:\s*([a-z_]+)\s*=\s*([a-z0-9_]+)\s*$", re.I | re.M)
+_SET_LINE = re.compile(r"^\s*SET:\s*([a-z_]+)\s*=\s*([a-z0-9_#]+)\s*$", re.I | re.M)
+_PIN_LINE = re.compile(r"^\s*PIN:\s*(.+)$", re.I | re.M)
 
 
 def extract_sets(text: str) -> dict[str, object]:
@@ -191,10 +197,15 @@ def extract_sets(text: str) -> dict[str, object]:
     return out
 
 
+def extract_pins(text: str) -> list[str]:
+    """Parse ``PIN: <note>`` durable memory directives from a reply."""
+    return [m.group(1).strip() for m in _PIN_LINE.finditer(text or "") if m.group(1).strip()]
+
+
 def answer_so_far(text: str) -> str:
     """
     The answer part of a reply still streaming: nothing while the ``SEEN:`` line is incomplete
-    (it may still be arriving), then everything after it (with ``SET:`` lines stripped).
+    (it may still be arriving), then everything after it (with ``SET:`` / ``PIN:`` stripped).
     """
     t = (text or "").lstrip()
     if not t:
@@ -203,7 +214,8 @@ def answer_so_far(text: str) -> str:
         if "\n" not in t:
             return ""
         t = t.partition("\n")[2].lstrip()
-    return _SET_LINE.sub("", t).lstrip()
+    t = _SET_LINE.sub("", t)
+    return _PIN_LINE.sub("", t).lstrip()
 
 
 _REPLACE = {
@@ -223,7 +235,7 @@ def clean_answer(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
     removed, whitespace folded to single spaces, typographic quotes and dashes made plain, and
     cut at the last sentence end within ``limit`` characters (else at a word, with "...").
     """
-    s = re.sub(r"^\s*(?:MARK|SET):.*$", "", text or "", flags=re.M)
+    s = re.sub(r"^\s*(?:MARK|SET|PIN):.*$", "", text or "", flags=re.M)
     for a, b in _REPLACE.items():
         s = s.replace(a, b)
     s = re.sub(r"`+", "", s)

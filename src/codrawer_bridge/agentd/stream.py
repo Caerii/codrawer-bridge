@@ -167,7 +167,7 @@ class InkStream:
                 time.time() * 1000 + 30,
                 speed=a.playback,
                 run=f"{self.run}c{k}",
-                color=a.cfg.color,
+                color=a.ink_color(),
                 author=f"agentd:{a.setting('persona')}",
             )
             if k == 0:

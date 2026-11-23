@@ -10,10 +10,11 @@ Recognizes intentional hand-drawn gestures in normalized page coordinates:
 from __future__ import annotations
 
 import math
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .page import Stroke
+    from .page import Box, Stroke
 
 
 def _stroke_pts_pu(stroke: Stroke, page_w: float, page_h: float) -> list[tuple[float, float]]:
@@ -124,3 +125,51 @@ def recognize_idiolect(
         if hit is not None:
             return hit
     return None
+
+
+def ack_messages(
+    kind: str,
+    region_pu: Box,
+    page_w: float,
+    page_h: float,
+    run: str,
+    color: str = "#1e6091",
+    author: str = "agentd:ack",
+) -> list[tuple[float, dict]]:
+    """
+    Build a subtle 1-stroke ink acknowledgement near a recognized idiolect so the user sees
+    immediately that their drawn symbol was understood.
+    """
+    rx0, ry0, rx1, _ = region_pu
+    half = page_w / 2.0
+    ax = rx1 + half + 14.0
+    ay = ry0 + 6.0
+    if kind == "lasso":
+        pts_pu = [(ax, ay + 10.0), (ax + 8.0, ay), (ax + 16.0, ay + 4.0)]
+    elif kind == "star":
+        pts_pu = [(ax, ay), (ax + 5.0, ay - 6.0), (ax + 10.0, ay), (ax + 5.0, ay + 6.0), (ax, ay)]
+    else:
+        pts_pu = [(ax, ay + 4.0), (ax + 6.0, ay - 2.0), (ax + 12.0, ay + 4.0)]
+    t0 = time.time() * 1000 + 15.0
+    pts = [
+        [round(px / page_w, 5), round(py / page_h, 5), 0.55, int(t0 + i * 25.0)]
+        for i, (px, py) in enumerate(pts_pu)
+    ]
+    sid = f"agentd_{run}ack"
+    t1 = pts[-1][3]
+    return [
+        (
+            t0,
+            {
+                "t": "stroke_begin",
+                "id": sid,
+                "layer": "ai",
+                "brush": "pen",
+                "color": color,
+                "author": author,
+                "ts": int(t0),
+            },
+        ),
+        (t0 + 15.0, {"t": "stroke_pts", "id": sid, "pts": pts}),
+        (t1, {"t": "stroke_end", "id": sid}),
+    ]
